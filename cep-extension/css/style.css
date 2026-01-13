@@ -1,0 +1,156 @@
+/* CEP Panel Styles */
+:root {
+    --bg-color: #2d2d2d;
+    --text-color: #e0e0e0;
+    --accent-color: #4a9eff;
+    --success-color: #4caf50;
+    --error-color: #f44336;
+    --warning-color: #ff9800;
+    --border-color: #444;
+    --log-bg: #1e1e1e;
+}
+
+* {
+    box-sizing: border-box;
+    margin: 0;
+    padding: 0;
+}
+
+body {
+    font-family: 'Segoe UI', 'Adobe Clean', sans-serif;
+    font-size: 12px;
+    background-color: var(--bg-color);
+    color: var(--text-color);
+    padding: 10px;
+    height: 100vh;
+    overflow: hidden;
+}
+
+.container {
+    display: flex;
+    flex-direction: column;
+    height: 100%;
+    gap: 10px;
+}
+
+h2 {
+    font-size: 14px;
+    font-weight: 500;
+    color: var(--text-color);
+    padding-bottom: 8px;
+    border-bottom: 1px solid var(--border-color);
+}
+
+/* Status Section */
+.status-section {
+    padding: 8px 0;
+}
+
+.status {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 8px 12px;
+    border-radius: 4px;
+    background: rgba(0, 0, 0, 0.2);
+}
+
+.status-icon {
+    font-size: 10px;
+}
+
+.status.connected .status-icon {
+    color: var(--success-color);
+}
+
+.status.disconnected .status-icon {
+    color: var(--error-color);
+}
+
+.status.connecting .status-icon {
+    color: var(--warning-color);
+    animation: pulse 1s infinite;
+}
+
+@keyframes pulse {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.4; }
+}
+
+/* Buttons */
+.button-section {
+    display: flex;
+    gap: 8px;
+}
+
+.btn {
+    flex: 1;
+    padding: 8px 16px;
+    border: none;
+    border-radius: 4px;
+    font-size: 12px;
+    cursor: pointer;
+    transition: background-color 0.2s;
+}
+
+.btn-primary {
+    background-color: var(--accent-color);
+    color: white;
+}
+
+.btn-primary:hover {
+    background-color: #3a8aef;
+}
+
+.btn-primary:active {
+    background-color: #2a7adf;
+}
+
+/* Log Section */
+.log-section {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    min-height: 0;
+}
+
+.log-header {
+    font-size: 11px;
+    color: #888;
+    margin-bottom: 4px;
+}
+
+.log-area {
+    flex: 1;
+    background: var(--log-bg);
+    border-radius: 4px;
+    padding: 8px;
+    overflow-y: auto;
+    font-family: 'Consolas', 'Monaco', monospace;
+    font-size: 10px;
+    line-height: 1.4;
+}
+
+.log-entry {
+    margin-bottom: 2px;
+}
+
+.log-time {
+    color: #666;
+}
+
+.log-info {
+    color: #c0c0c0;
+}
+
+.log-success {
+    color: var(--success-color);
+}
+
+.log-error {
+    color: var(--error-color);
+}
+
+.log-warning {
+    color: var(--warning-color);
+}

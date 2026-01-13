@@ -1,0 +1,15 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(grep:*)",
+      "Bash(pip install:*)",
+      "Bash(pytest:*)",
+      "Bash(npm start)",
+      "Bash(ping:*)",
+      "Bash(curl:*)",
+      "Bash(python:*)",
+      "Bash(dir \"%APPDATA%\\\\Adobe\\\\CEP\\\\extensions\")",
+      "Bash(git push:*)"
+    ]
+  }
+}

@@ -1,0 +1,27 @@
+.DS_Store
+__pycache__/
+.idea/
+.vscode/
+
+# Python
+*.egg-info/
+*.egg
+dist/
+build/
+.eggs/
+*.pyc
+
+# Node.js
+node_modules/
+npm-debug.log
+
+# Environment
+.env
+
+# Temp files
+nul
+tmpclaude-*
+
+# Jupyter
+.ipynb_checkpoints/
+

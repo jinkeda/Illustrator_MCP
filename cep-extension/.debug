@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- 
+    Debug configuration file for CEP extension development.
+    This file enables the extension to be loaded without signing in debug mode.
+    
+    To enable debug mode, set PlayerDebugMode registry key:
+    Windows: HKEY_CURRENT_USER\Software\Adobe\CSXS.11 -> PlayerDebugMode = 1
+    macOS: defaults write com.adobe.CSXS.11 PlayerDebugMode 1
+-->
+<ExtensionList>
+    <Extension Id="com.illustrator.mcp.panel">
+        <HostList>
+            <!-- Debug port for Chrome DevTools debugging -->
+            <Host Name="ILST" Port="8088"/>
+        </HostList>
+    </Extension>
+</ExtensionList>

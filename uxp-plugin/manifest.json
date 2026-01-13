@@ -1,0 +1,56 @@
+{
+    "id": "com.illustrator.mcp.plugin",
+    "name": "Illustrator MCP Plugin",
+    "version": "0.1.0",
+    "main": "index.js",
+    "manifestVersion": 4,
+    "entrypoints": [
+        {
+            "type": "panel",
+            "id": "com.illustrator.mcp.panel",
+            "label": {
+                "default": "MCP Control"
+            },
+            "icons": [
+                {
+                    "width": 23,
+                    "height": 23,
+                    "path": "icons/icon_24.png",
+                    "scale": [
+                        1,
+                        2
+                    ],
+                    "theme": [
+                        "all"
+                    ],
+                    "species": [
+                        "chrome"
+                    ]
+                }
+            ]
+        }
+    ],
+    "host": [
+        {
+            "app": "AI",
+            "minVersion": "27.0"
+        }
+    ],
+    "requiredPermissions": [
+        "webview",
+        "clipboard",
+        "localFileSystem",
+        "userInfo",
+        "launchProcess",
+        "activeDocument",
+        "documentEvents"
+    ],
+    "strings": {
+        "en": {
+            "default": {
+                "name": "Illustrator MCP Plugin",
+                "description": "MCP server bridge for Illustrator automation"
+            }
+        }
+    }
+}
