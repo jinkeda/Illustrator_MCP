@@ -1,13 +1,18 @@
 """
 Core execute_script tool for Adobe Illustrator.
 
-This module provides the base execute_script tool that sends raw JavaScript
-to Illustrator. All specific tools in other modules use this internally.
+This is the PRIMARY tool for interacting with Illustrator.
+Following the "Scripting First" pattern (like blender-mcp), most operations
+should be done via this tool rather than specialized atomic tools.
 """
 
+import logging
 from pydantic import BaseModel, Field, ConfigDict
 from illustrator_mcp.shared import mcp
-from illustrator_mcp.proxy_client import execute_script, format_response
+from illustrator_mcp.proxy_client import execute_script_with_context, format_response
+
+# Set up logging for telemetry
+logger = logging.getLogger("illustrator_mcp")
 
 
 class ExecuteScriptInput(BaseModel):
@@ -35,31 +40,66 @@ async def illustrator_execute_script(params: ExecuteScriptInput) -> str:
     """
     Execute raw JavaScript/ExtendScript code in Adobe Illustrator.
     
-    This is a low-level tool that allows executing any valid Illustrator
-    JavaScript code. Use this for operations not covered by specific tools.
+    This is the PRIMARY tool for all Illustrator operations. Use get_scripting_reference
+    for syntax help if needed.
+    
+    COORDINATE SYSTEM:
+    - Origin: Top-left of artboard
+    - Y-axis: NEGATIVE downward. Use -y for visual y positions.
+    - Units: Points (1 pt = 1/72 inch)
+    
+    COMMON OPERATIONS:
+    
+    Shapes:
+    - Rectangle: doc.pathItems.rectangle(top, left, width, height)
+    - Ellipse: doc.pathItems.ellipse(top, left, width, height)
+    - Line: var p = doc.pathItems.add(); p.setEntirePath([[x1,-y1], [x2,-y2]])
+    
+    Colors:
+    - var c = new RGBColor(); c.red=255; c.green=0; c.blue=0;
+    - shape.fillColor = c; shape.strokeColor = c;
+    
+    Text:
+    - var tf = doc.textFrames.add(); tf.contents = "text"; tf.position = [x, -y];
+    
+    Selection:
+    - var sel = doc.selection; // Array of selected items
+    - item.selected = true; // Select an item
     
     Args:
-        params: Contains the JavaScript code to execute:
-            - script (str): Valid JavaScript/ExtendScript code
+        params.script: Valid ExtendScript code to execute
     
     Returns:
-        str: JSON result from script execution or error message
+        JSON result from script execution, or error details if failed
     
-    Examples:
-        - "alert('Hello from Illustrator!')"
-        - "app.activeDocument.pathItems.rectangle(0, 0, 100, 100)"
-        - "app.activeDocument.layers[0].name"
+    Example:
+        // Draw a red rectangle
+        var doc = app.activeDocument;
+        var rect = doc.pathItems.rectangle(-100, 50, 200, 100);
+        var c = new RGBColor(); c.red = 255; c.green = 0; c.blue = 0;
+        rect.fillColor = c;
     
-    Note:
-        The script runs in Illustrator's ExtendScript environment.
-        Use app.activeDocument to access the current document.
-        Results are returned as JSON when possible.
-    
-    Common Objects:
-        - app: Application object
-        - app.activeDocument: Current document
-        - app.documents: All open documents
-        - RGBColor, CMYKColor: Color objects
+    IMPORTANT: Always use -y for Y coordinates when positioning objects.
+    Call get_scripting_reference for more detailed syntax examples.
     """
-    response = await execute_script(params.script)
-    return format_response(response)
+    # Log script execution for telemetry
+    logger.info(f"execute_script: {len(params.script)} chars")
+    
+    try:
+        response = await execute_script_with_context(
+            script=params.script,
+            command_type="execute_script",
+            tool_name="illustrator_execute_script",
+            params={"script_length": len(params.script)}
+        )
+        
+        # Log errors for debugging
+        result = format_response(response)
+        if "error" in result.lower() or "eval error" in result.lower():
+            logger.warning(f"Script error: {result[:200]}")
+        
+        return result
+        
+    except Exception as e:
+        logger.error(f"Script execution failed: {str(e)}")
+        raise
