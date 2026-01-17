@@ -9,7 +9,19 @@
       "Bash(curl:*)",
       "Bash(python:*)",
       "Bash(dir \"%APPDATA%\\\\Adobe\\\\CEP\\\\extensions\")",
-      "Bash(git push:*)"
+      "Bash(git push:*)",
+      "Bash(git commit -m \"$\\(cat <<''EOF''\nInitial commit: Adobe Illustrator MCP Server\n\nMCP server for controlling Adobe Illustrator via natural language:\n- 94 AI-friendly tools across 15 categories\n- CEP panel extension with JSON polyfill for ExtendScript\n- Node.js proxy server for WebSocket bridge\n- Python MCP server with Pydantic validation\n- Unit tests with mocked proxy client\n\nCo-Authored-By: Claude Opus 4.5 <noreply@anthropic.com>\nEOF\n\\)\")",
+      "Bash(netstat:*)",
+      "Bash(findstr:*)",
+      "Bash(tasklist:*)",
+      "mcp__illustrator__illustrator_create_document",
+      "Bash(taskkill:*)",
+      "mcp__illustrator__illustrator_get_document_info",
+      "mcp__illustrator__illustrator_draw_ellipse",
+      "mcp__illustrator__illustrator_draw_star",
+      "mcp__illustrator__illustrator_select_all",
+      "mcp__illustrator__illustrator_execute_script",
+      "mcp__illustrator__illustrator_add_text"
     ]
   }
 }

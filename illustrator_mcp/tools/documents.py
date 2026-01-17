@@ -10,7 +10,7 @@ from enum import Enum
 from pydantic import BaseModel, Field, ConfigDict
 
 from illustrator_mcp.shared import mcp
-from illustrator_mcp.proxy_client import execute_script, format_response
+from illustrator_mcp.proxy_client import execute_script_with_context, format_response
 
 
 class ExportFormat(str, Enum):
@@ -65,23 +65,40 @@ class CloseDocumentInput(BaseModel):
 )
 async def illustrator_create_document(params: CreateDocumentInput) -> str:
     """Create a new Illustrator document with specified dimensions."""
+    color_space = 'CMYK' if params.color_mode == 'CMYK' else 'RGB'
     script = f"""
     (function() {{
-        var preset = new DocumentPreset();
-        preset.width = {params.width};
-        preset.height = {params.height};
-        preset.colorMode = DocumentColorSpace.{'CMYK' if params.color_mode == 'CMYK' else 'RGB'};
-        {f'preset.title = "{params.name}";' if params.name else ''}
-        var doc = app.documents.add(DocumentColorSpace.{'CMYK' if params.color_mode == 'CMYK' else 'RGB'}, {params.width}, {params.height});
-        return JSON.stringify({{
-            success: true,
-            name: doc.name,
-            width: doc.width,
-            height: doc.height
-        }});
+        try {{
+            var preset = new DocumentPreset();
+            preset.width = {params.width};
+            preset.height = {params.height};
+            preset.colorMode = DocumentColorSpace.{color_space};
+            preset.units = RulerUnits.Points;
+            {f'preset.title = "{params.name}";' if params.name else ''}
+
+            // Use addDocument with preset for reliable document creation
+            var doc = app.documents.addDocument(DocumentColorSpace.{color_space}, preset);
+
+            return JSON.stringify({{
+                success: true,
+                name: doc.name,
+                width: doc.width,
+                height: doc.height
+            }});
+        }} catch (e) {{
+            return JSON.stringify({{
+                success: false,
+                error: e.message || String(e)
+            }});
+        }}
     }})()
     """
-    response = await execute_script(script)
+    response = await execute_script_with_context(
+        script=script,
+        command_type="create_document",
+        tool_name="illustrator_create_document",
+        params={"width": params.width, "height": params.height, "name": params.name, "color_mode": params.color_mode}
+    )
     return format_response(response)
 
 
@@ -103,7 +120,12 @@ async def illustrator_open_document(params: OpenDocumentInput) -> str:
         return JSON.stringify({{success: true, name: doc.name, path: "{path}"}});
     }})()
     """
-    response = await execute_script(script)
+    response = await execute_script_with_context(
+        script=script,
+        command_type="open_document",
+        tool_name="illustrator_open_document",
+        params={"file_path": params.file_path}
+    )
     return format_response(response)
 
 
@@ -131,7 +153,12 @@ async def illustrator_save_document(params: SaveDocumentInput) -> str:
             return JSON.stringify({success: true, message: "Document saved"});
         })()
         """
-    response = await execute_script(script)
+    response = await execute_script_with_context(
+        script=script,
+        command_type="save_document",
+        tool_name="illustrator_save_document",
+        params={"file_path": params.file_path}
+    )
     return format_response(response)
 
 
@@ -189,8 +216,13 @@ async def illustrator_export_document(params: ExportDocumentInput) -> str:
             return JSON.stringify({{success: true, path: "{path}", format: "PDF"}});
         }})()
         """
-    
-    response = await execute_script(script)
+
+    response = await execute_script_with_context(
+        script=script,
+        command_type="export_document",
+        tool_name="illustrator_export_document",
+        params={"file_path": params.file_path, "format": params.format.value, "scale": params.scale}
+    )
     return format_response(response)
 
 
@@ -216,7 +248,12 @@ async def illustrator_get_document_info() -> str:
         });
     })()
     """
-    response = await execute_script(script)
+    response = await execute_script_with_context(
+        script=script,
+        command_type="get_document_info",
+        tool_name="illustrator_get_document_info",
+        params={}
+    )
     return format_response(response)
 
 
@@ -234,7 +271,12 @@ async def illustrator_close_document(params: CloseDocumentInput) -> str:
         return JSON.stringify({{success: true, message: "Document closed"}});
     }})()
     """
-    response = await execute_script(script)
+    response = await execute_script_with_context(
+        script=script,
+        command_type="close_document",
+        tool_name="illustrator_close_document",
+        params={"save_before_close": params.save_before_close}
+    )
     return format_response(response)
 
 
@@ -291,5 +333,193 @@ async def illustrator_import_image(params: ImportImageInput) -> str:
         }});
     }})()
     """
-    response = await execute_script(script)
+    response = await execute_script_with_context(
+        script=script,
+        command_type="import_image",
+        tool_name="illustrator_import_image",
+        params={"file_path": params.file_path, "x": params.x, "y": params.y, "link": params.link}
+    )
+    return format_response(response)
+
+
+# Undo/Redo tools
+@mcp.tool(
+    name="illustrator_undo",
+    annotations={"title": "Undo", "readOnlyHint": False, "destructiveHint": False}
+)
+async def illustrator_undo() -> str:
+    """Undo the last action in Illustrator.
+    
+    Use this to revert mistakes or unwanted changes.
+    Multiple calls will undo multiple actions.
+    """
+    script = """
+    (function() {
+        try {
+            app.undo();
+            return JSON.stringify({success: true, message: "Undo successful"});
+        } catch (e) {
+            return JSON.stringify({success: false, message: "Nothing to undo"});
+        }
+    })()
+    """
+    response = await execute_script_with_context(
+        script=script,
+        command_type="undo",
+        tool_name="illustrator_undo",
+        params={}
+    )
+    return format_response(response)
+
+
+@mcp.tool(
+    name="illustrator_redo",
+    annotations={"title": "Redo", "readOnlyHint": False, "destructiveHint": False}
+)
+async def illustrator_redo() -> str:
+    """Redo the last undone action.
+    
+    Use this to restore an action after undo.
+    """
+    script = """
+    (function() {
+        try {
+            app.redo();
+            return JSON.stringify({success: true, message: "Redo successful"});
+        } catch (e) {
+            return JSON.stringify({success: false, message: "Nothing to redo"});
+        }
+    })()
+    """
+    response = await execute_script_with_context(
+        script=script,
+        command_type="redo",
+        tool_name="illustrator_redo",
+        params={}
+    )
+    return format_response(response)
+
+
+# Pydantic models for place/embed
+class PlaceFileInput(BaseModel):
+    """Input for placing a file."""
+    model_config = ConfigDict(str_strip_whitespace=True)
+    file_path: str = Field(..., description="Full path to file (EPS, AI, PDF, PNG, etc.)", min_length=1)
+    x: float = Field(default=0, description="X position")
+    y: float = Field(default=0, description="Y position")
+    linked: bool = Field(default=True, description="Keep linked (True) or embed immediately (False)")
+
+
+@mcp.tool(
+    name="illustrator_place_file",
+    annotations={"title": "Place File", "readOnlyHint": False, "destructiveHint": False}
+)
+async def illustrator_place_file(params: PlaceFileInput) -> str:
+    """Place an external file (EPS, AI, PDF, image) into the document.
+    
+    Workflow:
+    - linked=True (drafting): File updates automatically when source changes
+    - linked=False (final): File is embedded and fully editable
+    
+    Use linked=True during iterative work (e.g., updating MATLAB plots),
+    then embed when ready for submission.
+    """
+    path = params.file_path.replace("\\", "\\\\")
+    script = f"""
+    (function() {{
+        var doc = app.activeDocument;
+        var file = new File("{path}");
+        if (!file.exists) {{
+            throw new Error("File not found: {path}");
+        }}
+        var placed = doc.placedItems.add();
+        placed.file = file;
+        placed.left = {params.x};
+        placed.top = {-params.y};
+        {"" if params.linked else "placed.embed();"}
+        return JSON.stringify({{
+            success: true,
+            path: "{path}",
+            linked: {str(params.linked).lower()},
+            position: {{x: {params.x}, y: {params.y}}},
+            width: placed.width,
+            height: placed.height
+        }});
+    }})()
+    """
+    response = await execute_script_with_context(
+        script=script,
+        command_type="place_file",
+        tool_name="illustrator_place_file",
+        params={"file_path": params.file_path, "x": params.x, "y": params.y, "linked": params.linked}
+    )
+    return format_response(response)
+
+
+# DISABLED: Tool limit reduction for Antigravity
+# @mcp.tool(
+#     name="illustrator_embed_placed_items",
+#     annotations={"title": "Embed All Placed Items", "readOnlyHint": False, "destructiveHint": False}
+# )
+async def illustrator_embed_placed_items() -> str:
+    """Embed all linked/placed items in the document.
+    
+    Use when finalizing a figure for submission.
+    After embedding, all elements become editable paths and text.
+    """
+    script = """
+    (function() {
+        var doc = app.activeDocument;
+        var embedded = 0;
+        // Iterate backwards since embedding changes the collection
+        for (var i = doc.placedItems.length - 1; i >= 0; i--) {
+            try {
+                doc.placedItems[i].embed();
+                embedded++;
+            } catch(e) {}
+        }
+        return JSON.stringify({success: true, embeddedCount: embedded});
+    })()
+    """
+    response = await execute_script_with_context(
+        script=script,
+        command_type="embed_placed_items",
+        tool_name="illustrator_embed_placed_items",
+        params={}
+    )
+    return format_response(response)
+
+
+@mcp.tool(
+    name="illustrator_update_linked_items",
+    annotations={"title": "Update Linked Items", "readOnlyHint": False, "destructiveHint": False}
+)
+async def illustrator_update_linked_items() -> str:
+    """Update all linked items from their source files.
+    
+    Use when source files (e.g., MATLAB exports) have been regenerated.
+    """
+    script = """
+    (function() {
+        var doc = app.activeDocument;
+        var updated = 0;
+        for (var i = 0; i < doc.placedItems.length; i++) {
+            try {
+                // Relink to same file forces update
+                var file = doc.placedItems[i].file;
+                if (file && file.exists) {
+                    doc.placedItems[i].relink(file);
+                    updated++;
+                }
+            } catch(e) {}
+        }
+        return JSON.stringify({success: true, updatedCount: updated});
+    })()
+    """
+    response = await execute_script_with_context(
+        script=script,
+        command_type="update_linked_items",
+        tool_name="illustrator_update_linked_items",
+        params={}
+    )
     return format_response(response)

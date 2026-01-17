@@ -2,16 +2,32 @@
 """
 Adobe Illustrator MCP Server.
 
-This server provides tools to interact with Adobe Illustrator via the 
+This server provides tools to interact with Adobe Illustrator via the
 Model Context Protocol, enabling AI assistants to control Illustrator
 using natural language.
 
-Architecture:
-- All specific tools use execute_script internally
-- execute_script sends JavaScript to Illustrator via the proxy server
-- The proxy server communicates with the UXP plugin via WebSocket
+Architecture (SIMPLIFIED - Single Process!):
+- MCP server runs as main process (stdio transport for Claude Code)
+- Integrated WebSocket server (port 8081) for CEP panel connection
+- NO separate Node.js proxy server needed!
 
-Tool Count: 94 tools across 15 categories
+How it works:
+1. Claude Code connects to this server via stdio
+2. CEP panel in Illustrator connects via WebSocket (port 8081)
+3. MCP tools send scripts through the WebSocket bridge to Illustrator
+
+Lifecycle:
+- WebSocket bridge starts via lifespan management (see shared.py)
+- Bridge is automatically shut down when server stops
+
+SCRIPTING FIRST ARCHITECTURE:
+Following the blender-mcp pattern, this server exposes a minimal toolset.
+Most Illustrator operations should be done via the illustrator_execute_script tool.
+
+Core tools (~15 total):
+- execute: Run any ExtendScript code (PRIMARY tool)
+- documents: Create, open, save, export, import, undo/redo
+- context: Get document structure, selection info, app info
 """
 
 import logging
@@ -24,33 +40,30 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-# Import the shared mcp instance
+# Import the shared mcp instance (includes lifespan management)
 from illustrator_mcp.shared import mcp
 
-# Import all tool modules (this registers tools via decorators)
+# Import tool modules following SCRIPTING FIRST architecture
+# Only essential tools are enabled - use execute_script for everything else
 from illustrator_mcp.tools import (
-    execute,      # Core execute_script (1 tool)
-    documents,    # Document operations (7 tools)
-    artboards,    # Artboard management (5 tools)
-    shapes,       # Shape drawing (6 tools)
-    paths,        # Path operations (10 tools)
-    pathfinder,   # Boolean operations (8 tools)
-    text,         # Text basics (4 tools)
-    typography,   # Advanced typography (6 tools)
-    layers,       # Layer management (6 tools)
-    objects,      # Object operations (10 tools)
-    selection,    # Selection & transform (7 tools)
-    styling,      # Color & styling (5 tools)
-    effects,      # Effects & gradients (7 tools)
-    arrange,      # Alignment & grouping (8 tools)
-    transform     # Advanced transforms (4 tools)
+    execute,      # Core execute_script (1 tool) - PRIMARY tool
+    documents,    # Document I/O (10 tools) - create, open, save, export, etc.
+    context,      # Document state inspection (4 tools) - structure, selection, etc.
 )
+
+# DISABLED modules - use illustrator_execute_script instead:
+# artboards, shapes, paths, pathfinder, text, typography,
+# layers, objects, selection, styling, effects, arrange,
+# transform, composite, patterns
 
 
 def main():
     """Entry point for the MCP server."""
     logger.info("Starting Adobe Illustrator MCP Server...")
-    logger.info("Tools: 94 total across 15 categories")
+    logger.info("(WebSocket bridge will start via lifespan management)")
+    logger.info("")
+    
+    # Run the MCP server (lifespan handles bridge startup/shutdown)
     mcp.run()
 
 

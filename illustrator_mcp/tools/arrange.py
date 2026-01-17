@@ -8,7 +8,7 @@ from enum import Enum
 from pydantic import BaseModel, Field, ConfigDict
 
 from illustrator_mcp.shared import mcp
-from illustrator_mcp.proxy_client import execute_script, format_response
+from illustrator_mcp.proxy_client import execute_script_with_context, format_response
 
 
 class AlignmentType(str, Enum):
@@ -70,7 +70,12 @@ async def illustrator_align_objects(params: AlignObjectsInput) -> str:
         return JSON.stringify({{success: true, alignment: "{params.alignment.value}"}});
     }})()
     """
-    response = await execute_script(script)
+    response = await execute_script_with_context(
+        script=script,
+        command_type="align_objects",
+        tool_name="illustrator_align_objects",
+        params={"alignment": params.alignment.value, "to_artboard": params.to_artboard}
+    )
     return format_response(response)
 
 
@@ -93,7 +98,12 @@ async def illustrator_distribute_objects(params: DistributeObjectsInput) -> str:
         return JSON.stringify({{success: true, distribution: "{params.distribution.value}"}});
     }})()
     """
-    response = await execute_script(script)
+    response = await execute_script_with_context(
+        script=script,
+        command_type="distribute_objects",
+        tool_name="illustrator_distribute_objects",
+        params={"distribution": params.distribution.value}
+    )
     return format_response(response)
 
 
@@ -117,7 +127,12 @@ async def illustrator_group_selection() -> str:
         return JSON.stringify({success: true, itemCount: group.pageItems.length});
     })()
     """
-    response = await execute_script(script)
+    response = await execute_script_with_context(
+        script=script,
+        command_type="group_selection",
+        tool_name="illustrator_group_selection",
+        params={}
+    )
     return format_response(response)
 
 
@@ -146,7 +161,12 @@ async def illustrator_ungroup_selection() -> str:
         return JSON.stringify({success: true, ungroupedCount: ungrouped});
     })()
     """
-    response = await execute_script(script)
+    response = await execute_script_with_context(
+        script=script,
+        command_type="ungroup_selection",
+        tool_name="illustrator_ungroup_selection",
+        params={}
+    )
     return format_response(response)
 
 
@@ -162,7 +182,12 @@ async def illustrator_make_clipping_mask() -> str:
         return JSON.stringify({success: true, message: "Clipping mask created"});
     })()
     """
-    response = await execute_script(script)
+    response = await execute_script_with_context(
+        script=script,
+        command_type="make_clipping_mask",
+        tool_name="illustrator_make_clipping_mask",
+        params={}
+    )
     return format_response(response)
 
 
@@ -178,7 +203,12 @@ async def illustrator_release_clipping_mask() -> str:
         return JSON.stringify({success: true, message: "Clipping mask released"});
     })()
     """
-    response = await execute_script(script)
+    response = await execute_script_with_context(
+        script=script,
+        command_type="release_clipping_mask",
+        tool_name="illustrator_release_clipping_mask",
+        params={}
+    )
     return format_response(response)
 
 
@@ -198,7 +228,12 @@ async def illustrator_bring_to_front() -> str:
         return JSON.stringify({success: true, message: "Brought to front"});
     })()
     """
-    response = await execute_script(script)
+    response = await execute_script_with_context(
+        script=script,
+        command_type="bring_to_front",
+        tool_name="illustrator_bring_to_front",
+        params={}
+    )
     return format_response(response)
 
 
@@ -218,5 +253,10 @@ async def illustrator_send_to_back() -> str:
         return JSON.stringify({success: true, message: "Sent to back"});
     })()
     """
-    response = await execute_script(script)
+    response = await execute_script_with_context(
+        script=script,
+        command_type="send_to_back",
+        tool_name="illustrator_send_to_back",
+        params={}
+    )
     return format_response(response)

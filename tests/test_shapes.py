@@ -30,7 +30,13 @@ class TestDrawRectangle:
         params = DrawRectangleInput(x=100, y=200, width=300, height=150)
         await illustrator_draw_rectangle(params)
         
-        script = mock_execute_script.call_args[0][0]
+        # Handle both positional (execute_script) and keyword (execute_script_with_context) calls
+        call_args = mock_execute_script.call_args
+        if call_args.kwargs and 'script' in call_args.kwargs:
+            script = call_args.kwargs['script']
+        else:
+            script = call_args[0][0]
+        
         assert "pathItems.rectangle" in script
         # Y is negated in Illustrator coordinate system
         assert "100" in script  # x position
@@ -43,7 +49,13 @@ class TestDrawRectangle:
         params = DrawRectangleInput(x=0, y=0, width=100, height=100, corner_radius=10)
         await illustrator_draw_rectangle(params)
         
-        script = mock_execute_script.call_args[0][0]
+        # Handle both positional (execute_script) and keyword (execute_script_with_context) calls
+        call_args = mock_execute_script.call_args
+        if call_args.kwargs and 'script' in call_args.kwargs:
+            script = call_args.kwargs['script']
+        else:
+            script = call_args[0][0]
+        
         # Should contain corner radius parameter
         assert "10" in script
 

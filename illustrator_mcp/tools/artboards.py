@@ -8,7 +8,7 @@ from typing import Optional
 from pydantic import BaseModel, Field, ConfigDict
 
 from illustrator_mcp.shared import mcp
-from illustrator_mcp.proxy_client import execute_script, format_response
+from illustrator_mcp.proxy_client import execute_script_with_context, format_response
 
 
 # Pydantic models
@@ -69,7 +69,12 @@ async def illustrator_list_artboards() -> str:
         return JSON.stringify({artboards: artboards, count: artboards.length});
     })()
     """
-    response = await execute_script(script)
+    response = await execute_script_with_context(
+        script=script,
+        command_type="list_artboards",
+        tool_name="illustrator_list_artboards",
+        params={}
+    )
     return format_response(response)
 
 
@@ -95,7 +100,12 @@ async def illustrator_create_artboard(params: CreateArtboardInput) -> str:
         }});
     }})()
     """
-    response = await execute_script(script)
+    response = await execute_script_with_context(
+        script=script,
+        command_type="create_artboard",
+        tool_name="illustrator_create_artboard",
+        params={"x": params.x, "y": params.y, "width": params.width, "height": params.height, "name": params.name}
+    )
     return format_response(response)
 
 
@@ -115,7 +125,12 @@ async def illustrator_delete_artboard(params: DeleteArtboardInput) -> str:
         return JSON.stringify({{success: true, message: "Artboard deleted"}});
     }})()
     """
-    response = await execute_script(script)
+    response = await execute_script_with_context(
+        script=script,
+        command_type="delete_artboard",
+        tool_name="illustrator_delete_artboard",
+        params={"index": params.index}
+    )
     return format_response(response)
 
 
@@ -135,7 +150,12 @@ async def illustrator_set_active_artboard(params: SetActiveArtboardInput) -> str
         return JSON.stringify({{success: true, activeArtboard: {params.index}}});
     }})()
     """
-    response = await execute_script(script)
+    response = await execute_script_with_context(
+        script=script,
+        command_type="set_active_artboard",
+        tool_name="illustrator_set_active_artboard",
+        params={"index": params.index}
+    )
     return format_response(response)
 
 
@@ -159,5 +179,10 @@ async def illustrator_resize_artboard(params: ResizeArtboardInput) -> str:
         return JSON.stringify({{success: true, width: {params.width}, height: {params.height}}});
     }})()
     """
-    response = await execute_script(script)
+    response = await execute_script_with_context(
+        script=script,
+        command_type="resize_artboard",
+        tool_name="illustrator_resize_artboard",
+        params={"index": params.index, "width": params.width, "height": params.height}
+    )
     return format_response(response)

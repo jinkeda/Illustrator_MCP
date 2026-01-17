@@ -8,7 +8,7 @@ from typing import Optional
 from pydantic import BaseModel, Field, ConfigDict
 
 from illustrator_mcp.shared import mcp
-from illustrator_mcp.proxy_client import execute_script, format_response
+from illustrator_mcp.proxy_client import execute_script_with_context, format_response
 
 
 # Pydantic models
@@ -84,7 +84,12 @@ async def illustrator_apply_drop_shadow(params: DropShadowInput) -> str:
         }});
     }})()
     """
-    response = await execute_script(script)
+    response = await execute_script_with_context(
+        script=script,
+        command_type="apply_drop_shadow",
+        tool_name="illustrator_apply_drop_shadow",
+        params={"offset_x": params.offset_x, "offset_y": params.offset_y, "blur": params.blur, "opacity": params.opacity}
+    )
     return format_response(response)
 
 
@@ -107,14 +112,20 @@ async def illustrator_apply_blur(params: BlurInput) -> str:
         }});
     }})()
     """
-    response = await execute_script(script)
+    response = await execute_script_with_context(
+        script=script,
+        command_type="apply_blur",
+        tool_name="illustrator_apply_blur",
+        params={"radius": params.radius}
+    )
     return format_response(response)
 
 
-@mcp.tool(
-    name="illustrator_apply_inner_glow",
-    annotations={"title": "Apply Inner Glow", "readOnlyHint": False, "destructiveHint": False}
-)
+# DISABLED: Tool limit reduction for Antigravity
+# @mcp.tool(
+#     name="illustrator_apply_inner_glow",
+#     annotations={"title": "Apply Inner Glow", "readOnlyHint": False, "destructiveHint": False}
+# )
 async def illustrator_apply_inner_glow(params: GlowInput) -> str:
     """Add inner glow effect to selection."""
     script = f"""
@@ -131,14 +142,20 @@ async def illustrator_apply_inner_glow(params: GlowInput) -> str:
         }});
     }})()
     """
-    response = await execute_script(script)
+    response = await execute_script_with_context(
+        script=script,
+        command_type="apply_inner_glow",
+        tool_name="illustrator_apply_inner_glow",
+        params={"blur": params.blur, "opacity": params.opacity}
+    )
     return format_response(response)
 
 
-@mcp.tool(
-    name="illustrator_apply_outer_glow",
-    annotations={"title": "Apply Outer Glow", "readOnlyHint": False, "destructiveHint": False}
-)
+# DISABLED: Tool limit reduction for Antigravity
+# @mcp.tool(
+#     name="illustrator_apply_outer_glow",
+#     annotations={"title": "Apply Outer Glow", "readOnlyHint": False, "destructiveHint": False}
+# )
 async def illustrator_apply_outer_glow(params: GlowInput) -> str:
     """Add outer glow effect to selection."""
     script = f"""
@@ -155,7 +172,12 @@ async def illustrator_apply_outer_glow(params: GlowInput) -> str:
         }});
     }})()
     """
-    response = await execute_script(script)
+    response = await execute_script_with_context(
+        script=script,
+        command_type="apply_outer_glow",
+        tool_name="illustrator_apply_outer_glow",
+        params={"blur": params.blur, "opacity": params.opacity}
+    )
     return format_response(response)
 
 
@@ -171,7 +193,12 @@ async def illustrator_clear_effects() -> str:
         return JSON.stringify({success: true, message: "Effects cleared"});
     })()
     """
-    response = await execute_script(script)
+    response = await execute_script_with_context(
+        script=script,
+        command_type="clear_effects",
+        tool_name="illustrator_clear_effects",
+        params={}
+    )
     return format_response(response)
 
 
@@ -222,7 +249,12 @@ async def illustrator_apply_linear_gradient(params: GradientInput) -> str:
         }});
     }})()
     """
-    response = await execute_script(script)
+    response = await execute_script_with_context(
+        script=script,
+        command_type="apply_linear_gradient",
+        tool_name="illustrator_apply_linear_gradient",
+        params={"start_r": params.start_r, "start_g": params.start_g, "start_b": params.start_b, "end_r": params.end_r, "end_g": params.end_g, "end_b": params.end_b, "angle": params.angle}
+    )
     return format_response(response)
 
 
@@ -269,5 +301,10 @@ async def illustrator_apply_radial_gradient(params: RadialGradientInput) -> str:
         return JSON.stringify({{success: true, message: "Radial gradient applied"}});
     }})()
     """
-    response = await execute_script(script)
+    response = await execute_script_with_context(
+        script=script,
+        command_type="apply_radial_gradient",
+        tool_name="illustrator_apply_radial_gradient",
+        params={"start_r": params.start_r, "start_g": params.start_g, "start_b": params.start_b, "end_r": params.end_r, "end_g": params.end_g, "end_b": params.end_b}
+    )
     return format_response(response)

@@ -2,7 +2,6 @@
 
 [![MCP](https://img.shields.io/badge/MCP-Compatible-blue)](https://modelcontextprotocol.io)
 [![Python](https://img.shields.io/badge/Python-3.10+-green)](https://python.org)
-[![Node.js](https://img.shields.io/badge/Node.js-18+-green)](https://nodejs.org)
 
 An MCP (Model Context Protocol) server that enables AI assistants like Claude to control Adobe Illustrator programmatically using natural language.
 
@@ -14,7 +13,7 @@ An MCP (Model Context Protocol) server that enables AI assistants like Claude to
 - [Installation](#installation)
 - [Configuration](#configuration)
 - [Usage](#usage)
-- [Available Tools](#available-tools-94-total)
+- [Available Tools](#available-tools-15-total)
 - [Usage Examples](#usage-examples)
 - [Troubleshooting](#troubleshooting)
 - [Project Structure](#project-structure)
@@ -24,10 +23,10 @@ An MCP (Model Context Protocol) server that enables AI assistants like Claude to
 
 ## Features
 
-- **94 AI-Friendly Tools** - Comprehensive coverage of Illustrator operations across 15 categories
-- **Hybrid Architecture** - High-level tools + raw JavaScript execution for flexibility
+- **Scripting First Architecture** - Minimal toolset 
+- **~15 Core Tools** - Essential operations; everything else via `illustrator_execute_script`
+- **Simplified Architecture** - Single Python server with integrated WebSocket bridge (no Node.js required!)
 - **Input Validation** - Pydantic models prevent errors before execution
-- **Natural Language** - Tools designed for AI discoverability and ease of use
 - **Cross-Platform** - Works on Windows and macOS
 - **Tested** - Unit tests with mocked proxy + live testing with Illustrator 30.0
 
@@ -35,25 +34,103 @@ An MCP (Model Context Protocol) server that enables AI assistants like Claude to
 
 ## Architecture
 
-This project uses an **execute_script-based architecture**:
+This project uses a **simplified single-server architecture**:
 
 ```
-┌─────────────────┐     ┌─────────────────┐     ┌─────────────────┐     ┌─────────────────┐
-│  Claude / AI    │────▶│   MCP Server    │────▶│  Proxy Server   │────▶│   CEP Panel     │
-│    Client       │     │    (Python)     │     │   (Node.js)     │     │  (Illustrator)  │
-└─────────────────┘     └─────────────────┘     └─────────────────┘     └─────────────────┘
-        │                       │                       │                       │
-    MCP Protocol         HTTP POST /execute       WebSocket           ExtendScript
-     (stdio)             { "script": "..." }     (port 8081)          (host.jsx)
+┌─────────────────┐     ┌─────────────────────────────────┐     ┌─────────────────┐
+│  Claude / AI    │────▶│   MCP Server (Python)           │────▶│   CEP Panel     │
+│    Client       │     │   + Integrated WebSocket Bridge │     │  (Illustrator)  │
+└─────────────────┘     └─────────────────────────────────┘     └─────────────────┘
+        │                              │                                │
+    MCP Protocol                  WebSocket                       ExtendScript
+     (stdio)                    (port 8081)                       (host.jsx)
 ```
 
 ### How It Works
 
-1. **AI calls a tool** (e.g., `illustrator_draw_rectangle`)
-2. **Tool generates JavaScript** code internally
-3. **MCP server sends** the script to the proxy via HTTP
-4. **Proxy forwards** to Illustrator via WebSocket
-5. **CEP panel executes** the script via ExtendScript and returns result
+1. **AI calls `illustrator_execute_script`** with ExtendScript code
+2. **MCP server sends** the script via WebSocket to the CEP panel
+3. **CEP panel executes** the script via ExtendScript and returns result
+4. **Context tools** help AI understand document state before writing scripts
+
+### Why Single Server?
+
+Previous versions required a separate Node.js proxy server. The new architecture:
+- ✅ **Simpler setup** - Just one server to run
+- ✅ **Fewer dependencies** - No Node.js required
+- ✅ **More reliable** - No inter-process communication issues
+- ✅ **Easier troubleshooting** - Single point of failure
+
+---
+
+## Design Principles & Philosophy
+The design is guided by these core principles:
+
+### 1. Minimal Tool Surface
+
+| Principle | Rationale |
+|-----------|-----------|
+| **~15 core tools, not 100+** | Platforms like Antigravity have ~100 tool limits; fewer tools = faster loading |
+| **One powerful script executor** | `execute_script` handles any operation ExtendScript supports |
+| **Context tools for understanding** | `get_document_structure`, `get_selection_info` help AI write correct scripts |
+
+### 2. Thick Scripts, Thin Server
+
+Move complexity **into ExtendScript**, not Python:
+
+```
+❌ Thin Script (Anti-pattern)        ✅ Thick Script (Preferred)
+───────────────────────────────────  ─────────────────────────────────────
+Python: calculate bounds             ExtendScript: calculate bounds
+Python: loop through items           ExtendScript: loop through items  
+Python: call MCP 50 times            ExtendScript: do everything in 1 call
+```
+
+**Benefits:**
+- Fewer round-trips (network latency)
+- Atomic operations (all-or-nothing)
+- Illustrator-native calculations (accurate bounds, transforms)
+
+### 3. Library Injection Pattern
+
+For complex operations, use reusable ExtendScript libraries:
+
+```
+resources/scripts/
+├── geometry.jsx    # getVisibleBounds(), mmToPoints()
+├── selection.jsx   # getOrderedSelection()
+└── layout.jsx      # arrangeImages(), distributeSpacing()
+```
+
+Scripts can request libraries via `inject_libraries(script, includes=["geometry"])`.
+
+### 4. Context Before Creation
+
+AI should always inspect document state before writing modification scripts:
+
+```
+1. get_document_structure  →  Understand what exists
+2. get_selection_info      →  Know what's selected
+3. execute_script          →  Modify with confidence
+```
+
+### 5. Fail Fast with Clear Errors
+
+| Error Type | Handling |
+|------------|----------|
+| CEP not connected | `ILLUSTRATOR_DISCONNECTED` with connection steps |
+| No document open | Clear message before script runs |
+| Script syntax error | ExtendScript error message returned in full |
+| Library not found | `ValueError: Library not found: {name}.jsx` |
+
+### When to Add New Tools
+
+Add a dedicated MCP tool **only** when:
+1. The operation cannot be done via ExtendScript (e.g., file I/O, image import)
+2. The operation is used in >80% of workflows (e.g., `create_document`)
+3. The script would be >50 lines and identical every time
+
+Otherwise, use `execute_script` with library injection.
 
 ---
 
@@ -62,8 +139,9 @@ This project uses an **execute_script-based architecture**:
 | Requirement | Version | Notes |
 |-------------|---------|-------|
 | **Python** | 3.10+ | For MCP server |
-| **Node.js** | 18+ | For proxy server |
 | **Adobe Illustrator** | 25.0+ (2021+) | CC 2021 or later |
+
+> **Note:** Node.js is no longer required! The proxy server functionality is now built into the Python MCP server.
 
 ### Installing Prerequisites
 
@@ -74,15 +152,6 @@ winget install Python.Python.3.11
 
 # macOS (via Homebrew)
 brew install python@3.11
-```
-
-**Node.js:**
-```bash
-# Windows (via winget)
-winget install OpenJS.NodeJS.LTS
-
-# macOS (via Homebrew)
-brew install node@18
 ```
 
 **Administrator Access:**
@@ -109,15 +178,7 @@ pip install -e .
 illustrator-mcp --help
 ```
 
-### Step 3: Install Proxy Server Dependencies
-
-```bash
-cd proxy-server
-npm install
-cd ..
-```
-
-### Step 4: Install CEP Extension
+### Step 3: Install CEP Extension
 
 **Windows (Run as Administrator):**
 ```bash
@@ -181,23 +242,13 @@ Add the following to your Claude Desktop configuration file:
 }
 ```
 
-### Proxy Server Configuration
+### Optional Configuration
 
 Ports are configurable via a **`.env` file** in the project root:
 
-**Step 1:** Copy the example file:
-```bash
-cp .env.example .env
-```
-
-**Step 2:** Edit `.env` as needed:
 ```env
-# Proxy Server Ports
-HTTP_PORT=8080
+# WebSocket port (CEP panel connects here)
 WS_PORT=8081
-
-# Proxy Server Host (for MCP server to connect to)
-PROXY_HOST=localhost
 
 # Timeout for script execution (seconds)
 TIMEOUT=30
@@ -205,12 +256,8 @@ TIMEOUT=30
 
 | Setting | Default | Description |
 |---------|---------|-------------|
-| `HTTP_PORT` | 8080 | HTTP API port (MCP → Proxy) |
-| `WS_PORT` | 8081 | WebSocket port (Proxy → Illustrator) |
-| `PROXY_HOST` | localhost | Proxy server hostname |
+| `WS_PORT` | 8081 | WebSocket port (MCP server ↔ CEP panel) |
 | `TIMEOUT` | 30 | Script execution timeout (seconds) |
-
-Both the Python MCP server and Node.js proxy server read from the same `.env` file.
 
 ---
 
@@ -218,24 +265,17 @@ Both the Python MCP server and Node.js proxy server read from the same `.env` fi
 
 ### Starting the System
 
-**Terminal 1 - Start the Proxy Server:**
-```bash
-cd Illustrator_MCP/proxy-server
-npm start
-```
+**Step 1:** Start Claude Desktop (or restart if already running)
 
-You should see:
-```
-[Proxy] WebSocket server listening on port 8081
-[Proxy] HTTP server listening on port 8080
-Waiting for Illustrator connection...
-```
+The MCP server starts automatically and includes the WebSocket bridge.
 
-**Terminal 2 - Ensure Illustrator is running with the plugin loaded**
+**Step 2:** Open Adobe Illustrator
 
-The plugin panel will show "✅ Connected" when successfully connected to the proxy.
+**Step 3:** Open the CEP Panel: Window → Extensions → MCP Control
 
-**Terminal 3 - Start Claude Desktop** (or restart if already running)
+The panel should automatically connect and show "✅ Connected"
+
+### That's it! No separate proxy server needed.
 
 ### Verifying the Connection
 
@@ -245,14 +285,16 @@ The plugin panel will show "✅ Connected" when successfully connected to the pr
 
 ---
 
-## Available Tools (94 total)
+## Available Tools (~15 total)
 
-### Core Tool (1)
+This MCP follows a **Scripting First Architecture**. Most Illustrator operations should be done via the `illustrator_execute_script` tool rather than specialized atomic tools.
+
+### Core Script Execution (1)
 | Tool | Description |
 |------|-------------|
-| `illustrator_execute_script` | Execute raw JavaScript in Illustrator |
+| `illustrator_execute_script` | **PRIMARY TOOL** - Execute any ExtendScript code in Illustrator |
 
-### Document Operations (7)
+### Document Operations (10)
 | Tool | Description |
 |------|-------------|
 | `illustrator_create_document` | Create a new document |
@@ -262,144 +304,46 @@ The plugin panel will show "✅ Connected" when successfully connected to the pr
 | `illustrator_get_document_info` | Get document properties |
 | `illustrator_close_document` | Close the document |
 | `illustrator_import_image` | Import PNG/JPG image into document |
+| `illustrator_place_file` | Place linked/embedded file |
+| `illustrator_undo` | Undo last action |
+| `illustrator_redo` | Redo last undone action |
 
-### Artboard Management (5)
+### Context & State Inspection (4)
 | Tool | Description |
 |------|-------------|
-| `illustrator_list_artboards` | Get all artboards with properties |
-| `illustrator_create_artboard` | Add a new artboard |
-| `illustrator_delete_artboard` | Remove artboard by index |
-| `illustrator_set_active_artboard` | Switch to specified artboard |
-| `illustrator_resize_artboard` | Change artboard dimensions |
+| `illustrator_get_document_structure` | Get complete document tree (layers, items) |
+| `illustrator_get_selection_info` | Get detailed info about selected objects |
+| `illustrator_get_app_info` | Get Illustrator application info |
+| `illustrator_get_scripting_reference` | Quick ExtendScript syntax reference |
 
-### Shape Tools (6)
-| Tool | Description |
-|------|-------------|
-| `illustrator_draw_rectangle` | Draw a rectangle |
-| `illustrator_draw_ellipse` | Draw an ellipse/circle |
-| `illustrator_draw_polygon` | Draw a regular polygon |
-| `illustrator_draw_line` | Draw a line |
-| `illustrator_draw_path` | Draw a custom path |
-| `illustrator_draw_star` | Draw a star |
+### Why Scripting First?
 
-### Path Operations (10)
-| Tool | Description |
-|------|-------------|
-| `illustrator_join_paths` | Join selected open paths |
-| `illustrator_outline_stroke` | Convert stroke to filled path |
-| `illustrator_offset_path` | Create parallel path at offset |
-| `illustrator_simplify_path` | Reduce anchor points |
-| `illustrator_smooth_path` | Smooth path curves |
-| `illustrator_reverse_path` | Reverse path direction |
-| `illustrator_make_compound_path` | Combine paths into compound |
-| `illustrator_release_compound_path` | Split compound path |
-| `illustrator_expand_appearance` | Expand effects/strokes to paths |
-| `illustrator_flatten_transparency` | Flatten transparent objects |
+Instead of 100+ specialized tools, this architecture:
+- ✅ **Reduces tool count** - Stays under platform limits (e.g., Antigravity's 100-tool max)
+- ✅ **More flexible** - Any Illustrator operation is possible via scripting
+- ✅ **Better for complex tasks** - Combine multiple operations in one script
+- ✅ **Easier maintenance** - Fewer tools to maintain and test
 
-### Pathfinder Operations (8)
-| Tool | Description |
-|------|-------------|
-| `illustrator_pathfinder_unite` | Merge/combine shapes |
-| `illustrator_pathfinder_minus_front` | Subtract front from back |
-| `illustrator_pathfinder_minus_back` | Subtract back from front |
-| `illustrator_pathfinder_intersect` | Keep only overlap |
-| `illustrator_pathfinder_exclude` | Remove overlap |
-| `illustrator_pathfinder_divide` | Divide at intersections |
-| `illustrator_pathfinder_trim` | Trim overlapping areas |
-| `illustrator_pathfinder_merge` | Merge same-color shapes |
+### Using execute_script
 
-### Text Tools (4)
-| Tool | Description |
-|------|-------------|
-| `illustrator_add_text` | Add a text frame |
-| `illustrator_set_text_font` | Change font properties |
-| `illustrator_set_text_color` | Change text color |
-| `illustrator_get_text_content` | Get text content |
+```javascript
+// Draw a red rectangle
+var doc = app.activeDocument;
+var rect = doc.pathItems.rectangle(-100, 50, 200, 100);
+var c = new RGBColor(); c.red = 255; c.green = 0; c.blue = 0;
+rect.fillColor = c;
+```
 
-### Typography (6)
-| Tool | Description |
-|------|-------------|
-| `illustrator_create_text_on_path` | Text following a path |
-| `illustrator_create_area_text` | Text inside a shape |
-| `illustrator_convert_text_to_outlines` | Convert text to paths |
-| `illustrator_set_paragraph_alignment` | Set text alignment |
-| `illustrator_set_character_spacing` | Set tracking/kerning |
-| `illustrator_set_line_height` | Set line spacing |
+> **Note:** Y coordinates are negative downward. Use `-y` for visual positions.
 
-### Layer Tools (6)
-| Tool | Description |
-|------|-------------|
-| `illustrator_list_layers` | List all layers |
-| `illustrator_create_layer` | Create a new layer |
-| `illustrator_delete_layer` | Delete a layer |
-| `illustrator_set_active_layer` | Set active layer |
-| `illustrator_rename_layer` | Rename a layer |
-| `illustrator_toggle_layer_visibility` | Show/hide layer |
+### Disabled Tool Modules
 
-### Object Operations (10)
-| Tool | Description |
-|------|-------------|
-| `illustrator_duplicate_selection` | Duplicate with offset |
-| `illustrator_copy_to_layer` | Copy selection to layer |
-| `illustrator_lock_selection` | Lock selected objects |
-| `illustrator_unlock_all` | Unlock all objects |
-| `illustrator_hide_selection` | Hide selected objects |
-| `illustrator_show_all` | Show all hidden objects |
-| `illustrator_get_object_bounds` | Get bounding box |
-| `illustrator_rename_object` | Rename selected object |
-| `illustrator_set_opacity` | Set transparency |
-| `illustrator_set_blend_mode` | Set blend mode |
+The following modules exist but are disabled to keep tool count minimal:
+- artboards, shapes, paths, pathfinder, text, typography
+- layers, objects, selection, styling, effects, arrange
+- transform, composite, patterns
 
-### Selection Tools (7)
-| Tool | Description |
-|------|-------------|
-| `illustrator_select_all` | Select all objects |
-| `illustrator_deselect_all` | Clear selection |
-| `illustrator_get_selection` | Get selection info |
-| `illustrator_delete_selection` | Delete selected objects |
-| `illustrator_move_selection` | Move selection |
-| `illustrator_scale_selection` | Scale selection |
-| `illustrator_rotate_selection` | Rotate selection |
-
-### Styling Tools (5)
-| Tool | Description |
-|------|-------------|
-| `illustrator_set_fill_color` | Set fill color (RGB) |
-| `illustrator_set_stroke_color` | Set stroke color (RGB) |
-| `illustrator_set_stroke_width` | Set stroke width |
-| `illustrator_remove_fill` | Remove fill |
-| `illustrator_remove_stroke` | Remove stroke |
-
-### Effects & Gradients (7)
-| Tool | Description |
-|------|-------------|
-| `illustrator_apply_drop_shadow` | Add drop shadow |
-| `illustrator_apply_blur` | Apply Gaussian blur |
-| `illustrator_apply_inner_glow` | Add inner glow |
-| `illustrator_apply_outer_glow` | Add outer glow |
-| `illustrator_clear_effects` | Remove all effects |
-| `illustrator_apply_linear_gradient` | Linear gradient fill |
-| `illustrator_apply_radial_gradient` | Radial gradient fill |
-
-### Arrange Tools (8)
-| Tool | Description |
-|------|-------------|
-| `illustrator_align_objects` | Align objects |
-| `illustrator_distribute_objects` | Distribute objects |
-| `illustrator_group_selection` | Group objects |
-| `illustrator_ungroup_selection` | Ungroup objects |
-| `illustrator_make_clipping_mask` | Create clipping mask |
-| `illustrator_release_clipping_mask` | Release clipping mask |
-| `illustrator_bring_to_front` | Bring to front |
-| `illustrator_send_to_back` | Send to back |
-
-### Transform Tools (4)
-| Tool | Description |
-|------|-------------|
-| `illustrator_reflect_selection` | Mirror horizontally/vertically |
-| `illustrator_shear_selection` | Skew/shear objects |
-| `illustrator_transform_each` | Transform each individually |
-| `illustrator_reset_bounding_box` | Reset bounding box |
+These still work via `illustrator_execute_script` - check `get_scripting_reference` for syntax.
 
 ---
 
@@ -418,29 +362,63 @@ illustrator_create_document(width=1920, height=1080, name="YouTube Thumbnail")
 
 **Prompt:** "Draw a red circle with 100pt diameter in the center of the document"
 
-The AI will:
-1. Get document info to find center
-2. Draw an ellipse at the center
-3. Set fill color to red
+The AI will use `illustrator_execute_script`:
+```javascript
+var doc = app.activeDocument;
+var centerX = doc.width / 2;
+var centerY = doc.height / 2;
+
+// Draw circle (ellipse with equal width/height)
+var circle = doc.pathItems.ellipse(
+    -centerY + 50,  // top (Y is negative downward)
+    centerX - 50,   // left
+    100,            // width
+    100             // height
+);
+
+// Set red fill
+var red = new RGBColor();
+red.red = 255; red.green = 0; red.blue = 0;
+circle.fillColor = red;
+circle.stroked = false;
+```
 
 ### Working with Text
 
 **Prompt:** "Add a title 'SALE' in bold 72pt Arial at the top"
 
-```python
-illustrator_add_text(content="SALE", x=100, y=100, font_family="Arial", font_size=72)
-illustrator_set_text_font(font_style="Bold")
-illustrator_set_text_color(red=255, green=0, blue=0)
+The AI will use `illustrator_execute_script`:
+```javascript
+var doc = app.activeDocument;
+var tf = doc.textFrames.add();
+tf.contents = "SALE";
+tf.position = [100, -100];  // Note: -y for visual position
+
+// Style the text
+tf.textRange.characterAttributes.size = 72;
+tf.textRange.characterAttributes.textFont = app.textFonts.getByName("Arial-BoldMT");
+
+// Red color
+var red = new RGBColor();
+red.red = 255; red.green = 0; red.blue = 0;
+tf.textRange.characterAttributes.fillColor = red;
 ```
 
 ### Complex Layouts
 
 **Prompt:** "Create 5 rectangles and distribute them evenly horizontally"
 
-The AI will:
-1. Create 5 rectangles
-2. Select all
-3. Call `illustrator_distribute_objects(distribution="horizontal")`
+The AI will use `illustrator_execute_script`:
+```javascript
+var doc = app.activeDocument;
+var rects = [];
+for (var i = 0; i < 5; i++) {
+    var rect = doc.pathItems.rectangle(-100, 50 + i * 80, 60, 60);
+    rect.selected = true;
+    rects.push(rect);
+}
+// Use Align palette action or calculate positions
+```
 
 ### Importing Images
 
@@ -458,25 +436,58 @@ illustrator_import_image(file_path="C:/images/logo.png", x=50, y=50, link=True)
 illustrator_export_document(file_path="C:/output/design.png", format="png", scale=2.0)
 ```
 
-### Advanced: Raw JavaScript
+### Advanced: Complex Scripts
 
-**Prompt:** "Apply 50% opacity to the selected object"
+**Prompt:** "Create a gradient-filled rectangle with rounded corners"
 
-```python
-illustrator_execute_script(script="app.activeDocument.selection[0].opacity = 50;")
+The AI will use `illustrator_execute_script`:
+```javascript
+var doc = app.activeDocument;
+
+// Rounded rectangle
+var rect = doc.pathItems.roundedRectangle(
+    -100,   // top
+    50,     // left
+    200,    // width
+    100,    // height
+    15,     // horizontal radius
+    15      // vertical radius
+);
+
+// Create gradient
+var gradient = doc.gradients.add();
+gradient.type = GradientType.LINEAR;
+
+// Add color stops
+var stop1 = gradient.gradientStops[0];
+var blue = new RGBColor(); blue.red = 0; blue.green = 100; blue.blue = 255;
+stop1.color = blue;
+stop1.rampPoint = 0;
+
+var stop2 = gradient.gradientStops[1];
+var purple = new RGBColor(); purple.red = 128; purple.green = 0; purple.blue = 255;
+stop2.color = purple;
+stop2.rampPoint = 100;
+
+// Apply gradient
+var gradColor = new GradientColor();
+gradColor.gradient = gradient;
+rect.fillColor = gradColor;
 ```
 
 ---
 
 ## Troubleshooting
 
-### "Illustrator is not connected"
+### "ILLUSTRATOR_DISCONNECTED: CEP panel is not connected"
 
-1. ✅ Ensure Illustrator is running
-2. ✅ Check panel is visible: Window → Extensions → MCP Control
-3. ✅ Check proxy is running: `cd proxy-server && npm start`
-4. ✅ Check panel shows "Connected" status
-5. ✅ Try clicking "Connect" in the panel
+This is the most common error. Follow these steps:
+
+1. ✅ **Ensure Illustrator is running**
+2. ✅ **Open the CEP panel:** Window → Extensions → MCP Control
+3. ✅ **Check panel status:** Should show "✅ Connected"
+4. ✅ **If "Disconnected":** Click the "Connect" button
+5. ✅ **Still not working?** Restart Claude Desktop (this restarts the MCP server)
 
 ### "No document is open"
 
@@ -501,6 +512,14 @@ Create or open a document before running commands that operate on documents.
 2. Check configuration file syntax (valid JSON)
 3. Verify the `illustrator-mcp` command works in terminal
 
+### WebSocket connection issues
+
+The MCP server includes an integrated WebSocket server on port 8081. If connection fails:
+
+1. Check if port 8081 is in use: `netstat -ano | findstr 8081`
+2. If another process is using the port, stop it or change `WS_PORT` in `.env`
+3. Restart Claude Desktop to restart the MCP server
+
 ---
 
 ## Project Structure
@@ -509,27 +528,18 @@ Create or open a document before running commands that operate on documents.
 Illustrator_MCP/
 ├── illustrator_mcp/           # Python MCP server
 │   ├── __init__.py
-│   ├── server.py              # Entry point
+│   ├── server.py              # Entry point (includes WebSocket bridge)
 │   ├── shared.py              # Shared MCP instance
-│   ├── proxy_client.py        # HTTP client for proxy
-│   └── tools/                 # 94 tools across 15 modules
-│       ├── __init__.py
-│       ├── execute.py         # Raw script execution (1)
-│       ├── documents.py       # Document operations (7)
-│       ├── artboards.py       # Artboard management (5)
-│       ├── shapes.py          # Shape drawing (6)
-│       ├── paths.py           # Path operations (10)
-│       ├── pathfinder.py      # Boolean operations (8)
-│       ├── text.py            # Text tools (4)
-│       ├── typography.py      # Advanced typography (6)
-│       ├── layers.py          # Layer management (6)
-│       ├── objects.py         # Object operations (10)
-│       ├── selection.py       # Selection tools (7)
-│       ├── styling.py         # Fill/stroke styling (5)
-│       ├── effects.py         # Effects & gradients (7)
-│       ├── arrange.py         # Alignment & grouping (8)
-│       └── transform.py       # Transformations (4)
-├── proxy-server/              # Node.js WebSocket bridge
+│   ├── config.py              # Configuration management
+│   ├── websocket_bridge.py    # Integrated WebSocket server
+│   ├── proxy_client.py        # Script execution client
+│   └── tools/                 # ~15 tools (Scripting First architecture)
+│       ├── __init__.py        # Module loader (most modules disabled)
+│       ├── execute.py         # Core script execution (1) - PRIMARY
+│       ├── documents.py       # Document I/O (10)
+│       ├── context.py         # State inspection (4)
+│       └── [disabled]/        # artboards, shapes, paths, etc.
+├── proxy-server/              # [DEPRECATED] Node.js proxy (no longer needed)
 │   ├── package.json
 │   └── index.js
 ├── cep-extension/             # Adobe CEP panel
@@ -544,7 +554,8 @@ Illustrator_MCP/
 │   ├── test_shapes.py
 │   ├── test_objects.py
 │   ├── test_effects.py
-│   └── test_pathfinder.py
+│   ├── test_pathfinder.py
+│   └── test_selection.py      # Selection tool tests
 ├── install-cep.bat            # Windows CEP installer
 ├── pyproject.toml             # Python package config
 └── README.md
@@ -571,7 +582,7 @@ The test suite uses mocked `execute_script` calls to verify JavaScript generatio
 
 ### Live Testing
 
-With Illustrator and proxy server running:
+With Illustrator running and CEP panel connected:
 
 ```python
 import asyncio
@@ -587,6 +598,63 @@ async def test():
 
 asyncio.run(test())
 ```
+
+---
+
+## Migration from Previous Versions
+
+If you were using the old version with a separate Node.js proxy server:
+
+1. **Stop the Node.js proxy server** - It's no longer needed
+2. **Update the Python package:** `pip install -e .`
+3. **Restart Claude Desktop** - This starts the new integrated server
+4. **Open CEP panel in Illustrator** - It will connect to the new server
+
+The Node.js `proxy-server` folder is kept for reference but is no longer used.
+
+---
+
+## Changelog
+
+### v2.1.0 (2026-01-17) - THICK SCRIPTS
+- **Added:** Standard Library Injection support in `illustrator_execute_script`
+- **Added:** `resources/scripts/` directory with core libraries:
+  - `geometry.jsx`: Robust bounds calculation (handles clipping masks)
+  - `selection.jsx`: Spatial sorting (Row-Major/Column-Major)
+  - `layout.jsx`: Grid arrangement engine
+- **Updated:** `execute.py` now accepts `includes=["geometry", "selection"]` parameter
+
+### v2.0.0 (2026-01-16) - SCRIPTING FIRST ARCHITECTURE
+- **BREAKING:** Reduced from 107 tools to ~15 tools
+- **Architecture:** Use `illustrator_execute_script` for most operations
+- **Added:** `context.py` module with document state inspection tools:
+  - `get_document_structure` - Complete document tree
+  - `get_selection_info` - Selected object details
+  - `get_app_info` - Illustrator version info
+  - `get_scripting_reference` - ExtendScript syntax help
+- **Disabled:** artboards, shapes, paths, pathfinder, text, typography, layers, objects, selection, styling, effects, arrange, transform, composite, patterns modules
+- **Why:** Antigravity and other platforms have ~100 tool limits
+
+### v1.2.0 (2026-01-14)
+- **Added:** 13 new tools (94 → 107 total)
+  - Pattern Tools (6): `create_pattern`, `apply_pattern`, `transform_pattern`, `set_fill_opacity`, `apply_gradient`, `list_patterns`
+  - Selection Tools (3): `select_by_name`, `find_objects`, `select_on_layer`
+  - Layer Tools (2): `lock_layer`, `unlock_layer`
+  - Text Tools (2): `find_replace_font`, `list_document_fonts`
+- **Added:** Wildcard pattern matching for selection by name
+- **Added:** Font management tools for document consistency
+
+### v1.1.0 (2026-01-14)
+- **Fixed:** WebSocket binding changed from `0.0.0.0` to `localhost` for better Windows compatibility
+- **Improved:** Enhanced startup logging with clear success/failure indicators
+- **Improved:** CEP panel reconnection reduced from 5s to 3s with better error messages
+- **Added:** Port conflict detection with helpful troubleshooting messages
+- **Added:** FastMCP lifespan management for proper WebSocket bridge startup/shutdown
+- **Added:** Hybrid command protocol with metadata for better logging and debugging
+
+### v1.0.0
+- Initial release with integrated WebSocket bridge (no Node.js proxy required)
+- 94 tools across 15 categories
 
 ---
 

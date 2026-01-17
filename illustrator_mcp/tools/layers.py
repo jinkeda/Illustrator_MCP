@@ -8,7 +8,7 @@ from typing import Optional
 from pydantic import BaseModel, Field, ConfigDict
 
 from illustrator_mcp.shared import mcp
-from illustrator_mcp.proxy_client import execute_script, format_response
+from illustrator_mcp.proxy_client import execute_script_with_context, format_response
 
 
 # Pydantic models
@@ -68,7 +68,12 @@ async def illustrator_list_layers() -> str:
         return JSON.stringify({layers: layers});
     })()
     """
-    response = await execute_script(script)
+    response = await execute_script_with_context(
+        script=script,
+        command_type="list_layers",
+        tool_name="illustrator_list_layers",
+        params={}
+    )
     return format_response(response)
 
 
@@ -86,7 +91,12 @@ async def illustrator_create_layer(params: CreateLayerInput) -> str:
         return JSON.stringify({{success: true, name: layer.name}});
     }})()
     """
-    response = await execute_script(script)
+    response = await execute_script_with_context(
+        script=script,
+        command_type="create_layer",
+        tool_name="illustrator_create_layer",
+        params={"name": params.name}
+    )
     return format_response(response)
 
 
@@ -104,7 +114,12 @@ async def illustrator_delete_layer(params: DeleteLayerInput) -> str:
         return JSON.stringify({{success: true, message: "Layer deleted"}});
     }})()
     """
-    response = await execute_script(script)
+    response = await execute_script_with_context(
+        script=script,
+        command_type="delete_layer",
+        tool_name="illustrator_delete_layer",
+        params={"name": params.name}
+    )
     return format_response(response)
 
 
@@ -122,7 +137,12 @@ async def illustrator_set_active_layer(params: SetActiveLayerInput) -> str:
         return JSON.stringify({{success: true, activeLayer: "{params.name}"}});
     }})()
     """
-    response = await execute_script(script)
+    response = await execute_script_with_context(
+        script=script,
+        command_type="set_active_layer",
+        tool_name="illustrator_set_active_layer",
+        params={"name": params.name}
+    )
     return format_response(response)
 
 
@@ -140,7 +160,12 @@ async def illustrator_rename_layer(params: RenameLayerInput) -> str:
         return JSON.stringify({{success: true, oldName: "{params.current_name}", newName: "{params.new_name}"}});
     }})()
     """
-    response = await execute_script(script)
+    response = await execute_script_with_context(
+        script=script,
+        command_type="rename_layer",
+        tool_name="illustrator_rename_layer",
+        params={"current_name": params.current_name, "new_name": params.new_name}
+    )
     return format_response(response)
 
 
@@ -163,5 +188,66 @@ async def illustrator_toggle_layer_visibility(params: ToggleLayerVisibilityInput
         return JSON.stringify({{success: true, name: "{params.name}", visible: layer.visible}});
     }})()
     """
-    response = await execute_script(script)
+    response = await execute_script_with_context(
+        script=script,
+        command_type="toggle_layer_visibility",
+        tool_name="illustrator_toggle_layer_visibility",
+        params={"name": params.name, "visible": params.visible}
+    )
+    return format_response(response)
+
+
+# Pydantic model for lock/unlock
+class LockLayerInput(BaseModel):
+    """Input for locking/unlocking a layer."""
+    model_config = ConfigDict(str_strip_whitespace=True)
+    name: str = Field(..., description="Layer name", min_length=1)
+
+
+@mcp.tool(
+    name="illustrator_lock_layer",
+    annotations={"title": "Lock Layer", "readOnlyHint": False, "destructiveHint": False}
+)
+async def illustrator_lock_layer(params: LockLayerInput) -> str:
+    """Lock a layer to prevent accidental edits.
+    
+    Use for instruction layers, guides, or finalized panels.
+    """
+    script = f"""
+    (function() {{
+        var doc = app.activeDocument;
+        var layer = doc.layers.getByName("{params.name}");
+        layer.locked = true;
+        return JSON.stringify({{success: true, name: "{params.name}", locked: true}});
+    }})()
+    """
+    response = await execute_script_with_context(
+        script=script,
+        command_type="lock_layer",
+        tool_name="illustrator_lock_layer",
+        params={"name": params.name}
+    )
+    return format_response(response)
+
+
+@mcp.tool(
+    name="illustrator_unlock_layer",
+    annotations={"title": "Unlock Layer", "readOnlyHint": False, "destructiveHint": False}
+)
+async def illustrator_unlock_layer(params: LockLayerInput) -> str:
+    """Unlock a layer to allow editing."""
+    script = f"""
+    (function() {{
+        var doc = app.activeDocument;
+        var layer = doc.layers.getByName("{params.name}");
+        layer.locked = false;
+        return JSON.stringify({{success: true, name: "{params.name}", locked: false}});
+    }})()
+    """
+    response = await execute_script_with_context(
+        script=script,
+        command_type="unlock_layer",
+        tool_name="illustrator_unlock_layer",
+        params={"name": params.name}
+    )
     return format_response(response)

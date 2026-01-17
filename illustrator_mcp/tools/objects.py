@@ -8,7 +8,7 @@ from typing import Optional
 from pydantic import BaseModel, Field, ConfigDict
 
 from illustrator_mcp.shared import mcp
-from illustrator_mcp.proxy_client import execute_script, format_response
+from illustrator_mcp.proxy_client import execute_script_with_context, format_response
 
 
 # Pydantic models
@@ -65,7 +65,12 @@ async def illustrator_duplicate_selection(params: DuplicateSelectionInput) -> st
         return JSON.stringify({{success: true, duplicatedCount: duplicates.length}});
     }})()
     """
-    response = await execute_script(script)
+    response = await execute_script_with_context(
+        script=script,
+        command_type="duplicate_selection",
+        tool_name="illustrator_duplicate_selection",
+        params={"offset_x": params.offset_x, "offset_y": params.offset_y}
+    )
     return format_response(response)
 
 
@@ -90,7 +95,12 @@ async def illustrator_copy_to_layer(params: CopyToLayerInput) -> str:
         return JSON.stringify({{success: true, copiedCount: copied, targetLayer: "{params.layer_name}"}});
     }})()
     """
-    response = await execute_script(script)
+    response = await execute_script_with_context(
+        script=script,
+        command_type="copy_to_layer",
+        tool_name="illustrator_copy_to_layer",
+        params={"layer_name": params.layer_name}
+    )
     return format_response(response)
 
 
@@ -114,7 +124,12 @@ async def illustrator_lock_selection() -> str:
         return JSON.stringify({success: true, lockedCount: locked});
     })()
     """
-    response = await execute_script(script)
+    response = await execute_script_with_context(
+        script=script,
+        command_type="lock_selection",
+        tool_name="illustrator_lock_selection",
+        params={}
+    )
     return format_response(response)
 
 
@@ -146,7 +161,12 @@ async def illustrator_unlock_all() -> str:
         return JSON.stringify({success: true, unlockedCount: unlocked});
     })()
     """
-    response = await execute_script(script)
+    response = await execute_script_with_context(
+        script=script,
+        command_type="unlock_all",
+        tool_name="illustrator_unlock_all",
+        params={}
+    )
     return format_response(response)
 
 
@@ -170,7 +190,12 @@ async def illustrator_hide_selection() -> str:
         return JSON.stringify({success: true, hiddenCount: hidden});
     })()
     """
-    response = await execute_script(script)
+    response = await execute_script_with_context(
+        script=script,
+        command_type="hide_selection",
+        tool_name="illustrator_hide_selection",
+        params={}
+    )
     return format_response(response)
 
 
@@ -201,7 +226,12 @@ async def illustrator_show_all() -> str:
         return JSON.stringify({success: true, shownCount: shown});
     })()
     """
-    response = await execute_script(script)
+    response = await execute_script_with_context(
+        script=script,
+        command_type="show_all",
+        tool_name="illustrator_show_all",
+        params={}
+    )
     return format_response(response)
 
 
@@ -233,7 +263,12 @@ async def illustrator_get_object_bounds() -> str:
         return JSON.stringify({objects: bounds, count: bounds.length});
     })()
     """
-    response = await execute_script(script)
+    response = await execute_script_with_context(
+        script=script,
+        command_type="get_object_bounds",
+        tool_name="illustrator_get_object_bounds",
+        params={}
+    )
     return format_response(response)
 
 
@@ -252,7 +287,12 @@ async def illustrator_rename_object(params: RenameObjectInput) -> str:
         return JSON.stringify({{success: true, newName: "{params.name}"}});
     }})()
     """
-    response = await execute_script(script)
+    response = await execute_script_with_context(
+        script=script,
+        command_type="rename_object",
+        tool_name="illustrator_rename_object",
+        params={"name": params.name}
+    )
     return format_response(response)
 
 
@@ -273,7 +313,12 @@ async def illustrator_set_opacity(params: SetOpacityInput) -> str:
         return JSON.stringify({{success: true, opacity: {params.opacity}}});
     }})()
     """
-    response = await execute_script(script)
+    response = await execute_script_with_context(
+        script=script,
+        command_type="set_opacity",
+        tool_name="illustrator_set_opacity",
+        params={"opacity": params.opacity}
+    )
     return format_response(response)
 
 
@@ -315,5 +360,10 @@ async def illustrator_set_blend_mode(params: SetBlendModeInput) -> str:
         return JSON.stringify({{success: true, blendMode: "{params.mode}"}});
     }})()
     """
-    response = await execute_script(script)
+    response = await execute_script_with_context(
+        script=script,
+        command_type="set_blend_mode",
+        tool_name="illustrator_set_blend_mode",
+        params={"mode": params.mode}
+    )
     return format_response(response)

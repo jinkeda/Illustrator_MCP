@@ -8,7 +8,7 @@ from typing import Optional, List
 from pydantic import BaseModel, Field, ConfigDict
 
 from illustrator_mcp.shared import mcp
-from illustrator_mcp.proxy_client import execute_script, format_response
+from illustrator_mcp.proxy_client import execute_script, execute_script_with_context, format_response
 
 
 # Pydantic models
@@ -90,7 +90,13 @@ async def illustrator_draw_rectangle(params: DrawRectangleInput) -> str:
         }});
     }})()
     """
-    response = await execute_script(script)
+    # Use hybrid protocol with command context
+    response = await execute_script_with_context(
+        script=script,
+        command_type="draw_rectangle",
+        tool_name="illustrator_draw_rectangle",
+        params={"x": params.x, "y": params.y, "width": params.width, "height": params.height}
+    )
     return format_response(response)
 
 
@@ -104,7 +110,7 @@ async def illustrator_draw_ellipse(params: DrawEllipseInput) -> str:
     # Illustrator ellipse takes top, left, width, height
     top = -params.y + height/2
     left = params.x - params.width/2
-    
+
     script = f"""
     (function() {{
         var doc = app.activeDocument;
@@ -117,7 +123,12 @@ async def illustrator_draw_ellipse(params: DrawEllipseInput) -> str:
         }});
     }})()
     """
-    response = await execute_script(script)
+    response = await execute_script_with_context(
+        script=script,
+        command_type="draw_ellipse",
+        tool_name="illustrator_draw_ellipse",
+        params={"x": params.x, "y": params.y, "width": params.width, "height": height}
+    )
     return format_response(response)
 
 
@@ -139,7 +150,12 @@ async def illustrator_draw_polygon(params: DrawPolygonInput) -> str:
         }});
     }})()
     """
-    response = await execute_script(script)
+    response = await execute_script_with_context(
+        script=script,
+        command_type="draw_polygon",
+        tool_name="illustrator_draw_polygon",
+        params={"x": params.x, "y": params.y, "radius": params.radius, "sides": params.sides}
+    )
     return format_response(response)
 
 
@@ -164,7 +180,12 @@ async def illustrator_draw_line(params: DrawLineInput) -> str:
         }});
     }})()
     """
-    response = await execute_script(script)
+    response = await execute_script_with_context(
+        script=script,
+        command_type="draw_line",
+        tool_name="illustrator_draw_line",
+        params={"x1": params.x1, "y1": params.y1, "x2": params.x2, "y2": params.y2}
+    )
     return format_response(response)
 
 
@@ -189,7 +210,12 @@ async def illustrator_draw_path(params: DrawPathInput) -> str:
         }});
     }})()
     """
-    response = await execute_script(script)
+    response = await execute_script_with_context(
+        script=script,
+        command_type="draw_path",
+        tool_name="illustrator_draw_path",
+        params={"pointCount": len(params.points), "closed": params.closed}
+    )
     return format_response(response)
 
 
@@ -211,5 +237,10 @@ async def illustrator_draw_star(params: DrawStarInput) -> str:
         }});
     }})()
     """
-    response = await execute_script(script)
+    response = await execute_script_with_context(
+        script=script,
+        command_type="draw_star",
+        tool_name="illustrator_draw_star",
+        params={"x": params.x, "y": params.y, "outer_radius": params.outer_radius, "inner_radius": params.inner_radius, "points": params.points}
+    )
     return format_response(response)

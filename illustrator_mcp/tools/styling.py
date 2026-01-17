@@ -7,7 +7,7 @@ These tools use execute_script internally to run JavaScript in Illustrator.
 from pydantic import BaseModel, Field, ConfigDict
 
 from illustrator_mcp.shared import mcp
-from illustrator_mcp.proxy_client import execute_script, format_response
+from illustrator_mcp.proxy_client import execute_script_with_context, format_response
 
 
 # Pydantic models
@@ -57,7 +57,12 @@ async def illustrator_set_fill_color(params: SetFillColorInput) -> str:
         return JSON.stringify({{success: true, color: {{r: {params.red}, g: {params.green}, b: {params.blue}}}}});
     }})()
     """
-    response = await execute_script(script)
+    response = await execute_script_with_context(
+        script=script,
+        command_type="set_fill_color",
+        tool_name="illustrator_set_fill_color",
+        params={"red": params.red, "green": params.green, "blue": params.blue}
+    )
     return format_response(response)
 
 
@@ -84,7 +89,12 @@ async def illustrator_set_stroke_color(params: SetStrokeColorInput) -> str:
         return JSON.stringify({{success: true, color: {{r: {params.red}, g: {params.green}, b: {params.blue}}}}});
     }})()
     """
-    response = await execute_script(script)
+    response = await execute_script_with_context(
+        script=script,
+        command_type="set_stroke_color",
+        tool_name="illustrator_set_stroke_color",
+        params={"red": params.red, "green": params.green, "blue": params.blue}
+    )
     return format_response(response)
 
 
@@ -107,14 +117,20 @@ async def illustrator_set_stroke_width(params: SetStrokeWidthInput) -> str:
         return JSON.stringify({{success: true, strokeWidth: {params.width}}});
     }})()
     """
-    response = await execute_script(script)
+    response = await execute_script_with_context(
+        script=script,
+        command_type="set_stroke_width",
+        tool_name="illustrator_set_stroke_width",
+        params={"width": params.width}
+    )
     return format_response(response)
 
 
-@mcp.tool(
-    name="illustrator_remove_fill",
-    annotations={"title": "Remove Fill", "readOnlyHint": False, "destructiveHint": False}
-)
+# DISABLED: Tool limit reduction for Antigravity
+# @mcp.tool(
+#     name="illustrator_remove_fill",
+#     annotations={"title": "Remove Fill", "readOnlyHint": False, "destructiveHint": False}
+# )
 async def illustrator_remove_fill() -> str:
     """Remove fill from selected objects."""
     script = """
@@ -129,7 +145,12 @@ async def illustrator_remove_fill() -> str:
         return JSON.stringify({success: true, message: "Fill removed"});
     })()
     """
-    response = await execute_script(script)
+    response = await execute_script_with_context(
+        script=script,
+        command_type="remove_fill",
+        tool_name="illustrator_remove_fill",
+        params={}
+    )
     return format_response(response)
 
 
@@ -151,5 +172,10 @@ async def illustrator_remove_stroke() -> str:
         return JSON.stringify({success: true, message: "Stroke removed"});
     })()
     """
-    response = await execute_script(script)
+    response = await execute_script_with_context(
+        script=script,
+        command_type="remove_stroke",
+        tool_name="illustrator_remove_stroke",
+        params={}
+    )
     return format_response(response)

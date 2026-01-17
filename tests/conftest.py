@@ -28,12 +28,17 @@ TOOL_MODULES = [
 
 @pytest.fixture
 def mock_execute_script():
-    """Mock the execute_script function to capture generated JavaScript."""
+    """Mock the execute_script and execute_script_with_context functions to capture generated JavaScript."""
     mock = AsyncMock()
     mock.return_value = {"result": {"success": True}}
 
-    # Patch execute_script in all tool modules where it's imported
-    patches = [patch(f'{module}.execute_script', mock) for module in TOOL_MODULES]
+    # Patch both execute_script and execute_script_with_context in all tool modules
+    patches = []
+    for module in TOOL_MODULES:
+        patches.append(patch(f'{module}.execute_script', mock))
+    
+    # Also patch execute_script_with_context in shapes module where it's used
+    patches.append(patch('illustrator_mcp.tools.shapes.execute_script_with_context', mock))
 
     for p in patches:
         p.start()

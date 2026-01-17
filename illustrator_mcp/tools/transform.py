@@ -8,7 +8,7 @@ from typing import Optional
 from pydantic import BaseModel, Field, ConfigDict
 
 from illustrator_mcp.shared import mcp
-from illustrator_mcp.proxy_client import execute_script, format_response
+from illustrator_mcp.proxy_client import execute_script_with_context, format_response
 
 
 # Pydantic models
@@ -72,7 +72,12 @@ async def illustrator_reflect_selection(params: ReflectInput) -> str:
         }});
     }})()
     """
-    response = await execute_script(script)
+    response = await execute_script_with_context(
+        script=script,
+        command_type="reflect_selection",
+        tool_name="illustrator_reflect_selection",
+        params={"axis": params.axis, "copy": params.copy}
+    )
     return format_response(response)
 
 
@@ -95,7 +100,12 @@ async def illustrator_shear_selection(params: ShearInput) -> str:
         return JSON.stringify({{success: true, angle: {params.angle}, axis: "{params.axis}"}});
     }})()
     """
-    response = await execute_script(script)
+    response = await execute_script_with_context(
+        script=script,
+        command_type="shear_selection",
+        tool_name="illustrator_shear_selection",
+        params={"angle": params.angle, "axis": params.axis}
+    )
     return format_response(response)
 
 
@@ -126,7 +136,12 @@ async def illustrator_transform_each(params: TransformEachInput) -> str:
         }});
     }})()
     """
-    response = await execute_script(script)
+    response = await execute_script_with_context(
+        script=script,
+        command_type="transform_each",
+        tool_name="illustrator_transform_each",
+        params={"scale_x": params.scale_x, "scale_y": params.scale_y, "rotate": params.rotate, "move_x": params.move_x, "move_y": params.move_y}
+    )
     return format_response(response)
 
 
@@ -142,5 +157,10 @@ async def illustrator_reset_bounding_box() -> str:
         return JSON.stringify({success: true, message: "Bounding box reset"});
     })()
     """
-    response = await execute_script(script)
+    response = await execute_script_with_context(
+        script=script,
+        command_type="reset_bounding_box",
+        tool_name="illustrator_reset_bounding_box",
+        params={}
+    )
     return format_response(response)

@@ -8,7 +8,7 @@ from typing import Optional
 from pydantic import BaseModel, Field, ConfigDict
 
 from illustrator_mcp.shared import mcp
-from illustrator_mcp.proxy_client import execute_script, format_response
+from illustrator_mcp.proxy_client import execute_script_with_context, format_response
 
 
 # Pydantic models
@@ -46,10 +46,11 @@ class LineHeightInput(BaseModel):
 
 
 # Tool implementations
-@mcp.tool(
-    name="illustrator_create_text_on_path",
-    annotations={"title": "Create Text on Path", "readOnlyHint": False, "destructiveHint": False}
-)
+# DISABLED: Tool limit reduction for Antigravity
+# @mcp.tool(
+#     name="illustrator_create_text_on_path",
+#     annotations={"title": "Create Text on Path", "readOnlyHint": False, "destructiveHint": False}
+# )
 async def illustrator_create_text_on_path(params: TextOnPathInput) -> str:
     """Create text following a selected path."""
     content = params.text.replace("\\", "\\\\").replace('"', '\\"').replace("\n", "\\n")
@@ -71,14 +72,20 @@ async def illustrator_create_text_on_path(params: TextOnPathInput) -> str:
         }});
     }})()
     """
-    response = await execute_script(script)
+    response = await execute_script_with_context(
+        script=script,
+        command_type="create_text_on_path",
+        tool_name="illustrator_create_text_on_path",
+        params={"text": params.text, "font_size": params.font_size}
+    )
     return format_response(response)
 
 
-@mcp.tool(
-    name="illustrator_create_area_text",
-    annotations={"title": "Create Area Text", "readOnlyHint": False, "destructiveHint": False}
-)
+# DISABLED: Tool limit reduction for Antigravity
+# @mcp.tool(
+#     name="illustrator_create_area_text",
+#     annotations={"title": "Create Area Text", "readOnlyHint": False, "destructiveHint": False}
+# )
 async def illustrator_create_area_text(params: AreaTextInput) -> str:
     """Create text inside a selected shape."""
     content = params.text.replace("\\", "\\\\").replace('"', '\\"').replace("\n", "\\n")
@@ -168,10 +175,11 @@ async def illustrator_set_paragraph_alignment(params: ParagraphAlignmentInput) -
     return format_response(response)
 
 
-@mcp.tool(
-    name="illustrator_set_character_spacing",
-    annotations={"title": "Set Character Spacing", "readOnlyHint": False, "destructiveHint": False}
-)
+# DISABLED: Tool limit reduction for Antigravity
+# @mcp.tool(
+#     name="illustrator_set_character_spacing",
+#     annotations={"title": "Set Character Spacing", "readOnlyHint": False, "destructiveHint": False}
+# )
 async def illustrator_set_character_spacing(params: CharacterSpacingInput) -> str:
     """Set tracking/kerning for selected text."""
     script = f"""
@@ -193,10 +201,11 @@ async def illustrator_set_character_spacing(params: CharacterSpacingInput) -> st
     return format_response(response)
 
 
-@mcp.tool(
-    name="illustrator_set_line_height",
-    annotations={"title": "Set Line Height", "readOnlyHint": False, "destructiveHint": False}
-)
+# DISABLED: Tool limit reduction for Antigravity
+# @mcp.tool(
+#     name="illustrator_set_line_height",
+#     annotations={"title": "Set Line Height", "readOnlyHint": False, "destructiveHint": False}
+# )
 async def illustrator_set_line_height(params: LineHeightInput) -> str:
     """Set leading (line spacing) for selected text."""
     script = f"""

@@ -8,7 +8,7 @@ from typing import Optional
 from pydantic import BaseModel, Field, ConfigDict
 
 from illustrator_mcp.shared import mcp
-from illustrator_mcp.proxy_client import execute_script, format_response
+from illustrator_mcp.proxy_client import execute_script_with_context, format_response
 
 
 # Pydantic models
@@ -57,10 +57,12 @@ async def illustrator_add_text(params: AddTextInput) -> str:
     script = f"""
     (function() {{
         var doc = app.activeDocument;
+        var ab = doc.artboards[0].artboardRect;
+        var artH = ab[1] - ab[3];
         var textFrame = doc.textFrames.add();
         textFrame.contents = "{content_escaped}";
         textFrame.left = {params.x};
-        textFrame.top = {-params.y};
+        textFrame.top = artH - {params.y};
         var textRange = textFrame.textRange;
         textRange.characterAttributes.size = {params.font_size};
         {font_code}
@@ -71,7 +73,12 @@ async def illustrator_add_text(params: AddTextInput) -> str:
         }});
     }})()
     """
-    response = await execute_script(script)
+    response = await execute_script_with_context(
+        script=script,
+        command_type="add_text",
+        tool_name="illustrator_add_text",
+        params={"x": params.x, "y": params.y, "font_size": params.font_size}
+    )
     return format_response(response)
 
 
@@ -110,7 +117,12 @@ async def illustrator_set_text_font(params: SetTextFontInput) -> str:
         return JSON.stringify({{success: true, message: "Font updated"}});
     }})()
     """
-    response = await execute_script(script)
+    response = await execute_script_with_context(
+        script=script,
+        command_type="set_text_font",
+        tool_name="illustrator_set_text_font",
+        params={"font_family": params.font_family, "font_size": params.font_size}
+    )
     return format_response(response)
 
 
@@ -136,7 +148,12 @@ async def illustrator_set_text_color(params: SetTextColorInput) -> str:
         return JSON.stringify({{success: true, color: {{r: {params.red}, g: {params.green}, b: {params.blue}}}}});
     }})()
     """
-    response = await execute_script(script)
+    response = await execute_script_with_context(
+        script=script,
+        command_type="set_text_color",
+        tool_name="illustrator_set_text_color",
+        params={"red": params.red, "green": params.green, "blue": params.blue}
+    )
     return format_response(response)
 
 
@@ -160,5 +177,120 @@ async def illustrator_get_text_content() -> str:
         });
     })()
     """
-    response = await execute_script(script)
+    response = await execute_script_with_context(
+        script=script,
+        command_type="get_text_content",
+        tool_name="illustrator_get_text_content",
+        params={}
+    )
+    return format_response(response)
+
+
+# Pydantic model for find/replace font
+class FindReplaceFontInput(BaseModel):
+    """Input for find and replace font."""
+    model_config = ConfigDict(str_strip_whitespace=True)
+    from_font: str = Field(..., description="Font name to replace", min_length=1)
+    to_font: str = Field(default="Helvetica", description="Replacement font name")
+
+
+@mcp.tool(
+    name="illustrator_find_replace_font",
+    annotations={"title": "Find and Replace Font", "readOnlyHint": False, "destructiveHint": False}
+)
+async def illustrator_find_replace_font(params: FindReplaceFontInput) -> str:
+    """Replace all instances of a font throughout the document.
+    
+    Equivalent to Type > Find Font in Illustrator UI.
+    Use after embedding imported files to standardize fonts.
+    """
+    script = f"""
+    (function() {{
+        var doc = app.activeDocument;
+        var replacedCount = 0;
+        var targetFont;
+        
+        // Get the target font
+        try {{
+            targetFont = app.textFonts.getByName("{params.to_font}");
+        }} catch(e) {{
+            throw new Error("Target font not found: {params.to_font}");
+        }}
+        
+        // Iterate through all text frames
+        for (var i = 0; i < doc.textFrames.length; i++) {{
+            var tf = doc.textFrames[i];
+            try {{
+                var chars = tf.textRange.characters;
+                for (var j = 0; j < chars.length; j++) {{
+                    var charFont = chars[j].characterAttributes.textFont;
+                    if (charFont && charFont.name.indexOf("{params.from_font}") !== -1) {{
+                        chars[j].characterAttributes.textFont = targetFont;
+                        replacedCount++;
+                    }}
+                }}
+            }} catch(e) {{}}
+        }}
+        
+        return JSON.stringify({{
+            success: true,
+            fromFont: "{params.from_font}",
+            toFont: "{params.to_font}",
+            replacedCharacters: replacedCount
+        }});
+    }})()
+    """
+    response = await execute_script_with_context(
+        script=script,
+        command_type="find_replace_font",
+        tool_name="illustrator_find_replace_font",
+        params={"from_font": params.from_font, "to_font": params.to_font}
+    )
+    return format_response(response)
+
+
+@mcp.tool(
+    name="illustrator_list_document_fonts",
+    annotations={"title": "List Document Fonts", "readOnlyHint": True, "destructiveHint": False}
+)
+async def illustrator_list_document_fonts() -> str:
+    """List all fonts used in the document.
+    
+    Use to check for font consistency before submission.
+    """
+    script = """
+    (function() {
+        var doc = app.activeDocument;
+        var fonts = {};
+        
+        for (var i = 0; i < doc.textFrames.length; i++) {
+            var tf = doc.textFrames[i];
+            try {
+                var chars = tf.textRange.characters;
+                for (var j = 0; j < chars.length; j++) {
+                    var font = chars[j].characterAttributes.textFont;
+                    if (font) {
+                        if (!fonts[font.name]) {
+                            fonts[font.name] = {name: font.name, family: font.family, count: 0};
+                        }
+                        fonts[font.name].count++;
+                    }
+                }
+            } catch(e) {}
+        }
+        
+        var fontList = [];
+        for (var key in fonts) {
+            fontList.push(fonts[key]);
+        }
+        
+        return JSON.stringify({success: true, fonts: fontList, totalFonts: fontList.length});
+    })()
+    """
+    response = await execute_script_with_context(
+        script=script,
+        command_type="list_document_fonts",
+        tool_name="illustrator_list_document_fonts",
+        params={}
+    )
     return format_response(response)
