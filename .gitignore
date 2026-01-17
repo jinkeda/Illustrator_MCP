@@ -25,3 +25,9 @@ tmpclaude-*
 # Jupyter
 .ipynb_checkpoints/
 
+
+# User exclusions
+.Claude/
+.git/
+.pytest_cache/
+.venv/
