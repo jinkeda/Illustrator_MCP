@@ -665,5 +665,4 @@ MIT License - see LICENSE file for details.
 ## Acknowledgments
 
 - [Model Context Protocol](https://modelcontextprotocol.io) by Anthropic
-- [adobe-mcp](https://github.com/david-t-martel/adobe-mcp) for architectural inspiration
 - Adobe UXP documentation
