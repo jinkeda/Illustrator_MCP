@@ -1,8 +1,0 @@
-{
-  "permissions": {
-    "allow": [
-      "Bash(timeout:*)",
-      "mcp__illustrator__illustrator_draw_rectangle"
-    ]
-  }
-}
