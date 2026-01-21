@@ -6,12 +6,14 @@ Following the "Scripting First" pattern (like blender-mcp), most operations
 should be done via this tool rather than specialized atomic tools.
 """
 
+import json
 import logging
 from pathlib import Path
 from typing import List, Optional
 from pydantic import BaseModel, Field, ConfigDict
 from illustrator_mcp.shared import mcp
 from illustrator_mcp.proxy_client import execute_script_with_context, format_response
+from illustrator_mcp.protocol import TaskPayload, TaskReport
 
 # Set up logging for telemetry
 logger = logging.getLogger("illustrator_mcp")
@@ -22,7 +24,7 @@ def inject_libraries(script: str, includes: List[str]) -> str:
     
     Args:
         script: The user's ExtendScript code
-        includes: List of library names ["geometry", "selection", "layout"]
+        includes: List of library names ["geometry", "selection", "layout", "task_executor"]
     
     Returns:
         Combined script with libraries prepended
@@ -63,7 +65,7 @@ class ExecuteScriptInput(BaseModel):
     
     includes: Optional[List[str]] = Field(
         default=None,
-        description="List of standard libraries to inject (e.g., ['geometry', 'selection', 'layout'])"
+        description="List of standard libraries to inject (e.g., ['geometry', 'selection', 'layout', 'task_executor'])"
     )
 
 
@@ -166,3 +168,158 @@ async def illustrator_execute_script(params: ExecuteScriptInput) -> str:
     except Exception as e:
         logger.error(f"Script execution failed: {str(e)}")
         raise
+
+
+# ==================== Task Protocol Tool ====================
+
+
+class ExecuteTaskInput(BaseModel):
+    """Input for executing a structured task (Task Protocol v2.1)."""
+    model_config = ConfigDict(str_strip_whitespace=True)
+    
+    payload: TaskPayload = Field(..., description="Task payload with targets, params, and options")
+    
+    collect_fn: str = Field(
+        default="collectTargets",
+        description="Collector function name (use standard 'collectTargets' or provide custom)"
+    )
+    
+    compute_fn: str = Field(
+        ...,
+        description="JSX code for compute logic. Receives (items, params, report), must return actions array."
+    )
+    
+    apply_fn: str = Field(
+        ...,
+        description="JSX code for apply logic. Receives (actions, report), modifies items."
+    )
+
+
+@mcp.tool(
+    name="illustrator_execute_task",
+    annotations={
+        "title": "Execute Structured Task",
+        "readOnlyHint": False,
+        "destructiveHint": True,
+        "idempotentHint": False,
+        "openWorldHint": False
+    }
+)
+async def illustrator_execute_task(params: ExecuteTaskInput) -> str:
+    """
+    Execute a structured task using the Task Protocol v2.1.
+    
+    Benefits over raw execute_script:
+    - Standardized payload/report format
+    - Automatic timing and error context
+    - Declarative target selection (no manual selection micro-ops)
+    - Supports dryRun and trace modes
+    - Per-item error localization via itemRef
+    
+    TARGET SELECTORS:
+    - {type: "selection"} - Current selection (default)
+    - {type: "layer", layer: "Layer 1"} - All items in layer
+    - {type: "query", itemType: "PathItem", pattern: "axis_*"} - Pattern match
+    - {type: "all", recursive: true} - All items in document
+    
+    OPTIONS:
+    - dryRun: true - Compute actions but don't apply
+    - trace: true - Include execution trace in report
+    - assignIds: true - Write unique IDs to item.note (opt-in)
+    
+    Example payload:
+        {
+            "task": "apply_fill_color",
+            "targets": {"type": "selection"},
+            "params": {"color": {"r": 255, "g": 0, "b": 0}},
+            "options": {"trace": true}
+        }
+    """
+    # Build the execution script
+    payload_json = json.dumps(params.payload.model_dump())
+    
+    script = f"""
+// Compute function
+function compute(items, params, report) {{
+{params.compute_fn}
+}}
+
+// Apply function  
+function apply(actions, report) {{
+{params.apply_fn}
+}}
+
+// Execute task
+var payload = {payload_json};
+var report = executeTask(
+    payload,
+    {params.collect_fn},
+    compute,
+    apply
+);
+
+JSON.stringify(report);
+"""
+    
+    # Inject task_executor library
+    try:
+        final_script = inject_libraries(script, ["task_executor"])
+    except ValueError as e:
+        return f"Error loading task_executor library: {str(e)}"
+    
+    logger.info(f"execute_task: {params.payload.task}")
+    
+    try:
+        response = await execute_script_with_context(
+            script=final_script,
+            command_type=f"task:{params.payload.task}",
+            tool_name="illustrator_execute_task",
+            params=params.payload.model_dump()
+        )
+        
+        result_str = format_response(response)
+        
+        # Try to parse and format the TaskReport
+        try:
+            report_data = json.loads(result_str)
+            report = TaskReport.model_validate(report_data)
+            
+            # Build human-readable output
+            status = "✓" if report.ok else "✗"
+            output = f"{status} Task: {params.payload.task}\n"
+            output += f"  Timing: collect={report.timing.collect_ms:.0f}ms, "
+            output += f"compute={report.timing.compute_ms:.0f}ms, "
+            output += f"apply={report.timing.apply_ms:.0f}ms\n"
+            output += f"  Stats: {report.stats.itemsProcessed} processed, "
+            output += f"{report.stats.itemsModified} modified, "
+            output += f"{report.stats.itemsSkipped} skipped\n"
+            
+            if report.warnings:
+                output += f"  ⚠ Warnings ({len(report.warnings)}):\n"
+                for w in report.warnings:
+                    output += f"    [{w.stage}] {w.message}\n"
+            
+            if report.errors:
+                output += f"  ✗ Errors ({len(report.errors)}):\n"
+                for e in report.errors:
+                    loc = ""
+                    if e.itemRef:
+                        loc = f" at {e.itemRef.layerPath}[{e.itemRef.indexPath}]"
+                    output += f"    [{e.stage}] {e.code}: {e.message}{loc}\n"
+            
+            if report.trace:
+                output += f"  Trace:\n"
+                for t in report.trace:
+                    output += f"    {t}\n"
+            
+            return output
+            
+        except (json.JSONDecodeError, Exception) as parse_error:
+            # Fallback: return raw result if parsing fails
+            logger.warning(f"Failed to parse TaskReport: {parse_error}")
+            return result_str
+        
+    except Exception as e:
+        logger.error(f"Task execution failed: {str(e)}")
+        raise
+

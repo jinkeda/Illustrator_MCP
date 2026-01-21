@@ -10,6 +10,9 @@ Core tools:
 - Document operations: create, open, save, close, export
 - Context: get_document_info, get_document_structure, get_selection_info
 - Utilities: undo, redo
+
+Task Protocol tools (v2.1):
+- query: Declarative item queries with structured reports
 """
 
 # Core tool - the primary way to interact with Illustrator
@@ -20,6 +23,9 @@ from illustrator_mcp.tools import documents
 
 # Context tools (NEW - for document structure)
 from illustrator_mcp.tools import context
+
+# Task Protocol tools (pilot refactor)
+from illustrator_mcp.tools import query
 
 # The following modules are DISABLED - use execute_script instead:
 # from illustrator_mcp.tools import artboards
@@ -42,4 +48,6 @@ __all__ = [
     "execute",
     "documents",
     "context",
+    "query",
 ]
+

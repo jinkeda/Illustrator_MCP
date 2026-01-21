@@ -14,12 +14,25 @@ Architecture (simplified):
 import asyncio
 import json
 import logging
+import time
+import uuid
 from typing import Any, Optional
 
 from illustrator_mcp.config import config
 
 # Configure logging
 logger = logging.getLogger(__name__)
+
+
+# ==================== Request ID Generation ====================
+
+def generate_request_id() -> str:
+    """Generate a unique request ID for tracing.
+    
+    Format: req_<8-char-hex>
+    Example: req_a1b2c3d4
+    """
+    return f"req_{uuid.uuid4().hex[:8]}"
 
 
 # Lazy import to avoid circular dependencies
@@ -125,7 +138,8 @@ async def execute_script_with_context(
     script: str,
     command_type: str,
     tool_name: str = None,
-    params: dict = None
+    params: dict = None,
+    request_id: str = None
 ) -> dict[str, Any]:
     """
     Execute a JavaScript script with command context for hybrid protocol.
@@ -142,19 +156,28 @@ async def execute_script_with_context(
         command_type: Type of command (e.g., "draw_rectangle", "create_layer")
         tool_name: Name of the MCP tool (e.g., "illustrator_draw_rectangle")
         params: Parameters passed to the tool (for debugging, not execution)
+        request_id: Optional request ID for tracing (auto-generated if not provided)
 
     Returns:
         Dictionary with 'result' or 'error' key
     """
+    # Generate request_id if not provided
+    req_id = request_id or generate_request_id()
+    
     bridge = _get_bridge()
 
     if not bridge.is_connected():
+        logger.warning(f"[{req_id}] {command_type}: DISCONNECTED")
         return {
             "error": f"ILLUSTRATOR_DISCONNECTED [{command_type}]: CEP panel is not connected. "
                      "Please open Illustrator and ensure the MCP Control panel shows 'Connected'. "
-                     f"(WebSocket server running on port {config.WS_PORT})"
+                     f"(WebSocket server running on port {config.WS_PORT})",
+            "request_id": req_id
         }
 
+    start_time = time.time()
+    logger.info(f"[{req_id}] {command_type}: starting")
+    
     try:
         # Use run_in_executor to call the bridge's SYNC method which properly
         # coordinates with the bridge's event loop via run_coroutine_threadsafe
@@ -169,11 +192,29 @@ async def execute_script_with_context(
                 params=params
             )
         )
+        
+        elapsed_ms = (time.time() - start_time) * 1000
+        
+        # Log success with timing
+        if result.get("error"):
+            logger.warning(f"[{req_id}] {command_type}: error in {elapsed_ms:.0f}ms")
+        else:
+            logger.info(f"[{req_id}] {command_type}: completed in {elapsed_ms:.0f}ms")
+        
+        # Add request_id to result for tracing
+        result["request_id"] = req_id
+        result["elapsed_ms"] = elapsed_ms
+        
         return result
 
     except Exception as e:
-        logger.error(f"[{command_type}] Unexpected error: {e}")
-        return {"error": f"UNEXPECTED_ERROR [{command_type}]: {str(e)}"}
+        elapsed_ms = (time.time() - start_time) * 1000
+        logger.error(f"[{req_id}] {command_type}: exception in {elapsed_ms:.0f}ms - {e}")
+        return {
+            "error": f"UNEXPECTED_ERROR [{command_type}]: {str(e)}",
+            "request_id": req_id,
+            "elapsed_ms": elapsed_ms
+        }
 
 
 def format_response(response: dict[str, Any]) -> str:

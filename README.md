@@ -104,7 +104,32 @@ resources/scripts/
 
 Scripts can request libraries via `inject_libraries(script, includes=["geometry"])`.
 
-### 4. Context Before Creation
+### 5. Task Protocol Architecture (v2.2)
+
+For complex, multi-item operations, use the **Task Protocol** for structured execution:
+
+```javascript
+// Task execution with collect → compute → apply stages
+var payload = {
+    task: 'apply_fill',
+    targets: {type: 'selection'},  // Declarative targeting
+    params: {color: [255, 0, 0]},
+    options: {trace: true}
+};
+
+var report = executeTask(payload, collectTargets, compute, apply);
+// Returns: {ok: true, stats: {...}, timing: {...}, errors: [], warnings: []}
+```
+
+| Feature | Description |
+|---------|-------------|
+| **Declarative Targets** | `{type: 'selection'}`, `{type: 'layer', layer: 'Layer 1'}`, `{type: 'all'}` |
+| **Structured Reports** | Timing breakdown, item stats, error localization |
+| **Stable References** | `ItemRef` with layerPath, indexPath, itemId |
+| **Trace Mode** | Step-by-step execution logging |
+| **Retry Mechanism** | `executeTaskWithRetry()` for fault tolerance |
+
+### 6. Context Before Creation
 
 AI should always inspect document state before writing modification scripts:
 
@@ -114,7 +139,7 @@ AI should always inspect document state before writing modification scripts:
 3. execute_script          →  Modify with confidence
 ```
 
-### 5. Fail Fast with Clear Errors
+### 7. Fail Fast with Clear Errors
 
 | Error Type | Handling |
 |------------|----------|
@@ -615,6 +640,22 @@ The Node.js `proxy-server` folder is kept for reference but is no longer used.
 ---
 
 ## Changelog
+
+### v2.2.0 (2026-01-21) - TASK PROTOCOL ARCHITECTURE
+- **Added:** Task Protocol for structured, observable task execution
+- **Added:** `task_executor.jsx` (~650 lines) with:
+  - `executeTask()` - Collect → Compute → Apply execution framework
+  - `collectTargets()` - Declarative target selection
+  - `describeItem()` - Stable ItemRef generation
+  - `safeExecute()` - Error-catching wrapper with itemRef
+  - `executeTaskWithRetry()` - Auto-retry with failure detection
+  - `recordTaskHistory()` / `getTaskHistory()` - In-session backtracking
+  - `profile()` / `formatTiming()` - Performance analysis
+- **Added:** `protocol.py` with Pydantic models (TaskPayload, TaskReport, ItemRef)
+- **Added:** `illustrator_execute_task` tool for structured task execution
+- **Added:** `illustrator_query_items` pilot tool using Task Protocol
+- **Added:** `request_id` generation and timing in `proxy_client.py`
+- **Added:** Structured logging with timing information
 
 ### v2.1.0 (2026-01-17) - THICK SCRIPTS
 - **Added:** Standard Library Injection support in `illustrator_execute_script`
