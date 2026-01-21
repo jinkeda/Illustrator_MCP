@@ -63,6 +63,33 @@ function makeError(code, message, stage, itemRef, details) {
     };
 }
 
+/**
+ * Validate task payload (v2.3)
+ * @param {Object} payload
+ * @returns {Array<Object>} Array of error objects (empty if valid)
+ */
+function validatePayload(payload) {
+    var errors = [];
+    if (!payload.task) {
+        errors.push(makeError(ErrorCodes.V_MISSING_REQUIRED_PARAM, "Missing task field", "validate"));
+    }
+
+    // Validate version (fail fast on major version mismatch)
+    if (payload.version) {
+        var majorVersion = payload.version.split(".")[0];
+        if (majorVersion !== "2") {
+            errors.push(makeError(
+                ErrorCodes.V_SCHEMA_MISMATCH,
+                "Incompatible protocol version: " + payload.version + " (expected 2.x)",
+                "validate",
+                null,
+                { expected: "2.x", received: payload.version }
+            ));
+        }
+    }
+    return errors;
+}
+
 
 // ==================== Stable Reference System ====================
 
@@ -121,15 +148,18 @@ function getIndexPath(item) {
 
 /**
  * Generate a stable reference for an item (for error localization)
+ * @deprecated Since v2.3. Use describeItemV2() instead. Will be removed in v3.0.
  * @param {PageItem} item
  * @param {Layer} [layer] - Optional layer override
- * @returns {Object} ItemRef object
+ * @returns {Object} ItemRef object (legacy format)
  */
 function describeItem(item, layer) {
     var itemLayer = layer || null;
     try {
         itemLayer = item.layer;
-    } catch (e) { }
+    } catch (e) {
+        // item.layer may fail on some item types (e.g., SymbolItems)
+    }
 
     var layerPath = itemLayer ? getLayerPath(itemLayer) : "";
     var indexPath = getIndexPath(item);
@@ -141,7 +171,9 @@ function describeItem(item, layer) {
             var match = item.note.match(/mcp-id:([a-zA-Z0-9_-]+)/);
             if (match) itemId = match[1];
         }
-    } catch (e) { }
+    } catch (e) {
+        // item.note may not be accessible on all item types
+    }
 
     return {
         layerPath: layerPath,
@@ -154,6 +186,7 @@ function describeItem(item, layer) {
 
 /**
  * Assign a unique ID to an item (write into note)
+ * @deprecated Since v2.3. Use assignItemIdV2() instead. Will be removed in v3.0.
  * Only call when options.assignIds is true
  * @param {PageItem} item
  * @returns {string} The assigned ID
@@ -164,14 +197,18 @@ function assignItemId(item) {
     var existingNote = "";
     try {
         existingNote = item.note || "";
-    } catch (e) { }
+    } catch (e) {
+        // item.note may not be readable on some item types
+    }
 
     // Remove old ID (if any)
     existingNote = existingNote.replace(/mcp-id:[a-zA-Z0-9_-]+\s*/g, "");
 
     try {
         item.note = "mcp-id:" + id + " " + existingNote;
-    } catch (e) { }
+    } catch (e) {
+        // item.note may not be writable on some item types (e.g., locked items)
+    }
 
     return id;
 }
@@ -523,37 +560,62 @@ function queryItems(doc, query) {
  * @param {Object} targets - {type: "selection"} | {type: "layer", layer: "Layer 1"} | etc.
  * @returns {Array<PageItem>}
  */
-function collectTargets(doc, targets) {
-    if (!targets || targets.type === "selection") {
-        // Default: current selection
-        return selectionToArray(doc.selection);
-    }
+/**
+ * Declarative target selection (v2.3)
+ * Supports simple targets, compound targets, filtering, and ordering.
+ * @param {Document} doc
+ * @param {Object} targets - TargetSelector or Target definition
+ * @returns {Array<PageItem>}
+ */
+/**
+ * Declarative target selection (v2.3)
+ * Recursively collects items from targets.
+ * NOTE: Global filtering and ordering are handled in executeTask.
+ * Compound targets handle their own internal exclusion.
+ * @param {Document} doc
+ * @param {Object} target - Target definition (unwrapped)
+ * @returns {Array<PageItem>}
+ */
+function collectTargets(doc, target) {
+    if (!target) target = { type: "selection" };
+    var type = target.type || "selection";
+    var items = [];
 
-    if (targets.type === "all") {
-        // All items (optionally recursive)
-        var allItems = [];
+    // Collection
+    if (type === "selection") {
+        items = selectionToArray(doc.selection);
+    }
+    else if (type === "all") {
         for (var i = 0; i < doc.layers.length; i++) {
-            var layerItems = collectLayerItems(doc.layers[i], targets.recursive || false);
-            allItems = allItems.concat(layerItems);
+            items = items.concat(collectLayerItems(doc.layers[i], target.recursive));
         }
-        return allItems;
     }
-
-    if (targets.type === "layer") {
-        // All items in a given layer
-        var layer = findLayer(doc, targets.layer);
-        if (!layer) {
-            throw new Error("Layer not found: " + targets.layer);
+    else if (type === "layer") {
+        var layerName = target.layer;
+        var layer = findLayer(doc, layerName);
+        if (!layer) throw new Error("Layer not found: " + layerName);
+        items = collectLayerItems(layer, target.recursive);
+    }
+    else if (type === "query") {
+        items = queryItems(doc, target);
+    }
+    else if (type === "compound") {
+        if (target.anyOf) {
+            for (var j = 0; j < target.anyOf.length; j++) {
+                // Recursively collect sub-targets and concatenate
+                items = items.concat(collectTargets(doc, target.anyOf[j]));
+            }
         }
-        return collectLayerItems(layer, targets.recursive || false);
+        // Apply exclusion filter specific to this compound target
+        if (target.exclude) {
+            items = filterItems(items, target.exclude);
+        }
+    }
+    else {
+        throw new Error("Unknown target type: " + type);
     }
 
-    if (targets.type === "query") {
-        // Advanced query: {type: "query", itemType: "PathItem", layer: "Layer 1", pattern: "axis_*"}
-        return queryItems(doc, targets);
-    }
-
-    throw new Error("Unknown target type: " + targets.type);
+    return items;
 }
 
 // ==================== Error Handling ====================
@@ -574,7 +636,9 @@ function safeExecute(fn, item, report, stage) {
             ErrorCodes.R_ITEM_OPERATION_FAILED,
             e.message,
             stage,
-            describeItem(item),
+            e.message,
+            stage,
+            describeItemV2(item, { includeIdentity: true, includeTags: true }),
             { line: e.line || null }
         ));
         report.stats.itemsSkipped++;
@@ -639,6 +703,14 @@ function executeTask(payload, collectFn, computeFn, applyFn) {
         trace: trace
     };
 
+    // === VALIDATE stage ===
+    var validationErrors = validatePayload(payload);
+    if (validationErrors.length > 0) {
+        report.ok = false;
+        report.errors = validationErrors;
+        return report;
+    }
+
     // Check for active document
     var doc = null;
     try {
@@ -662,7 +734,34 @@ function executeTask(payload, collectFn, computeFn, applyFn) {
     var items = [];
     try {
         if (trace) trace.push("[COLLECT] Starting target collection");
-        items = collectFn(doc, payload.targets);
+
+        // Handle both v2.3 TargetSelector and legacy formats
+        var targets = payload.targets;
+        var targetObj = targets;
+        var orderBy = "zOrder";
+        var globalExclude = null;
+
+        if (targets && targets.target) {
+            // V2.3 TargetSelector format
+            targetObj = targets.target;
+            orderBy = targets.orderBy || "zOrder";
+            globalExclude = targets.exclude;
+        } else {
+            // Legacy format support - some might pass exclude/orderBy directly
+            if (targets && targets.exclude) globalExclude = targets.exclude;
+            if (targets && targets.orderBy) orderBy = targets.orderBy;
+        }
+
+        items = collectFn(doc, targetObj);
+
+        // Apply global exclusion
+        if (globalExclude) {
+            items = filterItems(items, globalExclude);
+        }
+
+        // Apply ordering
+        items = sortItems(items, orderBy);
+
         report.stats.itemsProcessed = items.length;
         if (trace) trace.push("[COLLECT] Found " + items.length + " items");
 
@@ -675,8 +774,14 @@ function executeTask(payload, collectFn, computeFn, applyFn) {
         }
 
         // === ASSIGN IDs (opt-in) ===
-        if (options.assignIds && items.length > 0) {
+        if (options.idPolicy && options.idPolicy !== "none") {
             if (trace) trace.push("[COLLECT] Assigning IDs to " + items.length + " items");
+            for (var idx = 0; idx < items.length; idx++) {
+                assignItemIdV2(items[idx], options.idPolicy);
+            }
+        }
+        // Legacy fallback (remove in v3.0)
+        else if (options.assignIds && items.length > 0) {
             for (var idx = 0; idx < items.length; idx++) {
                 assignItemId(items[idx]);
             }

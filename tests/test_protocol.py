@@ -17,31 +17,33 @@ from illustrator_mcp.protocol import (
 
 
 class TestItemRef:
-    """Tests for ItemRef model."""
+    """Tests for ItemRef model (V2.3 format with locator/identity/tags)."""
     
     def test_minimal_item_ref(self):
         """Test minimal valid ItemRef."""
+        from illustrator_mcp.protocol import ItemLocator
         ref = ItemRef(
-            layerPath="Layer 1",
+            locator=ItemLocator(layerPath="Layer 1", indexPath=[]),
             itemType="PathItem"
         )
-        assert ref.layerPath == "Layer 1"
+        assert ref.locator.layerPath == "Layer 1"
         assert ref.itemType == "PathItem"
-        assert ref.indexPath == []
-        assert ref.itemId is None
+        assert ref.locator.indexPath == []
+        assert ref.identity.itemId is None
         
     def test_full_item_ref(self):
         """Test ItemRef with all fields."""
+        from illustrator_mcp.protocol import ItemLocator, ItemIdentity, ItemTags, IdSource
         ref = ItemRef(
-            layerPath="Layer 1/Group A",
-            indexPath=[0, 2, 5],
-            itemId="i1234567890_1234",
+            locator=ItemLocator(layerPath="Layer 1/Group A", indexPath=[0, 2, 5]),
+            identity=ItemIdentity(itemId="mcp_1234567890_1234", idSource=IdSource.NOTE),
+            tags=ItemTags(tags={"role": "header"}),
             itemName="my_rectangle",
             itemType="PathItem"
         )
-        assert ref.layerPath == "Layer 1/Group A"
-        assert ref.indexPath == [0, 2, 5]
-        assert ref.itemId == "i1234567890_1234"
+        assert ref.locator.layerPath == "Layer 1/Group A"
+        assert ref.locator.indexPath == [0, 2, 5]
+        assert ref.identity.itemId == "mcp_1234567890_1234"
         assert ref.itemName == "my_rectangle"
 
 
@@ -52,24 +54,25 @@ class TestTaskPayload:
         """Test minimal valid payload."""
         payload = TaskPayload(task="test_task")
         assert payload.task == "test_task"
-        assert payload.version == "2.1.0"
+        assert payload.version == "2.3.0"
         assert payload.targets is None
         assert payload.params == {}
-        assert payload.options is None
+        assert payload.options is not None  # TaskOptions has defaults
     
     def test_full_payload(self):
         """Test payload with all fields."""
+        from illustrator_mcp.protocol import TaskOptions
         payload = TaskPayload(
             task="apply_fill_color",
-            version="2.1.0",
+            version="2.3.0",
             targets={"type": "selection"},
             params={"color": {"r": 255, "g": 0, "b": 0}},
-            options={"dryRun": True, "trace": True}
+            options=TaskOptions(dryRun=True, trace=True)
         )
         assert payload.task == "apply_fill_color"
         assert payload.targets["type"] == "selection"
         assert payload.params["color"]["r"] == 255
-        assert payload.options["dryRun"] is True
+        assert payload.options.dryRun is True
         
     def test_query_targets(self):
         """Test query-type target selector."""
@@ -173,16 +176,20 @@ class TestTaskError:
         
     def test_error_with_item_ref(self):
         """Test error with item reference."""
+        from illustrator_mcp.protocol import ItemLocator
         error = TaskError(
             stage="apply",
             code="ERROR_ITEM_FAILED",
             message="Cannot set fill color",
-            itemRef=ItemRef(layerPath="Layer 1", indexPath=[0, 2], itemType="PathItem"),
-            line=42
+            itemRef=ItemRef(
+                locator=ItemLocator(layerPath="Layer 1", indexPath=[0, 2]),
+                itemType="PathItem"
+            ),
+            details={"line": 42}
         )
         assert error.itemRef is not None
-        assert error.itemRef.layerPath == "Layer 1"
-        assert error.line == 42
+        assert error.itemRef.locator.layerPath == "Layer 1"
+        assert error.details["line"] == 42
 
 
 class TestModelSerialization:

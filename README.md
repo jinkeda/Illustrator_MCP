@@ -692,6 +692,18 @@ The Node.js `proxy-server` folder is kept for reference but is no longer used.
 - **Added:** `PROTOCOL.md` comprehensive protocol reference
 - **Deprecated:** `executeTaskWithRetry()` (use `executeTaskWithRetrySafe()`)
 
+### v2.3.1 (2026-01-21) - V2.3 IMPLEMENTATION FIXES
+- **Fixed:** Compound target selectors now properly implemented in `collectTargets()`
+- **Fixed:** `TargetSelector` wrapper handling now correctly unwraps in `executeTask()`
+- **Fixed:** Global exclusion and ordering applied after target collection
+- **Added:** `validatePayload()` function for version validation (fails fast on major version mismatch)
+- **Updated:** `safeExecute()` now uses `describeItemV2()` for error reporting
+- **Updated:** `executeTask()` uses `assignItemIdV2()` with `idPolicy` option
+- **Deprecated:** `describeItem()` and `assignItemId()` (use V2 variants, removed in v3.0)
+- **Improved:** Added explanatory comments to silent catch blocks for debugging
+- **Tests:** Updated `test_protocol.py` for V2.3 ItemRef structure
+- **Tests:** Added `test_task_protocol_v23.py` for compound selectors, TargetSelector, retry policies
+
 ### v2.1.0 (2026-01-17) - THICK SCRIPTS
 - **Added:** Standard Library Injection support in `illustrator_execute_script`
 - **Added:** `resources/scripts/` directory with core libraries:

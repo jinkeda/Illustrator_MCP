@@ -214,7 +214,13 @@ class ItemRef(BaseModel):
 
 # Legacy ItemRef for backward compatibility
 class ItemRefLegacy(BaseModel):
-    """Legacy item reference (for backward compatibility)."""
+    """
+    Legacy item reference (for backward compatibility).
+    
+    .. deprecated:: 2.3.0
+        Use :class:`ItemRef` with locator/identity/tags structure instead.
+        Will be removed in v3.0.
+    """
     layerPath: str = Field(..., description="Layer path: 'Layer 1/Group A'")
     indexPath: List[int] = Field(default_factory=list, description="Index path: [0, 2, 5]")
     itemId: Optional[str] = Field(None, description="Unique ID written into note")
