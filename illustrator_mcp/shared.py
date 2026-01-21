@@ -50,8 +50,17 @@ async def server_lifespan(server: FastMCP) -> AsyncIterator[Dict[str, Any]]:
             logger.error("✗ WebSocket bridge failed to start!")
             logger.error("  CEP panel will NOT be able to connect.")
         
+        
+        # Dynamic tool count
+        try:
+            tools = await server.list_tools()
+            tool_count = len(tools)
+            msg = f"{tool_count} tools registered"
+        except Exception:
+            msg = "tools registered"
+
         logger.info("")
-        logger.info("MCP server ready (94 tools across 15 categories)")
+        logger.info(f"MCP server ready ({msg})")
         logger.info("=" * 60)
         
         # Yield empty context - bridge is accessed via get_bridge()
@@ -77,3 +86,22 @@ mcp = FastMCP(
     "illustrator_mcp",
     lifespan=server_lifespan
 )
+
+
+def create_connection_error(port: int, context: str = "") -> Dict[str, str]:
+    """
+    Create a standardized connection error response.
+    
+    Args:
+        port: The WebSocket port number.
+        context: Optional context string (e.g., command type).
+        
+    Returns:
+        Dict with error message.
+    """
+    prefix = f" [{context}]" if context else ""
+    return {
+        "error": f"ILLUSTRATOR_DISCONNECTED{prefix}: CEP panel is not connected. "
+                 "Please open Illustrator and ensure the MCP Control panel shows 'Connected'. "
+                 f"(WebSocket server running on port {port})"
+    }

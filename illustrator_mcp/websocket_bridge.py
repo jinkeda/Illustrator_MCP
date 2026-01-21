@@ -20,6 +20,7 @@ import websockets
 from websockets.server import WebSocketServerProtocol
 
 from illustrator_mcp.config import config
+from illustrator_mcp.shared import create_connection_error
 
 logger = logging.getLogger(__name__)
 
@@ -50,6 +51,7 @@ class WebSocketBridge:
         self._thread: Optional[threading.Thread] = None
         self._started = threading.Event()
         self._lock = threading.Lock()
+        self._shutdown_event: Optional[asyncio.Event] = None
 
     async def _handle_client(self, websocket: WebSocketServerProtocol):
         """Handle a connected CEP panel client."""
@@ -103,6 +105,8 @@ class WebSocketBridge:
 
     async def _run_server(self):
         """Run the WebSocket server."""
+        self._shutdown_event = asyncio.Event()
+        
         try:
             # Use localhost instead of 0.0.0.0 for better Windows compatibility
             # CEP panel connects to ws://localhost:8081, so binding to localhost is sufficient
@@ -119,8 +123,17 @@ class WebSocketBridge:
             logger.info(f"="*50)
             self._started.set()
 
-            # Keep server running
-            await asyncio.Future()  # Run forever
+            # Keep server running until shutdown event
+            await self._shutdown_event.wait()
+            
+            # Graceful shutdown
+            logger.info("Shutting down WebSocket bridge...")
+            self.server.close()
+            await self.server.wait_closed()
+            
+            # Close active client if any
+            if self.client:
+                await self.client.close(1000, "Server shutting down")
 
         except OSError as e:
             if "address already in use" in str(e).lower() or e.errno == 10048:
@@ -170,10 +183,14 @@ class WebSocketBridge:
 
     def stop(self):
         """Stop the WebSocket server."""
-        if self.server:
-            self.server.close()
-        if self.loop:
-            self.loop.call_soon_threadsafe(self.loop.stop)
+        if self.loop and self._shutdown_event:
+            # Signal shutdown from thread-safe context
+            self.loop.call_soon_threadsafe(self._shutdown_event.set)
+        
+        if self._thread:
+            self._thread.join(timeout=5.0)
+            if self._thread.is_alive():
+                logger.warning("WebSocket bridge thread did not exit cleanly")
 
     def is_connected(self) -> bool:
         """Check if Illustrator CEP panel is connected."""
@@ -218,10 +235,7 @@ class WebSocketBridge:
             Response dictionary from Illustrator
         """
         if not self.is_connected():
-            return {
-                "error": "ILLUSTRATOR_DISCONNECTED: CEP panel is not connected. "
-                         "Please open Illustrator and ensure the MCP panel shows 'Connected'."
-            }
+            return create_connection_error(self.port)
 
         with self._lock:
             self.request_id += 1
@@ -295,10 +309,7 @@ class WebSocketBridge:
             return {"error": "WebSocket bridge not running"}
 
         if not self.is_connected():
-            return {
-                "error": "ILLUSTRATOR_DISCONNECTED: CEP panel is not connected. "
-                         "Please open Illustrator and ensure the MCP panel shows 'Connected'."
-            }
+            return create_connection_error(self.port)
 
         # Schedule coroutine on the event loop thread
         future = asyncio.run_coroutine_threadsafe(

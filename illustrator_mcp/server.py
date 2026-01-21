@@ -31,13 +31,10 @@ Core tools (~15 total):
 """
 
 import logging
+from illustrator_mcp.log_config import configure_logging
 
-# Configure logging to stderr (required for stdio transport)
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-    handlers=[logging.StreamHandler()]
-)
+# Configure logging
+configure_logging()
 logger = logging.getLogger(__name__)
 
 # Import the shared mcp instance (includes lifespan management)

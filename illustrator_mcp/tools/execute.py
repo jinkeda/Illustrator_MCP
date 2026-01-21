@@ -47,38 +47,56 @@ def inject_libraries(script: str, includes: List[str]) -> str:
     return library_code + "\n\n// === User Script ===\n" + script
 
 
+import threading
+from functools import lru_cache
+
 class LibraryResolver:
     """Manifest-driven library injection with dependency resolution (v2.3)."""
     
     _instance = None
-    _cache: dict = {}
+    _lock = threading.Lock()
     
     def __new__(cls):
-        """Singleton pattern for caching."""
+        """Singleton pattern for caching (thread-safe)."""
         if cls._instance is None:
-            cls._instance = super().__new__(cls)
-            cls._instance._initialized = False
+            with cls._lock:
+                if cls._instance is None:
+                    cls._instance = super().__new__(cls)
+                    cls._instance._initialized = False
         return cls._instance
     
     def __init__(self):
         if self._initialized:
             return
             
-        resources_dir = Path(__file__).parent.parent / "resources" / "scripts"
-        manifest_path = resources_dir / "manifest.json"
-        
-        if not manifest_path.exists():
-            # Fallback to simple mode if no manifest
-            self.manifest = None
-            self.resources_dir = resources_dir
-        else:
-            import json
-            with open(manifest_path, encoding="utf-8") as f:
-                self.manifest = json.load(f)
-            self.resources_dir = resources_dir
-        
-        self._initialized = True
+        with self._lock:
+            if self._initialized:
+                return
+                
+            resources_dir = Path(__file__).parent.parent / "resources" / "scripts"
+            manifest_path = resources_dir / "manifest.json"
+            
+            if not manifest_path.exists():
+                # Fallback to simple mode if no manifest
+                self.manifest = None
+                self.resources_dir = resources_dir
+            else:
+                import json
+                with open(manifest_path, encoding="utf-8") as f:
+                    self.manifest = json.load(f)
+                self.resources_dir = resources_dir
+            
+            self._initialized = True
     
+    @staticmethod
+    @lru_cache(maxsize=32)
+    def _read_library_content(path: Path) -> str:
+        """Thread-safe, cached file reading."""
+        if not path.exists():
+             # We raise here, but caller should catch or we let it propagate
+             raise ValueError(f"Library file not found: {path.name}")
+        return path.read_text(encoding="utf-8")
+
     def resolve(self, includes: List[str]) -> str:
         """
         Resolve libraries with transitive dependencies.
@@ -118,14 +136,15 @@ class LibraryResolver:
                     )
                 all_exports[symbol] = lib_name
             
-            # Load and cache library content
-            if lib_name not in LibraryResolver._cache:
-                lib_path = self.resources_dir / lib["file"]
-                if not lib_path.exists():
-                    raise ValueError(f"Library file not found: {lib['file']}")
-                LibraryResolver._cache[lib_name] = lib_path.read_text(encoding="utf-8")
+            # Load and cache library content via lru_cache
+            lib_path = self.resources_dir / lib["file"]
+            try:
+                content = self._read_library_content(lib_path)
+                resolved.append(content)
+            except ValueError as e:
+                # Re-raise with the context if needed, or just let it bubble
+                raise ValueError(f"Library file not found: {lib['file']}") from e
             
-            resolved.append(LibraryResolver._cache[lib_name])
             seen.add(lib_name)
         
         for lib_name in includes:
@@ -138,12 +157,13 @@ class LibraryResolver:
         library_code = []
         
         for lib_name in includes:
-            if lib_name not in LibraryResolver._cache:
-                lib_path = self.resources_dir / f"{lib_name}.jsx"
-                if not lib_path.exists():
-                    raise ValueError(f"Library not found: {lib_name}.jsx (looked in {self.resources_dir})")
-                LibraryResolver._cache[lib_name] = lib_path.read_text(encoding="utf-8")
-            library_code.append(LibraryResolver._cache[lib_name])
+            lib_path = self.resources_dir / f"{lib_name}.jsx"
+            try:
+                # Reuse the cached reader even for simple resolve
+                content = self._read_library_content(lib_path)
+                library_code.append(content)
+            except ValueError:
+                 raise ValueError(f"Library not found: {lib_name}.jsx (looked in {self.resources_dir})")
         
         return "\n".join(library_code)
 

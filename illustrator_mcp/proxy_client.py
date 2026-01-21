@@ -19,6 +19,7 @@ import uuid
 from typing import Any, Optional
 
 from illustrator_mcp.config import config
+from illustrator_mcp.shared import create_connection_error
 
 # Configure logging
 logger = logging.getLogger(__name__)
@@ -78,11 +79,7 @@ class IllustratorProxy:
         bridge = _get_bridge()
 
         if not bridge.is_connected():
-            return {
-                "error": "ILLUSTRATOR_DISCONNECTED: CEP panel is not connected. "
-                         "Please open Illustrator and ensure the MCP Control panel shows 'Connected'. "
-                         f"(WebSocket server running on port {config.WS_PORT})"
-            }
+            return create_connection_error(config.WS_PORT)
 
         try:
             # Use run_in_executor to call the bridge's SYNC method which properly
@@ -168,12 +165,9 @@ async def execute_script_with_context(
 
     if not bridge.is_connected():
         logger.warning(f"[{req_id}] {command_type}: DISCONNECTED")
-        return {
-            "error": f"ILLUSTRATOR_DISCONNECTED [{command_type}]: CEP panel is not connected. "
-                     "Please open Illustrator and ensure the MCP Control panel shows 'Connected'. "
-                     f"(WebSocket server running on port {config.WS_PORT})",
-            "request_id": req_id
-        }
+        error_response = create_connection_error(config.WS_PORT, command_type)
+        error_response["request_id"] = req_id
+        return error_response
 
     start_time = time.time()
     logger.info(f"[{req_id}] {command_type}: starting")
