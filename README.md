@@ -323,6 +323,9 @@ WS_PORT=8081
 
 # Timeout for script execution (seconds)
 TIMEOUT=30
+
+# Note: Configuration is validated on startup.
+# Ports must be valid integers (1024-65535) and distinct.
 ```
 
 | Setting | Default | Description |
@@ -602,14 +605,17 @@ Illustrator_MCP/
 │   ├── server.py              # Entry point (includes WebSocket bridge)
 │   ├── shared.py              # Shared MCP instance
 │   ├── config.py              # Configuration management
-│   ├── websocket_bridge.py    # Integrated WebSocket server
+│   ├── websocket_bridge.py    # Bridge facade (coordinates server/registry)
 │   ├── proxy_client.py        # Script execution client
+│   ├── bridge/                # WebSocket bridge components
+│   │   ├── server.py          # WebSocket server transport
+│   │   └── request_registry.py # Async request management
 │   └── tools/                 # ~15 tools (Scripting First architecture)
-│       ├── __init__.py        # Module loader (most modules disabled)
+│       ├── __init__.py        # Tool registration
 │       ├── execute.py         # Core script execution (1) - PRIMARY
 │       ├── documents.py       # Document I/O (10)
 │       ├── context.py         # State inspection (4)
-│       └── [disabled]/        # artboards, shapes, paths, etc.
+│       └── archive/           # Archived legacy tools (disabled)
 ├── proxy-server/              # [DEPRECATED] Node.js proxy (no longer needed)
 │   ├── package.json
 │   └── index.js
@@ -751,9 +757,13 @@ The Node.js `proxy-server` folder is kept for reference but is no longer used.
 - **Fixed:** Recursive `collectLayerItems` for deep nested group support
 - **Added:** `exclude.clipped` filter support in `collectTargets`
 - **Refactor:** Unified connection error handling (ILLUSTRATOR_DISCONNECTED) in shared/proxy/bridge
-- **Refactor:** Centralized logging configuration in `log_config.py`
+- **Refactor:** Centralized logging configuration in `log_config.py` with structured JSON support
 - **Refactor:** Thread-safe `LibraryResolver` with locks and `lru_cache`
 - **Refactor:** Deterministic `WebSocketBridge` shutdown using `asyncio.Event`
+- **Refactor:** Decomposed `WebSocketBridge` into `bridge/server.py` and `bridge/request_registry.py`
+- **Refactor:** Configuration via `pydantic-settings` with validation
+- **Refactor:** Explicit tool registration in `tools/__init__.py` (removed side-effect imports)
+- **Cleanup:** Archived 15 disabled legacy tool modules to `tools/archive/`
 - **Improved:** Dynamic tool counting in startup log (replaces hardcoded "94 tools")
 
 ### v2.1.0 (2026-01-17) - THICK SCRIPTS
