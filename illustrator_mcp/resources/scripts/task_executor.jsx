@@ -68,27 +68,7 @@ function makeError(code, message, stage, itemRef, details) {
  * @param {Object} payload
  * @returns {Array<Object>} Array of error objects (empty if valid)
  */
-function validatePayload(payload) {
-    var errors = [];
-    if (!payload.task) {
-        errors.push(makeError(ErrorCodes.V_MISSING_REQUIRED_PARAM, "Missing task field", "validate"));
-    }
 
-    // Validate version (fail fast on major version mismatch)
-    if (payload.version) {
-        var majorVersion = payload.version.split(".")[0];
-        if (majorVersion !== "2") {
-            errors.push(makeError(
-                ErrorCodes.V_SCHEMA_MISMATCH,
-                "Incompatible protocol version: " + payload.version + " (expected 2.x)",
-                "validate",
-                null,
-                { expected: "2.x", received: payload.version }
-            ));
-        }
-    }
-    return errors;
-}
 
 
 // ==================== Stable Reference System ====================
@@ -421,9 +401,32 @@ function sortItems(items, orderBy) {
 // ==================== Item Filtering (v2.3) ====================
 
 /**
+ * Check if an item is inside a clipping mask (is part of a clipped group content).
+ * @param {PageItem} item
+ * @returns {boolean}
+ */
+function isInsideClippingMask(item) {
+    var current = item.parent;
+    while (current) {
+        if (current.typename === "GroupItem" && current.clipped) {
+            return true;
+        }
+        if (current.typename === "Layer" || current.typename === "Document") {
+            break;
+        }
+        try {
+            current = current.parent;
+        } catch (e) {
+            break;
+        }
+    }
+    return false;
+}
+
+/**
  * Filter items based on exclusion criteria.
  * @param {Array<PageItem>} items
- * @param {Object} exclude - {locked: bool, hidden: bool, guides: bool}
+ * @param {Object} exclude - {locked: bool, hidden: bool, guides: bool, clipped: bool}
  * @returns {Array<PageItem>} Filtered items (new array)
  */
 function filterItems(items, exclude) {
@@ -436,6 +439,7 @@ function filterItems(items, exclude) {
         if (exclude.locked && item.locked) continue;
         if (exclude.hidden && !item.visible) continue;
         if (exclude.guides && item.guides) continue;
+        if (exclude.clipped && isInsideClippingMask(item)) continue;
 
         filtered.push(item);
     }
@@ -486,22 +490,34 @@ function findLayer(doc, layerName) {
 }
 
 /**
+ * Recursively collect items from a container (Layer or GroupItem)
+ * @param {Object} container - Object with pageItems (Layer, GroupItem)
+ * @param {boolean} recursive
+ * @returns {Array<PageItem>}
+ */
+function collectContainerItems(container, recursive) {
+    var items = [];
+    if (!container || !container.pageItems) return items;
+
+    for (var i = 0; i < container.pageItems.length; i++) {
+        var item = container.pageItems[i];
+        items.push(item);
+
+        if (recursive && item.typename === "GroupItem") {
+            items = items.concat(collectContainerItems(item, true));
+        }
+    }
+    return items;
+}
+
+/**
  * Collect all items from a layer
  * @param {Layer} layer
  * @param {boolean} [recursive] - Include nested group items
  * @returns {Array<PageItem>}
  */
 function collectLayerItems(layer, recursive) {
-    var items = [];
-    for (var i = 0; i < layer.pageItems.length; i++) {
-        items.push(layer.pageItems[i]);
-
-        if (recursive && layer.pageItems[i].typename === "GroupItem") {
-            var groupItems = pageItemsToArray(layer.pageItems[i].pageItems);
-            items = items.concat(groupItems);
-        }
-    }
-    return items;
+    return collectContainerItems(layer, recursive);
 }
 
 /**
@@ -875,6 +891,11 @@ function executeTask(payload, collectFn, computeFn, applyFn) {
  * @param {Object} payload
  * @returns {Object} {valid: boolean, errors: Array}
  */
+/**
+ * Validate task payload (v2.3)
+ * @param {Object} payload
+ * @returns {Array<Object>} Array of error objects (empty if valid)
+ */
 function validatePayload(payload) {
     var errors = [];
 
@@ -885,6 +906,20 @@ function validatePayload(payload) {
             "Missing or invalid 'task' field",
             "validate"
         ));
+    }
+
+    // Validate version (fail fast on major version mismatch)
+    if (payload.version) {
+        var majorVersion = payload.version.split(".")[0];
+        if (majorVersion !== "2") {
+            errors.push(makeError(
+                ErrorCodes.V_SCHEMA_MISMATCH,
+                "Incompatible protocol version: " + payload.version + " (expected 2.x)",
+                "validate",
+                null,
+                { expected: "2.x", received: payload.version }
+            ));
+        }
     }
 
     // Validate targets if present
@@ -934,10 +969,7 @@ function validatePayload(payload) {
         }
     }
 
-    return {
-        valid: errors.length === 0,
-        errors: errors
-    };
+    return errors;
 }
 
 // ==================== Safe Task Retry Mechanism (v2.3) ====================

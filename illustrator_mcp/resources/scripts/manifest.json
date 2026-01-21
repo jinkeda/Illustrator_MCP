@@ -40,7 +40,7 @@
         },
         "task_executor": {
             "file": "task_executor.jsx",
-            "version": "2.3.0",
+            "version": "2.3.1",
             "dependencies": [],
             "exports": [
                 "ErrorCodes",
@@ -67,7 +67,7 @@
                 "executeTaskWithRetrySafe",
                 "validatePayload",
                 "isRetryable",
-                "recordTaskExecution",
+                "recordTaskHistory",
                 "getTaskHistory",
                 "clearTaskHistory",
                 "profile",

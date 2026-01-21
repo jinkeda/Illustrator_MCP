@@ -70,7 +70,7 @@ class TestTaskPayloadV23:
     """Tests for V2.3 TaskPayload features."""
 
     def test_default_version(self):
-        """Ensure version defaults to 2.3.0."""
+        """Ensure version defaults to 2.3.1."""
         payload = TaskPayload(task="test")
         assert payload.version == "2.3.1"
 
