@@ -744,8 +744,17 @@ The Node.js `proxy-server` folder is kept for reference but is no longer used.
 - **Updated:** `executeTask()` uses `assignItemIdV2()` with `idPolicy` option
 - **Deprecated:** `describeItem()` and `assignItemId()` (use V2 variants, removed in v3.0)
 - **Improved:** Added explanatory comments to silent catch blocks for debugging
-- **Tests:** Updated `test_protocol.py` for V2.3 ItemRef structure
+- **Tests:** Added `test_protocol.py` for V2.3 ItemRef structure
 - **Tests:** Added `test_task_protocol_v23.py` for compound selectors, TargetSelector, retry policies
+- **Fixed:** Consolidated duplicate `validatePayload` in `task_executor.jsx` (hoisting conflict)
+- **Fixed:** `manifest.json` export name typo (`recordTaskExecution` -> `recordTaskHistory`)
+- **Fixed:** Recursive `collectLayerItems` for deep nested group support
+- **Added:** `exclude.clipped` filter support in `collectTargets`
+- **Refactor:** Unified connection error handling (ILLUSTRATOR_DISCONNECTED) in shared/proxy/bridge
+- **Refactor:** Centralized logging configuration in `log_config.py`
+- **Refactor:** Thread-safe `LibraryResolver` with locks and `lru_cache`
+- **Refactor:** Deterministic `WebSocketBridge` shutdown using `asyncio.Event`
+- **Improved:** Dynamic tool counting in startup log (replaces hardcoded "94 tools")
 
 ### v2.1.0 (2026-01-17) - THICK SCRIPTS
 - **Added:** Standard Library Injection support in `illustrator_execute_script`
