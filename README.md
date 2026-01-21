@@ -67,6 +67,46 @@ Previous versions required a separate Node.js proxy server. The new architecture
 - ✅ **More reliable** - No inter-process communication issues
 - ✅ **Easier troubleshooting** - Single point of failure
 
+### Thread Architecture
+
+The MCP server uses a dual-thread architecture to handle async MCP calls and WebSocket communication:
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│ MCP Server Process                                           │
+│                                                              │
+│  ┌──────────────────┐         ┌───────────────────────┐    │
+│  │  Main Thread     │         │  Bridge Thread        │    │
+│  │  (MCP Event Loop)│◀────────▶│  (WebSocket Loop)    │    │
+│  │                  │  Future │                       │    │
+│  │  - Tool calls    │         │  - WebSocket server   │    │
+│  │  - run_in_executor()────────▶run_coroutine_threadsafe()│ │
+│  └──────────────────┘         └───────────────────────┘    │
+└─────────────────────────────────────────────────────────────┘
+                                        │
+                                        │ WebSocket (port 8081)
+                                        ▼
+                                ┌───────────────┐
+                                │  CEP Panel    │
+                                │  (Illustrator)│
+                                └───────────────┘
+```
+
+| Component | Description |
+|-----------|-------------|
+| **Main Thread** | Runs the MCP event loop, handles tool calls from Claude |
+| **Bridge Thread** | Runs WebSocket server, manages CEP panel connection |
+| **Coordination** | Uses `run_in_executor()` + `run_coroutine_threadsafe()` for cross-thread communication |
+
+### Extension Support
+
+| Extension | Directory | Status |
+|-----------|-----------|--------|
+| **CEP Extension** | `cep-extension/` | ✅ Fully supported (primary) |
+| **UXP Plugin** | `uxp-plugin/` | 🚧 Reserved for future use |
+
+> **Note:** The UXP plugin directory exists but is not yet functional. CEP remains the primary extension for Illustrator 2021-2024+.
+
 ---
 
 ## Design Principles & Philosophy

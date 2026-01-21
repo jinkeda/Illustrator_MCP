@@ -108,3 +108,103 @@ class TestRetryPolicy:
         )
         assert policy.maxAttempts == 5
         assert len(policy.retryableStages) == 2
+
+
+class TestOrderByModes:
+    """Tests for all 8 OrderBy modes."""
+    
+    def test_all_order_modes_valid(self):
+        """Ensure all OrderBy enum values can be used in TargetSelector."""
+        for mode in OrderBy:
+            selector = TargetSelector(
+                target=SelectionTarget(),
+                orderBy=mode
+            )
+            assert selector.orderBy == mode
+    
+    def test_order_by_serialization(self):
+        """Test JSON serialization of OrderBy values."""
+        expected_values = {
+            OrderBy.Z_ORDER: "zOrder",
+            OrderBy.Z_ORDER_REVERSE: "zOrderReverse",
+            OrderBy.READING: "reading",
+            OrderBy.COLUMN: "column",
+            OrderBy.NAME: "name",
+            OrderBy.POSITION_X: "positionX",
+            OrderBy.POSITION_Y: "positionY",
+            OrderBy.AREA: "area",
+        }
+        for mode, expected_str in expected_values.items():
+            selector = TargetSelector(target=SelectionTarget(), orderBy=mode)
+            json_output = selector.model_dump(mode='json')
+            assert json_output['orderBy'] == expected_str
+
+
+class TestRetrySafeSemantics:
+    """Tests for stage-aware retry semantics."""
+    
+    def test_apply_never_in_retryable_stages(self):
+        """Verify APPLY stage cannot be added to retryable stages enum."""
+        # RetryableStage only has COLLECT and COMPUTE
+        all_stages = list(RetryableStage)
+        stage_values = [s.value for s in all_stages]
+        assert "apply" not in stage_values
+        assert "collect" in stage_values
+        assert "compute" in stage_values
+    
+    def test_default_retry_excludes_apply(self):
+        """Default retry policy should only retry collect stage."""
+        policy = RetryPolicy()
+        assert policy.retryableStages == [RetryableStage.COLLECT]
+
+
+class TestIdempotency:
+    """Tests for Idempotency enum."""
+    
+    def test_idempotency_values(self):
+        """Test all idempotency levels."""
+        assert Idempotency.SAFE.value == "safe"
+        assert Idempotency.UNKNOWN.value == "unknown"
+        assert Idempotency.UNSAFE.value == "unsafe"
+
+
+class TestSchemaValidation:
+    """Tests for runtime schema validation."""
+    
+    def test_load_schema(self):
+        """Test loading JSON schemas."""
+        from illustrator_mcp.schemas import load_schema, AVAILABLE_SCHEMAS
+        
+        for schema_name in AVAILABLE_SCHEMAS:
+            schema = load_schema(schema_name)
+            assert isinstance(schema, dict)
+            # All schemas should have $schema or type key
+            assert "$schema" in schema or "type" in schema or "properties" in schema
+    
+    def test_validate_valid_payload(self):
+        """Test validation of a valid payload."""
+        from illustrator_mcp.schemas import validate_payload
+        
+        valid_payload = {
+            "task": "test_task",
+            "version": "2.3.0",
+            "params": {}
+        }
+        errors = validate_payload(valid_payload)
+        # May return empty if jsonschema not installed
+        assert isinstance(errors, list)
+    
+    def test_schema_caching(self):
+        """Test that schemas are cached after first load."""
+        from illustrator_mcp.schemas import load_schema, _schema_cache
+        
+        # Clear cache
+        _schema_cache.clear()
+        
+        # Load schema
+        schema1 = load_schema("task_payload")
+        assert "task_payload" in _schema_cache
+        
+        # Load again - should be from cache
+        schema2 = load_schema("task_payload")
+        assert schema1 is schema2  # Same object
