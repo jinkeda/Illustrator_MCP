@@ -12,6 +12,7 @@ Architecture (simplified):
 """
 
 import asyncio
+import asyncio
 import json
 import logging
 import time
@@ -36,20 +37,12 @@ def generate_request_id() -> str:
     return f"req_{uuid.uuid4().hex[:8]}"
 
 
-# Lazy import to avoid circular dependencies
-_bridge = None
-
 
 def _get_bridge():
-    """Get the WebSocket bridge instance, ensuring it's running.
+    """Get the WebSocket bridge instance."""
+    from illustrator_mcp.runtime import get_runtime
+    return get_runtime().get_bridge()
 
-    Uses ensure_bridge_running() to check if the bridge thread is alive
-    and restart it if needed (e.g., if it failed due to port conflict).
-    """
-    global _bridge
-    from illustrator_mcp.websocket_bridge import ensure_bridge_running
-    _bridge = ensure_bridge_running()
-    return _bridge
 
 
 class IllustratorProxy:
@@ -82,18 +75,19 @@ class IllustratorProxy:
             return create_connection_error(config.WS_PORT)
 
         try:
-            # Use run_in_executor to call the bridge's SYNC method which properly
-            # coordinates with the bridge's event loop via run_coroutine_threadsafe
-            loop = asyncio.get_running_loop()
-            result = await loop.run_in_executor(
-                None,  # Use default thread pool
-                lambda: bridge.execute_script(script, timeout=self.timeout)
+            # Direct async call via thread-safe future wrapping
+            # This avoids the double-wrap of run_in_executor -> blocking wait
+            conc_future = asyncio.run_coroutine_threadsafe(
+                bridge.execute_script_async(script, timeout=config.TIMEOUT),
+                bridge.loop
             )
-            return result
-
+            return await asyncio.wrap_future(conc_future)
+            
+        except TimeoutError:
+            return {"error": f"TIMEOUT: Script execution timed out after {config.TIMEOUT}s"}
         except Exception as e:
-            logger.error(f"Unexpected error: {e}")
-            return {"error": f"UNEXPECTED_ERROR: {str(e)}"}
+            logger.error(f"PROXY_ERROR: {e}")
+            return {"error": f"PROXY_ERROR: {str(e)}"}
 
     async def check_connection(self) -> dict[str, Any]:
         """Check if Illustrator is connected."""
@@ -104,16 +98,12 @@ class IllustratorProxy:
         }
 
 
-# Global proxy instance
-_proxy: Optional[IllustratorProxy] = None
-
 
 def get_proxy() -> IllustratorProxy:
     """Get the global proxy instance."""
-    global _proxy
-    if _proxy is None:
-        _proxy = IllustratorProxy()
-    return _proxy
+    from illustrator_mcp.runtime import get_runtime
+    return get_runtime().get_proxy()
+
 
 
 async def execute_script(script: str) -> dict[str, Any]:
@@ -173,33 +163,32 @@ async def execute_script_with_context(
     logger.info(f"[{req_id}] {command_type}: starting")
     
     try:
-        # Use run_in_executor to call the bridge's SYNC method which properly
-        # coordinates with the bridge's event loop via run_coroutine_threadsafe
-        loop = asyncio.get_running_loop()
-        result = await loop.run_in_executor(
-            None,  # Use default thread pool
-            lambda: bridge.execute_script(
+        # Direct async call via thread-safe future wrapping
+        conc_future = asyncio.run_coroutine_threadsafe(
+            bridge.execute_script_async(
                 script=script,
                 timeout=config.TIMEOUT,
                 command_type=command_type,
                 tool_name=tool_name,
                 params=params
-            )
+            ),
+            bridge.loop
         )
+        response = await asyncio.wrap_future(conc_future)
         
-        elapsed_ms = (time.time() - start_time) * 1000
+        duration = time.time() - start_time
         
         # Log success with timing
-        if result.get("error"):
-            logger.warning(f"[{req_id}] {command_type}: error in {elapsed_ms:.0f}ms")
+        if response.get("error"):
+            logger.warning(f"[{req_id}] {command_type}: error in {duration:.3f}s")
         else:
-            logger.info(f"[{req_id}] {command_type}: completed in {elapsed_ms:.0f}ms")
+            logger.info(f"[{req_id}] {command_type}: completed in {duration:.3f}s")
         
-        # Add request_id to result for tracing
-        result["request_id"] = req_id
-        result["elapsed_ms"] = elapsed_ms
+        # Add request_id and elapsed_ms to response for tracing
+        response["request_id"] = req_id
+        response["elapsed_ms"] = duration * 1000 # Convert to milliseconds
         
-        return result
+        return response
 
     except Exception as e:
         elapsed_ms = (time.time() - start_time) * 1000

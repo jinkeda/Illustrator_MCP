@@ -284,63 +284,18 @@ class WebSocketBridge:
             cmd_ctx = f" [{command_type}]" if command_type else ""
             return {"error": f"EXECUTION_ERROR{cmd_ctx}: {str(e)}"}
 
-    def execute_script(
-        self, 
-        script: str, 
-        timeout: float = 30.0,
-        command_type: str = None,
-        tool_name: str = None,
-        params: Dict[str, Any] = None
-    ) -> dict:
-        """
-        Execute a script in Illustrator (sync version for use from other threads).
-
-        Args:
-            script: JavaScript/ExtendScript code to execute
-            timeout: Maximum time to wait for response
-            command_type: Optional command type for logging
-            tool_name: Optional tool name for logging
-            params: Optional parameters dict for debugging
-
-        Returns:
-            Response dictionary from Illustrator
-        """
-        if not self.loop or not self._thread or not self._thread.is_alive():
-            return {"error": "WebSocket bridge not running"}
-
-        if not self.is_connected():
-            return create_connection_error(self.port)
-
-        # Schedule coroutine on the event loop thread
-        future = asyncio.run_coroutine_threadsafe(
-            self.execute_script_async(
-                script, timeout, command_type, tool_name, params
-            ),
-            self.loop
-        )
-
-        try:
-            return future.result(timeout=timeout + 5)  # Extra buffer for scheduling
-        except Exception as e:
-            return {"error": f"BRIDGE_ERROR: {str(e)}"}
 
 
-# Global bridge instance
-_bridge: Optional[WebSocketBridge] = None
 
 
 def get_bridge() -> WebSocketBridge:
     """Get the global WebSocket bridge instance, starting it if needed."""
-    global _bridge
-    if _bridge is None:
-        _bridge = WebSocketBridge()
-        _bridge.start()
-    return _bridge
+    from illustrator_mcp.runtime import get_runtime
+    return get_runtime().get_bridge()
 
 
 def ensure_bridge_running():
     """Ensure the WebSocket bridge is running."""
-    bridge = get_bridge()
-    if not bridge._thread or not bridge._thread.is_alive():
-        bridge.start()
-    return bridge
+    # Logic moved to RuntimeContext
+    return get_bridge()
+

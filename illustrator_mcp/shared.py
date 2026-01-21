@@ -16,8 +16,7 @@ from mcp.server.fastmcp import FastMCP
 logger = logging.getLogger(__name__)
 
 # Global bridge reference for lifespan management
-_bridge_instance = None
-
+# Managed via RuntimeContext now
 
 @asynccontextmanager
 async def server_lifespan(server: FastMCP) -> AsyncIterator[Dict[str, Any]]:
@@ -27,29 +26,26 @@ async def server_lifespan(server: FastMCP) -> AsyncIterator[Dict[str, Any]]:
     This ensures the WebSocket bridge is properly started before
     any tools are called, and cleanly shut down when the server stops.
     """
-    global _bridge_instance
+    from illustrator_mcp.runtime import get_runtime
+    from illustrator_mcp.config import config
     
     logger.info("=" * 60)
     logger.info("Adobe Illustrator MCP Server - LIFESPAN STARTUP")
     logger.info("=" * 60)
     
+    bridge = None
     try:
-        # Import here to avoid circular imports
-        from illustrator_mcp.websocket_bridge import ensure_bridge_running
-        from illustrator_mcp.config import config
-        
-        # Start the WebSocket bridge
+        # Start the WebSocket bridge via runtime
         logger.info("Starting WebSocket bridge...")
-        _bridge_instance = ensure_bridge_running()
+        bridge = get_runtime().get_bridge()
         
         # Verify bridge started successfully
-        if _bridge_instance._thread and _bridge_instance._thread.is_alive():
+        if bridge._thread and bridge._thread.is_alive():
             logger.info(f"✓ WebSocket bridge started on port {config.WS_PORT}")
             logger.info(f"  CEP panel should connect to: ws://localhost:{config.WS_PORT}")
         else:
             logger.error("✗ WebSocket bridge failed to start!")
             logger.error("  CEP panel will NOT be able to connect.")
-        
         
         # Dynamic tool count
         try:
@@ -63,7 +59,7 @@ async def server_lifespan(server: FastMCP) -> AsyncIterator[Dict[str, Any]]:
         logger.info(f"MCP server ready ({msg})")
         logger.info("=" * 60)
         
-        # Yield empty context - bridge is accessed via get_bridge()
+        # Yield empty context - bridge is accessed via get_runtime().get_bridge()
         yield {}
         
     finally:
@@ -72,10 +68,9 @@ async def server_lifespan(server: FastMCP) -> AsyncIterator[Dict[str, Any]]:
         logger.info("Adobe Illustrator MCP Server - LIFESPAN SHUTDOWN")
         logger.info("=" * 60)
         
-        if _bridge_instance:
+        if bridge:
             logger.info("Stopping WebSocket bridge...")
-            _bridge_instance.stop()
-            _bridge_instance = None
+            bridge.stop()
             logger.info("WebSocket bridge stopped")
         
         logger.info("Server shutdown complete")
