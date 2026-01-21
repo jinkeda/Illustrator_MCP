@@ -12,7 +12,6 @@ Architecture (simplified):
 """
 
 import asyncio
-import asyncio
 import json
 import logging
 import time
@@ -56,12 +55,7 @@ class IllustratorProxy:
         Execute a JavaScript/ExtendScript in Illustrator.
 
         This is the core method that all tools use internally.
-        Uses the integrated WebSocket bridge (no separate proxy needed).
-
-        IMPORTANT: The WebSocket bridge runs in a SEPARATE THREAD with its own
-        event loop. We must use run_in_executor to call the bridge's synchronous
-        execute_script method (which internally uses run_coroutine_threadsafe
-        to properly coordinate with the bridge's event loop).
+        Uses the integrated WebSocket bridge via the centralized helper.
 
         Args:
             script: JavaScript code to execute in Illustrator
@@ -69,25 +63,10 @@ class IllustratorProxy:
         Returns:
             Response from Illustrator containing result or error
         """
-        bridge = _get_bridge()
-
-        if not bridge.is_connected():
-            return create_connection_error(config.ws_port)
-
-        try:
-            # Direct async call via thread-safe future wrapping
-            # This avoids the double-wrap of run_in_executor -> blocking wait
-            conc_future = asyncio.run_coroutine_threadsafe(
-                bridge.execute_script_async(script, timeout=config.timeout),
-                bridge.loop
-            )
-            return await asyncio.wrap_future(conc_future)
-            
-        except TimeoutError:
-            return {"error": f"TIMEOUT: Script execution timed out after {config.timeout}s"}
-        except Exception as e:
-            logger.error(f"PROXY_ERROR: {e}")
-            return {"error": f"PROXY_ERROR: {str(e)}"}
+        return await _execute_via_bridge(
+            script=script,
+            timeout=self.timeout
+        )
 
     async def check_connection(self) -> dict[str, Any]:
         """Check if Illustrator is connected."""
@@ -98,12 +77,72 @@ class IllustratorProxy:
         }
 
 
-
 def get_proxy() -> IllustratorProxy:
     """Get the global proxy instance."""
     from illustrator_mcp.runtime import get_runtime
     return get_runtime().get_proxy()
 
+
+async def _execute_via_bridge(
+    script: str,
+    timeout: float,
+    command_type: str = "execute_script",
+    tool_name: str = None,
+    params: dict = None,
+    request_id: str = None
+) -> dict[str, Any]:
+    """
+    Centralized helper to execute scripts via the WebSocket bridge.
+    
+    Handles:
+    - Connection checking
+    - Thread-safe bridging (run_coroutine_threadsafe)
+    - Timeout management
+    - Error handling
+    
+    Args:
+        script: JavaScript code to execute
+        timeout: Execution timeout in seconds
+        command_type: Type of command for logging
+        tool_name: Optional tool name for context
+        params: Optional parameters for context
+        request_id: Optional request ID for tracing
+        
+    Returns:
+        Response dictionary with result/error
+    """
+    bridge = _get_bridge()
+
+    if not bridge.is_connected():
+        # Only log warning if strictly needed, or let caller handle logging?
+        # For simple execute_script, we usually just return error.
+        # For context usage, duplicate logging is avoided by checking caller.
+        return create_connection_error(config.ws_port, command_type)
+
+    try:
+        # Direct async call via thread-safe future wrapping
+        # This avoids the double-wrap of run_in_executor -> blocking wait
+        conc_future = asyncio.run_coroutine_threadsafe(
+            bridge.execute_script_async(
+                script=script,
+                timeout=timeout,
+                command_type=command_type,
+                tool_name=tool_name,
+                params=params,
+                # Pass request_id if supported by bridge, else it's just context here
+                # bridge.execute_script_async signature: 
+                # (script, timeout, command_type, tool_name, params)
+                # It doesn't take request_id explicitly in signature based on previous code usage
+            ),
+            bridge.loop
+        )
+        return await asyncio.wrap_future(conc_future)
+        
+    except TimeoutError:
+        return {"error": f"TIMEOUT: Script execution timed out after {timeout}s"}
+    except Exception as e:
+        logger.error(f"PROXY_ERROR [{command_type}]: {e}")
+        return {"error": f"PROXY_ERROR: {str(e)}"}
 
 
 async def execute_script(script: str) -> dict[str, Any]:
@@ -133,10 +172,8 @@ async def execute_script_with_context(
 
     This provides better logging and debugging by including metadata
     about what operation is being performed.
-
-    IMPORTANT: The WebSocket bridge runs in a SEPARATE THREAD with its own
-    event loop. We must use run_in_executor to call the bridge's synchronous
-    execute_script method.
+    
+    Delegates to _execute_via_bridge for actual execution.
 
     Args:
         script: JavaScript/ExtendScript code to execute
@@ -151,8 +188,10 @@ async def execute_script_with_context(
     # Generate request_id if not provided
     req_id = request_id or generate_request_id()
     
+    # We check connection inside _execute_via_bridge, but we want to log unique warnings here
+    # So we might duplicate the check or let the helper assume connected?
+    # Let's check here for the Logging Aspect
     bridge = _get_bridge()
-
     if not bridge.is_connected():
         logger.warning(f"[{req_id}] {command_type}: DISCONNECTED")
         error_response = create_connection_error(config.ws_port, command_type)
@@ -162,42 +201,30 @@ async def execute_script_with_context(
     start_time = time.time()
     logger.info(f"[{req_id}] {command_type}: starting")
     
-    try:
-        # Direct async call via thread-safe future wrapping
-        conc_future = asyncio.run_coroutine_threadsafe(
-            bridge.execute_script_async(
-                script=script,
-                timeout=config.timeout,
-                command_type=command_type,
-                tool_name=tool_name,
-                params=params
-            ),
-            bridge.loop
-        )
-        response = await asyncio.wrap_future(conc_future)
-        
-        duration = time.time() - start_time
-        
-        # Log success with timing
-        if response.get("error"):
-            logger.warning(f"[{req_id}] {command_type}: error in {duration:.3f}s")
-        else:
-            logger.info(f"[{req_id}] {command_type}: completed in {duration:.3f}s")
-        
-        # Add request_id and elapsed_ms to response for tracing
-        response["request_id"] = req_id
-        response["elapsed_ms"] = duration * 1000 # Convert to milliseconds
-        
-        return response
-
-    except Exception as e:
-        elapsed_ms = (time.time() - start_time) * 1000
-        logger.error(f"[{req_id}] {command_type}: exception in {elapsed_ms:.0f}ms - {e}")
-        return {
-            "error": f"UNEXPECTED_ERROR [{command_type}]: {str(e)}",
-            "request_id": req_id,
-            "elapsed_ms": elapsed_ms
-        }
+    # Execute via centralized helper
+    # We pass config.timeout or custom? usage implies config.timeout usually
+    response = await _execute_via_bridge(
+        script=script,
+        timeout=config.timeout,
+        command_type=command_type,
+        tool_name=tool_name,
+        params=params,
+        request_id=req_id
+    )
+    
+    duration = time.time() - start_time
+    
+    # Log success/error with timing
+    if response.get("error"):
+        logger.warning(f"[{req_id}] {command_type}: error in {duration:.3f}s")
+    else:
+        logger.info(f"[{req_id}] {command_type}: completed in {duration:.3f}s")
+    
+    # Add request_id and elapsed_ms to response for tracing
+    response["request_id"] = req_id
+    response["elapsed_ms"] = duration * 1000 # Convert to milliseconds
+    
+    return response
 
 
 def format_response(response: dict[str, Any]) -> str:
