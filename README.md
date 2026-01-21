@@ -736,7 +736,10 @@ The Node.js `proxy-server` folder is kept for reference but is no longer used.
 - **Fixed:** Compound target selectors now properly implemented in `collectTargets()`
 - **Fixed:** `TargetSelector` wrapper handling now correctly unwraps in `executeTask()`
 - **Fixed:** Global exclusion and ordering applied after target collection
+- **Fixed:** Protocol version string in `protocol.py` updated from 2.3.0 to 2.3.1
 - **Added:** `validatePayload()` function for version validation (fails fast on major version mismatch)
+- **Added:** Thread architecture diagram to README
+- **Added:** Runtime schema validation utilities in `schemas/__init__.py`
 - **Updated:** `safeExecute()` now uses `describeItemV2()` for error reporting
 - **Updated:** `executeTask()` uses `assignItemIdV2()` with `idPolicy` option
 - **Deprecated:** `describeItem()` and `assignItemId()` (use V2 variants, removed in v3.0)

@@ -54,7 +54,7 @@ class TestTaskPayload:
         """Test minimal valid payload."""
         payload = TaskPayload(task="test_task")
         assert payload.task == "test_task"
-        assert payload.version == "2.3.0"
+        assert payload.version == "2.3.1"
         assert payload.targets is None
         assert payload.params == {}
         assert payload.options is not None  # TaskOptions has defaults
@@ -64,7 +64,7 @@ class TestTaskPayload:
         from illustrator_mcp.protocol import TaskOptions
         payload = TaskPayload(
             task="apply_fill_color",
-            version="2.3.0",
+            version="2.3.1",
             targets={"type": "selection"},
             params={"color": {"r": 255, "g": 0, "b": 0}},
             options=TaskOptions(dryRun=True, trace=True)

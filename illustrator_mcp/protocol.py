@@ -347,7 +347,7 @@ class TaskReport(BaseModel):
 class TaskPayload(BaseModel):
     """Standard task payload."""
     task: str = Field(..., description="Task type: draw_shapes, apply_styles, query_items")
-    version: str = Field(default="2.3.0", description="Protocol version")
+    version: str = Field(default="2.3.1", description="Protocol version")
     targets: Optional[Union[TargetSelector, Dict[str, Any]]] = Field(
         default=None,
         description="Target selector (structured or legacy dict)"

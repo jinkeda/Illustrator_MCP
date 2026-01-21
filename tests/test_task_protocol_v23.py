@@ -72,7 +72,7 @@ class TestTaskPayloadV23:
     def test_default_version(self):
         """Ensure version defaults to 2.3.0."""
         payload = TaskPayload(task="test")
-        assert payload.version == "2.3.0"
+        assert payload.version == "2.3.1"
 
     def test_payload_with_selector(self):
         """Test payload with full TargetSelector."""
