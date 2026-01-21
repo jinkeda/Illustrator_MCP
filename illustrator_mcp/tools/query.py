@@ -100,7 +100,7 @@ function compute(items, params, report) {{
     var actions = [];
     for (var i = 0; i < items.length; i++) {{
         var item = items[i];
-        var itemRef = describeItem(item);
+        var itemRef = describeItemV2(item, {{includeIdentity: true, includeTags: true}});
         actions.push({{
             itemRef: itemRef,
             name: item.name || "(unnamed)",
