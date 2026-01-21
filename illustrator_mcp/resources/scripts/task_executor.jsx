@@ -636,8 +636,6 @@ function safeExecute(fn, item, report, stage) {
             ErrorCodes.R_ITEM_OPERATION_FAILED,
             e.message,
             stage,
-            e.message,
-            stage,
             describeItemV2(item, { includeIdentity: true, includeTags: true }),
             { line: e.line || null }
         ));
