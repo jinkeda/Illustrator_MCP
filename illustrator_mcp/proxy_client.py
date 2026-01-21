@@ -49,7 +49,7 @@ class IllustratorProxy:
     """Client for communicating with Illustrator via WebSocket bridge."""
 
     def __init__(self, timeout: Optional[float] = None):
-        self.timeout = timeout or config.TIMEOUT
+        self.timeout = timeout or config.timeout
 
     async def execute_script(self, script: str) -> dict[str, Any]:
         """
@@ -72,19 +72,17 @@ class IllustratorProxy:
         bridge = _get_bridge()
 
         if not bridge.is_connected():
-            return create_connection_error(config.WS_PORT)
+            return create_connection_error(config.ws_port)
 
         try:
             # Direct async call via thread-safe future wrapping
             # This avoids the double-wrap of run_in_executor -> blocking wait
             conc_future = asyncio.run_coroutine_threadsafe(
-                bridge.execute_script_async(script, timeout=config.TIMEOUT),
-                bridge.loop
             )
             return await asyncio.wrap_future(conc_future)
             
         except TimeoutError:
-            return {"error": f"TIMEOUT: Script execution timed out after {config.TIMEOUT}s"}
+            return {"error": f"TIMEOUT: Script execution timed out after {config.timeout}s"}
         except Exception as e:
             logger.error(f"PROXY_ERROR: {e}")
             return {"error": f"PROXY_ERROR: {str(e)}"}
@@ -94,7 +92,7 @@ class IllustratorProxy:
         bridge = _get_bridge()
         return {
             "connected": bridge.is_connected(),
-            "ws_port": config.WS_PORT
+            "ws_port": config.ws_port
         }
 
 
@@ -155,7 +153,7 @@ async def execute_script_with_context(
 
     if not bridge.is_connected():
         logger.warning(f"[{req_id}] {command_type}: DISCONNECTED")
-        error_response = create_connection_error(config.WS_PORT, command_type)
+        error_response = create_connection_error(config.ws_port, command_type)
         error_response["request_id"] = req_id
         return error_response
 
@@ -167,7 +165,7 @@ async def execute_script_with_context(
         conc_future = asyncio.run_coroutine_threadsafe(
             bridge.execute_script_async(
                 script=script,
-                timeout=config.TIMEOUT,
+                timeout=config.timeout,
                 command_type=command_type,
                 tool_name=tool_name,
                 params=params

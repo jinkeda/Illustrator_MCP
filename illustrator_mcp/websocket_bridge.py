@@ -27,7 +27,7 @@ class WebSocketBridge:
     """
 
     def __init__(self, port: int = None):
-        self.port = port or config.WS_PORT
+        self.port = port or config.ws_port
         self.registry = RequestRegistry()
         self.loop: Optional[asyncio.AbstractEventLoop] = None
         self._thread: Optional[threading.Thread] = None
