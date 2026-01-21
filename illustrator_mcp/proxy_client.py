@@ -78,6 +78,8 @@ class IllustratorProxy:
             # Direct async call via thread-safe future wrapping
             # This avoids the double-wrap of run_in_executor -> blocking wait
             conc_future = asyncio.run_coroutine_threadsafe(
+                bridge.execute_script_async(script, timeout=config.timeout),
+                bridge.loop
             )
             return await asyncio.wrap_future(conc_future)
             

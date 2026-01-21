@@ -5,7 +5,7 @@ This module replaces scattered global singletons with a unified RuntimeContext.
 """
 
 import threading
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Optional, TYPE_CHECKING
 
 if TYPE_CHECKING:
@@ -19,6 +19,7 @@ class RuntimeContext:
     """Centralized runtime state management."""
     bridge: Optional['WebSocketBridge'] = None
     proxy: Optional['IllustratorProxy'] = None
+    _lock: threading.Lock = field(default_factory=threading.Lock, init=False, repr=False)
 
     def get_bridge(self) -> 'WebSocketBridge':
 
