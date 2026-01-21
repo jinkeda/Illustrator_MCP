@@ -167,8 +167,5 @@ def get_bridge() -> WebSocketBridge:
     return get_runtime().get_bridge()
 
 
-def ensure_bridge_running():
-    """Ensure the WebSocket bridge is running."""
-    # Logic moved to RuntimeContext
-    return get_bridge()
+
 
