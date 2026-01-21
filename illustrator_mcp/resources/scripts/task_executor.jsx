@@ -9,18 +9,60 @@
  * - Safe execution with error handling
  */
 
-// ==================== Error Codes ====================
+// ==================== Error Codes (v2.3) ====================
+// Categories: V=Validation (fail before execution), R=Runtime, S=System
 
 var ErrorCodes = {
-    NO_DOCUMENT: "ERROR_NO_DOCUMENT",
-    NO_SELECTION: "ERROR_NO_SELECTION",
-    COLLECT_FAILED: "ERROR_COLLECT_FAILED",
-    COMPUTE_FAILED: "ERROR_COMPUTE_FAILED",
-    APPLY_FAILED: "ERROR_APPLY_FAILED",
-    ITEM_FAILED: "ERROR_ITEM_FAILED",
-    INVALID_TARGETS: "ERROR_INVALID_TARGETS",
-    UNKNOWN_TARGET_TYPE: "ERROR_UNKNOWN_TARGET_TYPE"
+    // === VALIDATION (V) - fail before execution ===
+    V_NO_DOCUMENT: "V001",
+    V_NO_SELECTION: "V002",
+    V_INVALID_PAYLOAD: "V003",
+    V_INVALID_TARGETS: "V004",
+    V_UNKNOWN_TARGET_TYPE: "V005",
+    V_MISSING_REQUIRED_PARAM: "V006",
+    V_INVALID_PARAM_TYPE: "V007",
+    V_SCHEMA_MISMATCH: "V008",
+
+    // === RUNTIME (R) - fail during execution ===
+    R_COLLECT_FAILED: "R001",
+    R_COMPUTE_FAILED: "R002",
+    R_APPLY_FAILED: "R003",
+    R_ITEM_OPERATION_FAILED: "R004",
+    R_TIMEOUT: "R005",
+    R_OUT_OF_BOUNDS: "R006",
+
+    // === SYSTEM (S) - Illustrator/environment issues ===
+    S_APP_ERROR: "S001",
+    S_SCRIPT_ERROR: "S002",
+    S_IO_ERROR: "S003",
+    S_MEMORY_ERROR: "S004"
 };
+
+// Error codes that are safe to retry (collect/compute only, NOT apply)
+var RETRYABLE_CODES = [
+    ErrorCodes.R_COLLECT_FAILED,
+    ErrorCodes.R_COMPUTE_FAILED
+];
+
+/**
+ * Create a structured error object
+ * @param {string} code - Error code from ErrorCodes
+ * @param {string} message - Human-readable message
+ * @param {string} stage - 'validate', 'collect', 'compute', 'apply', 'export'
+ * @param {Object} [itemRef] - Optional ItemRef for localization
+ * @param {Object} [details] - Optional additional context
+ * @returns {Object} TaskError object
+ */
+function makeError(code, message, stage, itemRef, details) {
+    return {
+        code: code,
+        message: message,
+        stage: stage,
+        itemRef: itemRef || null,
+        details: details || null
+    };
+}
+
 
 // ==================== Stable Reference System ====================
 
@@ -132,6 +174,235 @@ function assignItemId(item) {
     } catch (e) { }
 
     return id;
+}
+
+// ==================== Tag Parsing (v2.3) ====================
+
+/**
+ * Parse @mcp:key=value tags from a string.
+ * @param {string} str - String to parse (item.name or item.note)
+ * @returns {Object} Parsed tags {key: value}
+ */
+function parseMcpTags(str) {
+    var tags = {};
+    if (!str) return tags;
+
+    // Match @mcp:key=value patterns
+    var regex = /@mcp:([a-zA-Z0-9_]+)=([^\s@]+)/g;
+    var match;
+    // ExtendScript regex.exec loop
+    while ((match = str.match(/@mcp:([a-zA-Z0-9_]+)=([^\s@]+)/)) !== null) {
+        tags[match[1]] = match[2];
+        str = str.replace(match[0], ""); // Remove matched part to find next
+    }
+    return tags;
+}
+
+// ==================== Refactored Item Reference (v2.3) ====================
+
+/**
+ * Generate a complete ItemRef with separated concerns (locator/identity/tags).
+ * @param {PageItem} item
+ * @param {Object} [options] - {includeIdentity: bool, includeTags: bool}
+ * @returns {Object} ItemRef with locator, identity, tags, metadata
+ */
+function describeItemV2(item, options) {
+    options = options || {};
+
+    // === LOCATOR (always computed) ===
+    var itemLayer = null;
+    try { itemLayer = item.layer; } catch (e) { }
+
+    var locator = {
+        layerPath: itemLayer ? getLayerPath(itemLayer) : "",
+        indexPath: getIndexPath(item)
+    };
+
+    // === IDENTITY (opt-in) ===
+    var identity = {
+        itemId: null,
+        idSource: "none"
+    };
+
+    if (options.includeIdentity !== false) {
+        try {
+            if (item.note && item.note.indexOf("mcp-id:") >= 0) {
+                var match = item.note.match(/mcp-id:([a-zA-Z0-9_-]+)/);
+                if (match) {
+                    identity.itemId = match[1];
+                    identity.idSource = "note";
+                }
+            }
+        } catch (e) { }
+    }
+
+    // === TAGS (parsed from name and note) ===
+    var tags = {};
+    if (options.includeTags !== false) {
+        var nameTags = parseMcpTags(item.name || "");
+        var noteTags = parseMcpTags(item.note || "");
+        // Merge (note takes precedence)
+        for (var k in nameTags) tags[k] = nameTags[k];
+        for (var k in noteTags) tags[k] = noteTags[k];
+    }
+
+    return {
+        locator: locator,
+        identity: identity,
+        tags: { tags: tags },
+        itemType: item.typename,
+        itemName: item.name || null
+    };
+}
+
+// ==================== ID Assignment with Conflict Detection (v2.3) ====================
+
+/**
+ * Assign an ID to an item with conflict detection and policy support.
+ * @param {PageItem} item
+ * @param {string} policy - "none", "opt_in", "always", "preserve"
+ * @returns {Object} {assigned: bool, id: string|null, conflict: bool, previousId: string|null}
+ */
+function assignItemIdV2(item, policy) {
+    policy = policy || "none";
+
+    if (policy === "none") {
+        return { assigned: false, id: null, conflict: false, previousId: null };
+    }
+
+    // Check for existing ID
+    var existingId = null;
+    try {
+        if (item.note && item.note.indexOf("mcp-id:") >= 0) {
+            var match = item.note.match(/mcp-id:([a-zA-Z0-9_-]+)/);
+            if (match) existingId = match[1];
+        }
+    } catch (e) { }
+
+    if (policy === "preserve") {
+        return { assigned: false, id: existingId, conflict: false, previousId: existingId };
+    }
+
+    if (existingId && policy === "opt_in") {
+        // Don't overwrite existing ID
+        return { assigned: false, id: existingId, conflict: false, previousId: existingId };
+    }
+
+    // Generate new ID with timestamp and random suffix
+    var newId = "mcp_" + (new Date().getTime()) + "_" + Math.floor(Math.random() * 10000);
+
+    // Conflict detection for "always" policy
+    var conflict = (existingId !== null && policy === "always");
+
+    // Write ID to note
+    var existingNote = "";
+    try { existingNote = item.note || ""; } catch (e) { }
+    existingNote = existingNote.replace(/mcp-id:[a-zA-Z0-9_-]+\s*/g, "");
+
+    try {
+        item.note = "mcp-id:" + newId + " " + existingNote;
+    } catch (e) {
+        return { assigned: false, id: null, conflict: false, error: e.message };
+    }
+
+    return { assigned: true, id: newId, conflict: conflict, previousId: existingId };
+}
+
+// ==================== Item Sorting (v2.3) ====================
+
+/**
+ * Sort items by specified order mode for deterministic results.
+ * @param {Array<PageItem>} items
+ * @param {string} orderBy - "zOrder", "zOrderReverse", "reading", "column", "name", "positionX", "positionY", "area"
+ * @returns {Array<PageItem>} Sorted items (new array)
+ */
+function sortItems(items, orderBy) {
+    if (!items || items.length === 0) return items;
+
+    var sorted = [];
+    for (var i = 0; i < items.length; i++) {
+        sorted.push(items[i]);
+    }
+
+    switch (orderBy) {
+        case "zOrder":
+            // Already in z-order (back to front) from Illustrator
+            break;
+
+        case "zOrderReverse":
+            sorted.reverse();
+            break;
+
+        case "reading":  // Row-major: top-to-bottom, then left-to-right
+            sorted.sort(function (a, b) {
+                var rowThreshold = 10; // Tolerance for "same row"
+                if (Math.abs(a.top - b.top) < rowThreshold) {
+                    return a.left - b.left; // Same row: sort by X
+                }
+                return b.top - a.top; // Different rows: sort by Y (higher top = earlier)
+            });
+            break;
+
+        case "column":  // Column-major: left-to-right, then top-to-bottom
+            sorted.sort(function (a, b) {
+                var colThreshold = 10;
+                if (Math.abs(a.left - b.left) < colThreshold) {
+                    return b.top - a.top; // Same column: sort by Y
+                }
+                return a.left - b.left; // Different columns: sort by X
+            });
+            break;
+
+        case "name":
+            sorted.sort(function (a, b) {
+                var nameA = a.name || "";
+                var nameB = b.name || "";
+                if (nameA < nameB) return -1;
+                if (nameA > nameB) return 1;
+                return 0;
+            });
+            break;
+
+        case "positionX":
+            sorted.sort(function (a, b) { return a.left - b.left; });
+            break;
+
+        case "positionY":
+            sorted.sort(function (a, b) { return b.top - a.top; }); // Higher top = earlier
+            break;
+
+        case "area":
+            sorted.sort(function (a, b) {
+                return (a.width * a.height) - (b.width * b.height);
+            });
+            break;
+    }
+
+    return sorted;
+}
+
+// ==================== Item Filtering (v2.3) ====================
+
+/**
+ * Filter items based on exclusion criteria.
+ * @param {Array<PageItem>} items
+ * @param {Object} exclude - {locked: bool, hidden: bool, guides: bool}
+ * @returns {Array<PageItem>} Filtered items (new array)
+ */
+function filterItems(items, exclude) {
+    if (!exclude) return items;
+
+    var filtered = [];
+    for (var i = 0; i < items.length; i++) {
+        var item = items[i];
+
+        if (exclude.locked && item.locked) continue;
+        if (exclude.hidden && !item.visible) continue;
+        if (exclude.guides && item.guides) continue;
+
+        filtered.push(item);
+    }
+    return filtered;
 }
 
 // ==================== Declarative Target Selection ====================
@@ -299,13 +570,13 @@ function safeExecute(fn, item, report, stage) {
     try {
         return fn(item);
     } catch (e) {
-        report.errors.push({
-            stage: stage,
-            code: ErrorCodes.ITEM_FAILED,
-            message: e.message,
-            itemRef: describeItem(item),
-            line: e.line || null
-        });
+        report.errors.push(makeError(
+            ErrorCodes.R_ITEM_OPERATION_FAILED,
+            e.message,
+            stage,
+            describeItem(item),
+            { line: e.line || null }
+        ));
         report.stats.itemsSkipped++;
         return null;
     }
@@ -376,11 +647,11 @@ function executeTask(payload, collectFn, computeFn, applyFn) {
 
     if (!doc) {
         report.ok = false;
-        report.errors.push({
-            stage: "collect",
-            code: ErrorCodes.NO_DOCUMENT,
-            message: "No active document"
-        });
+        report.errors.push(makeError(
+            ErrorCodes.V_NO_DOCUMENT,
+            "No active document",
+            "collect"
+        ));
         report.timing = { collect_ms: 0, compute_ms: 0, apply_ms: 0, total_ms: 0 };
         return report;
     }
@@ -413,12 +684,13 @@ function executeTask(payload, collectFn, computeFn, applyFn) {
 
     } catch (e) {
         report.ok = false;
-        report.errors.push({
-            stage: "collect",
-            code: ErrorCodes.COLLECT_FAILED,
-            message: e.message,
-            line: e.line || null
-        });
+        report.errors.push(makeError(
+            ErrorCodes.R_COLLECT_FAILED,
+            e.message,
+            "collect",
+            null,
+            { line: e.line || null }
+        ));
         var t1_err = new Date().getTime();
         report.timing = { collect_ms: t1_err - t0, compute_ms: 0, apply_ms: 0, total_ms: t1_err - t0 };
         return report;
@@ -441,12 +713,13 @@ function executeTask(payload, collectFn, computeFn, applyFn) {
         if (trace) trace.push("[COMPUTE] Generated " + actions.length + " actions");
     } catch (e) {
         report.ok = false;
-        report.errors.push({
-            stage: "compute",
-            code: ErrorCodes.COMPUTE_FAILED,
-            message: e.message,
-            line: e.line || null
-        });
+        report.errors.push(makeError(
+            ErrorCodes.R_COMPUTE_FAILED,
+            e.message,
+            "compute",
+            null,
+            { line: e.line || null }
+        ));
         var t2_err = new Date().getTime();
         report.timing.compute_ms = t2_err - t1;
         report.timing.apply_ms = 0;
@@ -475,12 +748,13 @@ function executeTask(payload, collectFn, computeFn, applyFn) {
         if (trace) trace.push("[APPLY] Complete");
     } catch (e) {
         report.ok = false;
-        report.errors.push({
-            stage: "apply",
-            code: ErrorCodes.APPLY_FAILED,
-            message: e.message,
-            line: e.line || null
-        });
+        report.errors.push(makeError(
+            ErrorCodes.R_APPLY_FAILED,
+            e.message,
+            "apply",
+            null,
+            { line: e.line || null }
+        ));
     }
     var t3 = new Date().getTime();
     report.timing.apply_ms = t3 - t2;
@@ -489,63 +763,185 @@ function executeTask(payload, collectFn, computeFn, applyFn) {
     return report;
 }
 
-// ==================== Task Retry Mechanism ====================
+// ==================== Payload Validation (v2.3) ====================
 
 /**
- * Execute task with automatic retry on failure
- * @param {Object} payload - TaskPayload with optional retry settings
+ * Validate payload structure (lightweight, no full JSON Schema).
+ * Use this before executeTask() for fail-fast validation.
+ * 
+ * @param {Object} payload
+ * @returns {Object} {valid: boolean, errors: Array}
+ */
+function validatePayload(payload) {
+    var errors = [];
+
+    // Required field: task
+    if (!payload.task || typeof payload.task !== "string") {
+        errors.push(makeError(
+            ErrorCodes.V_INVALID_PAYLOAD,
+            "Missing or invalid 'task' field",
+            "validate"
+        ));
+    }
+
+    // Validate targets if present
+    if (payload.targets) {
+        var t = payload.targets;
+        // Handle new TargetSelector format
+        var target = t.target || t;
+
+        if (!target.type) {
+            errors.push(makeError(
+                ErrorCodes.V_INVALID_TARGETS,
+                "targets.type is required",
+                "validate"
+            ));
+        } else if (["selection", "layer", "all", "query", "compound"].indexOf(target.type) < 0) {
+            errors.push(makeError(
+                ErrorCodes.V_UNKNOWN_TARGET_TYPE,
+                "Unknown target type: " + target.type,
+                "validate",
+                null,
+                { validTypes: ["selection", "layer", "all", "query", "compound"] }
+            ));
+        } else if (target.type === "layer" && !target.layer) {
+            errors.push(makeError(
+                ErrorCodes.V_MISSING_REQUIRED_PARAM,
+                "targets.layer is required when type='layer'",
+                "validate"
+            ));
+        } else if (target.type === "compound" && (!target.anyOf || target.anyOf.length === 0)) {
+            errors.push(makeError(
+                ErrorCodes.V_MISSING_REQUIRED_PARAM,
+                "targets.anyOf is required when type='compound'",
+                "validate"
+            ));
+        }
+    }
+
+    // Validate options if present
+    if (payload.options) {
+        var opts = payload.options;
+        if (opts.timeout !== undefined && (typeof opts.timeout !== "number" || opts.timeout < 1)) {
+            errors.push(makeError(
+                ErrorCodes.V_INVALID_PARAM_TYPE,
+                "options.timeout must be a positive number",
+                "validate"
+            ));
+        }
+    }
+
+    return {
+        valid: errors.length === 0,
+        errors: errors
+    };
+}
+
+// ==================== Safe Task Retry Mechanism (v2.3) ====================
+
+/**
+ * Check if an error is retryable based on code and stage.
+ * IMPORTANT: Never retry 'apply' stage unless explicitly allowed.
+ * 
+ * @param {Object} error - TaskError object
+ * @param {Array} retryableStages - Allowed stages for retry (default: ["collect"])
+ * @returns {boolean}
+ */
+function isRetryable(error, retryableStages) {
+    retryableStages = retryableStages || ["collect"];
+
+    // Never retry apply stage unless explicitly in the list
+    if (error.stage === "apply" && retryableStages.indexOf("apply") < 0) {
+        return false;
+    }
+
+    // Check if stage is in allowed list
+    if (retryableStages.indexOf(error.stage) < 0) {
+        return false;
+    }
+
+    // Check if error code is retryable
+    return RETRYABLE_CODES.indexOf(error.code) >= 0;
+}
+
+/**
+ * Execute task with SAFE retry (stage-aware).
+ * 
+ * Key safety rules:
+ * - Never auto-retry 'apply' stage (could double-apply changes)
+ * - Only retry 'collect' and 'compute' by default
+ * - Respect idempotency declaration
+ * 
+ * @param {Object} payload - TaskPayload with optional retry config
  * @param {Function} collectFn
  * @param {Function} computeFn
  * @param {Function} applyFn
- * @param {number} [maxRetries] - Maximum retry attempts (default: 3)
- * @returns {Object} TaskReport with retry info
+ * @returns {Object} TaskReport with retryInfo
  */
-function executeTaskWithRetry(payload, collectFn, computeFn, applyFn, maxRetries) {
-    maxRetries = maxRetries || 3;
+function executeTaskWithRetrySafe(payload, collectFn, computeFn, applyFn) {
+    var options = payload.options || {};
+    var retryPolicy = options.retry || { maxAttempts: 1, retryableStages: [] };
+    var maxAttempts = retryPolicy.maxAttempts || 1;
+    var retryableStages = retryPolicy.retryableStages || ["collect"];
+
     var attempts = 0;
+    var retriedStages = [];
     var lastReport = null;
 
-    while (attempts < maxRetries) {
+    while (attempts < maxAttempts) {
         attempts++;
         lastReport = executeTask(payload, collectFn, computeFn, applyFn);
 
         if (lastReport.ok) {
-            lastReport.retryInfo = {
-                attempts: attempts,
-                succeeded: true
-            };
-            return lastReport;
+            break; // Success, no retry needed
         }
 
-        // Check if error is retryable
-        var hasNonRetryable = false;
+        // Check if any error is retryable
+        var canRetry = false;
         for (var i = 0; i < lastReport.errors.length; i++) {
             var err = lastReport.errors[i];
-            // Non-retryable errors
-            if (err.code === ErrorCodes.NO_DOCUMENT ||
-                err.code === ErrorCodes.INVALID_TARGETS) {
-                hasNonRetryable = true;
-                break;
+            if (isRetryable(err, retryableStages)) {
+                canRetry = true;
+                if (retriedStages.indexOf(err.stage) < 0) {
+                    retriedStages.push(err.stage);
+                }
             }
         }
 
-        if (hasNonRetryable) {
-            break; // Don't retry
+        if (!canRetry) {
+            break; // Non-retryable error, stop
         }
 
-        // Brief pause before retry (ExtendScript has no setTimeout, but we track)
+        // Log retry attempt
         if (lastReport.trace) {
-            lastReport.trace.push("[RETRY] Attempt " + attempts + " failed, retrying...");
+            lastReport.trace.push("[RETRY] Attempt " + attempts + " failed, retrying stages: " + retriedStages.join(", "));
         }
     }
 
+    // Add retry info to report
     lastReport.retryInfo = {
         attempts: attempts,
-        succeeded: false,
-        maxRetries: maxRetries
+        succeeded: lastReport.ok,
+        retriedStages: retriedStages,
+        idempotency: options.idempotency || "unknown"
     };
 
     return lastReport;
+}
+
+/**
+ * @deprecated Use executeTaskWithRetrySafe instead.
+ * This function is kept for backward compatibility but will be removed in v3.0.
+ */
+function executeTaskWithRetry(payload, collectFn, computeFn, applyFn, maxRetries) {
+    // Wrap old API to new safe API
+    payload = JSON.parse(JSON.stringify(payload)); // Clone
+    payload.options = payload.options || {};
+    payload.options.retry = {
+        maxAttempts: maxRetries || 3,
+        retryableStages: ["collect", "compute"]
+    };
+    return executeTaskWithRetrySafe(payload, collectFn, computeFn, applyFn);
 }
 
 // ==================== Task History ====================

@@ -1,0 +1,118 @@
+{
+  "$defs": {
+    "IdSource": {
+      "description": "Source of item identity.",
+      "enum": [
+        "none",
+        "note",
+        "name"
+      ],
+      "title": "IdSource",
+      "type": "string"
+    },
+    "ItemIdentity": {
+      "description": "Stable identity (mutates document when assigned).\nUse for operations that need to re-find items across sessions.",
+      "properties": {
+        "itemId": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Unique ID (e.g., 'mcp_1705834200_42')",
+          "title": "Itemid"
+        },
+        "idSource": {
+          "$ref": "#/$defs/IdSource",
+          "default": "none",
+          "description": "Where the ID is stored"
+        }
+      },
+      "title": "ItemIdentity",
+      "type": "object"
+    },
+    "ItemLocator": {
+      "description": "Positional locator (volatile - changes when structure changes).\nUse for one-shot operations where you don't need to re-find the item.",
+      "properties": {
+        "layerPath": {
+          "description": "Layer path: 'Layer 1/Group A'",
+          "title": "Layerpath",
+          "type": "string"
+        },
+        "indexPath": {
+          "description": "Index path: [0, 2, 5]",
+          "items": {
+            "type": "integer"
+          },
+          "title": "Indexpath",
+          "type": "array"
+        }
+      },
+      "required": [
+        "layerPath"
+      ],
+      "title": "ItemLocator",
+      "type": "object"
+    },
+    "ItemTags": {
+      "description": "User-controlled tags (parsed from name or note).\nUse for semantic selection without forcing UUID assignment.\n\nExample: item.name = \"Panel A @mcp:role=header @mcp:order=1\"\nParsed as: {role: \"header\", order: \"1\"}",
+      "properties": {
+        "tags": {
+          "additionalProperties": {
+            "type": "string"
+          },
+          "description": "Parsed @mcp:key=value pairs",
+          "title": "Tags",
+          "type": "object"
+        }
+      },
+      "title": "ItemTags",
+      "type": "object"
+    }
+  },
+  "description": "Complete item reference with separated concerns.\n\n- locator: Volatile positional reference\n- identity: Stable ID (opt-in, mutates document)\n- tags: User-controlled semantic tags\n- metadata: Item type and name for debugging",
+  "properties": {
+    "locator": {
+      "$ref": "#/$defs/ItemLocator",
+      "description": "Positional locator"
+    },
+    "identity": {
+      "$ref": "#/$defs/ItemIdentity",
+      "description": "Stable identity"
+    },
+    "tags": {
+      "$ref": "#/$defs/ItemTags",
+      "description": "User-defined tags"
+    },
+    "itemType": {
+      "description": "PathItem, TextFrame, etc.",
+      "title": "Itemtype",
+      "type": "string"
+    },
+    "itemName": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "item.name value",
+      "title": "Itemname"
+    }
+  },
+  "required": [
+    "locator",
+    "itemType"
+  ],
+  "title": "ItemRef",
+  "type": "object",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://illustrator-mcp.local/schemas/item_ref.json"
+}

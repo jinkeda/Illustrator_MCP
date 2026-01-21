@@ -1,0 +1,53 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://illustrator-mcp.local/schemas/error_codes.json",
+  "title": "Error Codes Reference",
+  "description": "Standardized error codes for Task Protocol v2.3",
+  "type": "string",
+  "enum": [
+    "V001",
+    "V002",
+    "V003",
+    "V004",
+    "V005",
+    "V006",
+    "V007",
+    "V008",
+    "R001",
+    "R002",
+    "R003",
+    "R004",
+    "R005",
+    "R006",
+    "S001",
+    "S002",
+    "S003",
+    "S004"
+  ],
+  "x-categories": {
+    "validation": [
+      "V001",
+      "V002",
+      "V003",
+      "V004",
+      "V005",
+      "V006",
+      "V007",
+      "V008"
+    ],
+    "runtime": [
+      "R001",
+      "R002",
+      "R003",
+      "R004",
+      "R005",
+      "R006"
+    ],
+    "system": [
+      "S001",
+      "S002",
+      "S003",
+      "S004"
+    ]
+  }
+}

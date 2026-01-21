@@ -20,7 +20,13 @@ logger = logging.getLogger("illustrator_mcp")
 
 
 def inject_libraries(script: str, includes: List[str]) -> str:
-    """Prepend standard library code to a script.
+    """Prepend standard library code to a script using manifest-driven resolution.
+    
+    Features (v2.3):
+    - Automatic transitive dependency resolution
+    - Deduplication (each library loaded exactly once)
+    - Symbol collision detection
+    - Library content caching
     
     Args:
         script: The user's ExtendScript code
@@ -30,21 +36,116 @@ def inject_libraries(script: str, includes: List[str]) -> str:
         Combined script with libraries prepended
     
     Raises:
-        ValueError: If a requested library file is not found
+        ValueError: If a requested library file is not found or symbol collision detected
     """
     if not includes:
         return script
+    
+    resolver = LibraryResolver()
+    library_code = resolver.resolve(includes)
+    
+    return library_code + "\n\n// === User Script ===\n" + script
+
+
+class LibraryResolver:
+    """Manifest-driven library injection with dependency resolution (v2.3)."""
+    
+    _instance = None
+    _cache: dict = {}
+    
+    def __new__(cls):
+        """Singleton pattern for caching."""
+        if cls._instance is None:
+            cls._instance = super().__new__(cls)
+            cls._instance._initialized = False
+        return cls._instance
+    
+    def __init__(self):
+        if self._initialized:
+            return
+            
+        resources_dir = Path(__file__).parent.parent / "resources" / "scripts"
+        manifest_path = resources_dir / "manifest.json"
         
-    resources_dir = Path(__file__).parent.parent / "resources" / "scripts"
-    library_code = []
+        if not manifest_path.exists():
+            # Fallback to simple mode if no manifest
+            self.manifest = None
+            self.resources_dir = resources_dir
+        else:
+            import json
+            with open(manifest_path, encoding="utf-8") as f:
+                self.manifest = json.load(f)
+            self.resources_dir = resources_dir
+        
+        self._initialized = True
     
-    for lib_name in includes:
-        lib_path = resources_dir / f"{lib_name}.jsx"
-        if not lib_path.exists():
-            raise ValueError(f"Library not found: {lib_name}.jsx (looked in {resources_dir})")
-        library_code.append(lib_path.read_text(encoding="utf-8"))
+    def resolve(self, includes: List[str]) -> str:
+        """
+        Resolve libraries with transitive dependencies.
+        
+        Returns concatenated script content with:
+        - Automatic dependency resolution
+        - Deduplication  
+        - Symbol collision detection
+        """
+        if not self.manifest:
+            # Fallback: simple concatenation without resolution
+            return self._simple_resolve(includes)
+        
+        resolved: List[str] = []
+        seen: set = set()
+        all_exports: dict = {}  # symbol -> library name
+        
+        def resolve_one(lib_name: str):
+            if lib_name in seen:
+                return
+            
+            if lib_name not in self.manifest["libraries"]:
+                raise ValueError(f"Unknown library: {lib_name}")
+            
+            lib = self.manifest["libraries"][lib_name]
+            
+            # Resolve dependencies first (recursive)
+            for dep in lib.get("dependencies", []):
+                resolve_one(dep)
+            
+            # Check for symbol collisions
+            for symbol in lib.get("exports", []):
+                if symbol in all_exports:
+                    raise ValueError(
+                        f"Symbol collision: '{symbol}' defined in both "
+                        f"'{all_exports[symbol]}' and '{lib_name}'"
+                    )
+                all_exports[symbol] = lib_name
+            
+            # Load and cache library content
+            if lib_name not in LibraryResolver._cache:
+                lib_path = self.resources_dir / lib["file"]
+                if not lib_path.exists():
+                    raise ValueError(f"Library file not found: {lib['file']}")
+                LibraryResolver._cache[lib_name] = lib_path.read_text(encoding="utf-8")
+            
+            resolved.append(LibraryResolver._cache[lib_name])
+            seen.add(lib_name)
+        
+        for lib_name in includes:
+            resolve_one(lib_name)
+        
+        return "\n\n".join(resolved)
     
-    return "\n".join(library_code) + "\n" + script
+    def _simple_resolve(self, includes: List[str]) -> str:
+        """Fallback: simple file concatenation without manifest."""
+        library_code = []
+        
+        for lib_name in includes:
+            if lib_name not in LibraryResolver._cache:
+                lib_path = self.resources_dir / f"{lib_name}.jsx"
+                if not lib_path.exists():
+                    raise ValueError(f"Library not found: {lib_name}.jsx (looked in {self.resources_dir})")
+                LibraryResolver._cache[lib_name] = lib_path.read_text(encoding="utf-8")
+            library_code.append(LibraryResolver._cache[lib_name])
+        
+        return "\n".join(library_code)
 
 
 

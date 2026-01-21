@@ -1,0 +1,441 @@
+{
+  "$defs": {
+    "AllTarget": {
+      "description": "Target: all items in document.",
+      "properties": {
+        "type": {
+          "const": "all",
+          "default": "all",
+          "title": "Type",
+          "type": "string"
+        },
+        "recursive": {
+          "default": false,
+          "title": "Recursive",
+          "type": "boolean"
+        }
+      },
+      "title": "AllTarget",
+      "type": "object"
+    },
+    "CompoundTarget": {
+      "description": "Compound target selector with boolean logic.\n\nExamples:\n    # Union of multiple sources\n    {\"type\": \"compound\", \"anyOf\": [{\"type\": \"layer\", \"layer\": \"Panels\"}, {\"type\": \"selection\"}]}\n    \n    # With exclusions\n    {\"type\": \"compound\", \"anyOf\": [...], \"exclude\": {\"locked\": true, \"hidden\": true}}",
+      "properties": {
+        "type": {
+          "const": "compound",
+          "default": "compound",
+          "title": "Type",
+          "type": "string"
+        },
+        "anyOf": {
+          "description": "Union of targets",
+          "items": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/SelectionTarget"
+              },
+              {
+                "$ref": "#/$defs/LayerTarget"
+              },
+              {
+                "$ref": "#/$defs/AllTarget"
+              },
+              {
+                "$ref": "#/$defs/QueryTarget"
+              }
+            ]
+          },
+          "minItems": 1,
+          "title": "Anyof",
+          "type": "array"
+        },
+        "exclude": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ExcludeFilter"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Exclusion filter"
+        }
+      },
+      "required": [
+        "anyOf"
+      ],
+      "title": "CompoundTarget",
+      "type": "object"
+    },
+    "ExcludeFilter": {
+      "description": "Filter to exclude items from results.",
+      "properties": {
+        "locked": {
+          "default": false,
+          "description": "Exclude locked items",
+          "title": "Locked",
+          "type": "boolean"
+        },
+        "hidden": {
+          "default": false,
+          "description": "Exclude hidden items",
+          "title": "Hidden",
+          "type": "boolean"
+        },
+        "guides": {
+          "default": false,
+          "description": "Exclude guides",
+          "title": "Guides",
+          "type": "boolean"
+        },
+        "clipped": {
+          "default": false,
+          "description": "Exclude items inside clipping masks",
+          "title": "Clipped",
+          "type": "boolean"
+        }
+      },
+      "title": "ExcludeFilter",
+      "type": "object"
+    },
+    "IdPolicy": {
+      "description": "Policy for assigning identities.",
+      "enum": [
+        "none",
+        "opt_in",
+        "always",
+        "preserve"
+      ],
+      "title": "IdPolicy",
+      "type": "string"
+    },
+    "Idempotency": {
+      "description": "Idempotency classification for operations.",
+      "enum": [
+        "safe",
+        "unknown",
+        "unsafe"
+      ],
+      "title": "Idempotency",
+      "type": "string"
+    },
+    "LayerTarget": {
+      "description": "Target: all items on a layer.",
+      "properties": {
+        "type": {
+          "const": "layer",
+          "default": "layer",
+          "title": "Type",
+          "type": "string"
+        },
+        "layer": {
+          "description": "Layer name",
+          "minLength": 1,
+          "title": "Layer",
+          "type": "string"
+        },
+        "recursive": {
+          "default": false,
+          "title": "Recursive",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "layer"
+      ],
+      "title": "LayerTarget",
+      "type": "object"
+    },
+    "OrderBy": {
+      "description": "Deterministic ordering modes for target results.",
+      "enum": [
+        "zOrder",
+        "zOrderReverse",
+        "reading",
+        "column",
+        "name",
+        "positionX",
+        "positionY",
+        "area"
+      ],
+      "title": "OrderBy",
+      "type": "string"
+    },
+    "QueryTarget": {
+      "description": "Target: items matching query filters.",
+      "properties": {
+        "type": {
+          "const": "query",
+          "default": "query",
+          "title": "Type",
+          "type": "string"
+        },
+        "itemType": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "PathItem, TextFrame, etc.",
+          "title": "Itemtype"
+        },
+        "pattern": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Name pattern with * wildcard",
+          "title": "Pattern"
+        },
+        "layer": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Layer"
+        },
+        "recursive": {
+          "default": false,
+          "title": "Recursive",
+          "type": "boolean"
+        }
+      },
+      "title": "QueryTarget",
+      "type": "object"
+    },
+    "RetryPolicy": {
+      "description": "Stage-specific retry configuration.",
+      "properties": {
+        "maxAttempts": {
+          "default": 3,
+          "description": "Max retry attempts",
+          "maximum": 5,
+          "minimum": 1,
+          "title": "Maxattempts",
+          "type": "integer"
+        },
+        "retryableStages": {
+          "default": [
+            "collect"
+          ],
+          "description": "Which stages can be retried (default: collect only)",
+          "items": {
+            "$ref": "#/$defs/RetryableStage"
+          },
+          "title": "Retryablestages",
+          "type": "array"
+        },
+        "retryOnCodes": {
+          "default": [
+            "R001",
+            "R002"
+          ],
+          "description": "Error codes that trigger retry",
+          "items": {
+            "type": "string"
+          },
+          "title": "Retryoncodes",
+          "type": "array"
+        },
+        "requireIdempotent": {
+          "default": true,
+          "description": "Only retry if operation is marked idempotent",
+          "title": "Requireidempotent",
+          "type": "boolean"
+        }
+      },
+      "title": "RetryPolicy",
+      "type": "object"
+    },
+    "RetryableStage": {
+      "description": "Stages that can be retried.",
+      "enum": [
+        "collect",
+        "compute"
+      ],
+      "title": "RetryableStage",
+      "type": "string"
+    },
+    "SelectionTarget": {
+      "description": "Target: current selection.",
+      "properties": {
+        "type": {
+          "const": "selection",
+          "default": "selection",
+          "title": "Type",
+          "type": "string"
+        }
+      },
+      "title": "SelectionTarget",
+      "type": "object"
+    },
+    "TargetSelector": {
+      "description": "Complete target selector with ordering.\n\nThe 'target' field can be a simple selector or compound.\nThe 'orderBy' field ensures deterministic result ordering.",
+      "properties": {
+        "target": {
+          "discriminator": {
+            "mapping": {
+              "all": "#/$defs/AllTarget",
+              "compound": "#/$defs/CompoundTarget",
+              "layer": "#/$defs/LayerTarget",
+              "query": "#/$defs/QueryTarget",
+              "selection": "#/$defs/SelectionTarget"
+            },
+            "propertyName": "type"
+          },
+          "oneOf": [
+            {
+              "$ref": "#/$defs/SelectionTarget"
+            },
+            {
+              "$ref": "#/$defs/LayerTarget"
+            },
+            {
+              "$ref": "#/$defs/AllTarget"
+            },
+            {
+              "$ref": "#/$defs/QueryTarget"
+            },
+            {
+              "$ref": "#/$defs/CompoundTarget"
+            }
+          ],
+          "title": "Target"
+        },
+        "orderBy": {
+          "$ref": "#/$defs/OrderBy",
+          "default": "zOrder",
+          "description": "Result ordering (critical for layout reproducibility)"
+        },
+        "exclude": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ExcludeFilter"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Global exclusion filter (applied after target resolution)"
+        }
+      },
+      "required": [
+        "target"
+      ],
+      "title": "TargetSelector",
+      "type": "object"
+    },
+    "TaskOptions": {
+      "description": "Task execution options.",
+      "properties": {
+        "dryRun": {
+          "default": false,
+          "description": "Preview changes without applying",
+          "title": "Dryrun",
+          "type": "boolean"
+        },
+        "trace": {
+          "default": false,
+          "description": "Include execution trace",
+          "title": "Trace",
+          "type": "boolean"
+        },
+        "idPolicy": {
+          "$ref": "#/$defs/IdPolicy",
+          "default": "none",
+          "description": "ID assignment policy"
+        },
+        "timeout": {
+          "default": 30,
+          "description": "Timeout in seconds",
+          "maximum": 300,
+          "minimum": 1,
+          "title": "Timeout",
+          "type": "integer"
+        },
+        "retry": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/RetryPolicy"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Retry policy (null = no retry)"
+        },
+        "idempotency": {
+          "$ref": "#/$defs/Idempotency",
+          "default": "unknown",
+          "description": "Caller-declared idempotency (affects retry behavior)"
+        }
+      },
+      "title": "TaskOptions",
+      "type": "object"
+    }
+  },
+  "description": "Standard task payload.",
+  "properties": {
+    "task": {
+      "description": "Task type: draw_shapes, apply_styles, query_items",
+      "title": "Task",
+      "type": "string"
+    },
+    "version": {
+      "default": "2.3.0",
+      "description": "Protocol version",
+      "title": "Version",
+      "type": "string"
+    },
+    "targets": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/TargetSelector"
+        },
+        {
+          "additionalProperties": true,
+          "type": "object"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "Target selector (structured or legacy dict)",
+      "title": "Targets"
+    },
+    "params": {
+      "additionalProperties": true,
+      "description": "Task parameters",
+      "title": "Params",
+      "type": "object"
+    },
+    "options": {
+      "$ref": "#/$defs/TaskOptions"
+    }
+  },
+  "required": [
+    "task"
+  ],
+  "title": "TaskPayload",
+  "type": "object",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://illustrator-mcp.local/schemas/task_payload.json"
+}

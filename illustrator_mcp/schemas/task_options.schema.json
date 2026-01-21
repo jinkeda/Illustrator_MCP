@@ -1,0 +1,127 @@
+{
+  "$defs": {
+    "IdPolicy": {
+      "description": "Policy for assigning identities.",
+      "enum": [
+        "none",
+        "opt_in",
+        "always",
+        "preserve"
+      ],
+      "title": "IdPolicy",
+      "type": "string"
+    },
+    "Idempotency": {
+      "description": "Idempotency classification for operations.",
+      "enum": [
+        "safe",
+        "unknown",
+        "unsafe"
+      ],
+      "title": "Idempotency",
+      "type": "string"
+    },
+    "RetryPolicy": {
+      "description": "Stage-specific retry configuration.",
+      "properties": {
+        "maxAttempts": {
+          "default": 3,
+          "description": "Max retry attempts",
+          "maximum": 5,
+          "minimum": 1,
+          "title": "Maxattempts",
+          "type": "integer"
+        },
+        "retryableStages": {
+          "default": [
+            "collect"
+          ],
+          "description": "Which stages can be retried (default: collect only)",
+          "items": {
+            "$ref": "#/$defs/RetryableStage"
+          },
+          "title": "Retryablestages",
+          "type": "array"
+        },
+        "retryOnCodes": {
+          "default": [
+            "R001",
+            "R002"
+          ],
+          "description": "Error codes that trigger retry",
+          "items": {
+            "type": "string"
+          },
+          "title": "Retryoncodes",
+          "type": "array"
+        },
+        "requireIdempotent": {
+          "default": true,
+          "description": "Only retry if operation is marked idempotent",
+          "title": "Requireidempotent",
+          "type": "boolean"
+        }
+      },
+      "title": "RetryPolicy",
+      "type": "object"
+    },
+    "RetryableStage": {
+      "description": "Stages that can be retried.",
+      "enum": [
+        "collect",
+        "compute"
+      ],
+      "title": "RetryableStage",
+      "type": "string"
+    }
+  },
+  "description": "Task execution options.",
+  "properties": {
+    "dryRun": {
+      "default": false,
+      "description": "Preview changes without applying",
+      "title": "Dryrun",
+      "type": "boolean"
+    },
+    "trace": {
+      "default": false,
+      "description": "Include execution trace",
+      "title": "Trace",
+      "type": "boolean"
+    },
+    "idPolicy": {
+      "$ref": "#/$defs/IdPolicy",
+      "default": "none",
+      "description": "ID assignment policy"
+    },
+    "timeout": {
+      "default": 30,
+      "description": "Timeout in seconds",
+      "maximum": 300,
+      "minimum": 1,
+      "title": "Timeout",
+      "type": "integer"
+    },
+    "retry": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/RetryPolicy"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "Retry policy (null = no retry)"
+    },
+    "idempotency": {
+      "$ref": "#/$defs/Idempotency",
+      "default": "unknown",
+      "description": "Caller-declared idempotency (affects retry behavior)"
+    }
+  },
+  "title": "TaskOptions",
+  "type": "object",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://illustrator-mcp.local/schemas/task_options.json"
+}

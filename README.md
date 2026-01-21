@@ -25,6 +25,12 @@ An MCP (Model Context Protocol) server that enables AI assistants like Claude to
 
 - **Scripting First Architecture** - Minimal toolset 
 - **~15 Core Tools** - Essential operations; everything else via `illustrator_execute_script`
+- **Task Protocol v2.3** - Structured execution with:
+  - Standardized error codes (V/R/S categories)
+  - Compound target selectors with deterministic ordering
+  - Safe retry semantics (never auto-retries `apply`)
+  - Stable references with locator/identity/tag separation
+- **Manifest-Driven Libraries** - Transitive dependency resolution with collision detection
 - **Simplified Architecture** - Single Python server with integrated WebSocket bridge (no Node.js required!)
 - **Input Validation** - Pydantic models prevent errors before execution
 - **Cross-Platform** - Works on Windows and macOS
@@ -656,6 +662,35 @@ The Node.js `proxy-server` folder is kept for reference but is no longer used.
 - **Added:** `illustrator_query_items` pilot tool using Task Protocol
 - **Added:** `request_id` generation and timing in `proxy_client.py`
 - **Added:** Structured logging with timing information
+
+### v2.3.0 (2026-01-21) - FORMALIZED PROTOCOL
+- **Protocol:** Full Task Protocol v2.3 specification with formal contract
+- **Added:** Standardized error codes with categories:
+  - Validation (V001-V008): Fail before execution
+  - Runtime (R001-R006): Fail during execution (retryable)
+  - System (S001-S004): Environment issues
+- **Added:** `makeError()` helper for structured error creation
+- **Added:** Compound target selectors with `anyOf` and `exclude` filters
+- **Added:** Deterministic ordering via `OrderBy` enum (8 modes: reading, column, zOrder, name, etc.)
+- **Added:** `sortItems()` and `filterItems()` functions in task_executor.jsx
+- **Added:** Stable reference refactoring:
+  - Separated `ItemLocator` (volatile) / `ItemIdentity` (stable) / `ItemTags` (user-controlled)
+  - `parseMcpTags()` for `@mcp:key=value` syntax
+  - `describeItemV2()` with new structure
+  - `assignItemIdV2()` with `IdPolicy` (none/opt_in/always/preserve) and conflict detection
+- **Added:** Safe retry semantics:
+  - `executeTaskWithRetrySafe()` that never auto-retries `apply` stage
+  - `isRetryable()` helper for stage-aware retry decisions
+  - `Idempotency` enum (safe/unknown/unsafe)
+  - `RetryPolicy` and `RetryInfo` models
+- **Added:** Payload validation with `validatePayload()` for fail-fast errors
+- **Added:** JSON Schema generation from Pydantic models (`schemas/` directory)
+- **Added:** Manifest-driven library injection (`manifest.json`):
+  - Transitive dependency resolution
+  - Symbol collision detection
+  - Library content caching
+- **Added:** `PROTOCOL.md` comprehensive protocol reference
+- **Deprecated:** `executeTaskWithRetry()` (use `executeTaskWithRetrySafe()`)
 
 ### v2.1.0 (2026-01-17) - THICK SCRIPTS
 - **Added:** Standard Library Injection support in `illustrator_execute_script`

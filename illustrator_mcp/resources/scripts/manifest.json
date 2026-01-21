@@ -1,0 +1,79 @@
+{
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "version": "1.0.0",
+    "description": "Library manifest for Illustrator MCP ExtendScript libraries. Enables automatic dependency resolution and symbol collision detection.",
+    "libraries": {
+        "geometry": {
+            "file": "geometry.jsx",
+            "version": "1.0.0",
+            "dependencies": [],
+            "exports": [
+                "mmToPoints",
+                "pointsToMm",
+                "getVisibleBounds",
+                "getVisibleInfo"
+            ],
+            "description": "Geometry and bounds calculations, unit conversions"
+        },
+        "selection": {
+            "file": "selection.jsx",
+            "version": "1.0.0",
+            "dependencies": [
+                "geometry"
+            ],
+            "exports": [
+                "getOrderedSelection"
+            ],
+            "description": "Selection utilities and spatial ordering"
+        },
+        "layout": {
+            "file": "layout.jsx",
+            "version": "1.0.0",
+            "dependencies": [
+                "geometry"
+            ],
+            "exports": [
+                "arrangeInGrid",
+                "batchResize"
+            ],
+            "description": "Grid layout and batch resize operations"
+        },
+        "task_executor": {
+            "file": "task_executor.jsx",
+            "version": "2.3.0",
+            "dependencies": [],
+            "exports": [
+                "ErrorCodes",
+                "RETRYABLE_CODES",
+                "makeError",
+                "getLayerPath",
+                "getIndexPath",
+                "describeItem",
+                "describeItemV2",
+                "assignItemId",
+                "assignItemIdV2",
+                "parseMcpTags",
+                "sortItems",
+                "filterItems",
+                "selectionToArray",
+                "findLayer",
+                "collectLayerItems",
+                "queryItems",
+                "collectTargets",
+                "safeExecute",
+                "buildReport",
+                "executeTask",
+                "executeTaskWithRetry",
+                "executeTaskWithRetrySafe",
+                "validatePayload",
+                "isRetryable",
+                "recordTaskExecution",
+                "getTaskHistory",
+                "clearTaskHistory",
+                "profile",
+                "formatTiming"
+            ],
+            "description": "Task execution framework with error handling, retries, and structured reporting"
+        }
+    }
+}
