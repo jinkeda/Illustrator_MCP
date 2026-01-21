@@ -602,20 +602,27 @@ The MCP server includes an integrated WebSocket server on port 8081. If connecti
 Illustrator_MCP/
 ├── illustrator_mcp/           # Python MCP server
 │   ├── __init__.py
-│   ├── server.py              # Entry point (includes WebSocket bridge)
-│   ├── shared.py              # Shared MCP instance
-│   ├── config.py              # Configuration management
-│   ├── websocket_bridge.py    # Bridge facade (coordinates server/registry)
+│   ├── server.py              # Entry point
+│   ├── runtime.py             # Runtime dependency injection
+│   ├── log_config.py          # Structured logging configuration
+│   ├── protocol.py            # Task Protocol Pydantic models
+│   ├── config.py              # Configuration (Pydantic Settings)
+│   ├── websocket_bridge.py    # Bridge facade
+│   ├── shared.py              # Shared context
 │   ├── proxy_client.py        # Script execution client
 │   ├── bridge/                # WebSocket bridge components
 │   │   ├── server.py          # WebSocket server transport
 │   │   └── request_registry.py # Async request management
-│   └── tools/                 # ~15 tools (Scripting First architecture)
+│   ├── resources/             # Static resources
+│   │   └── scripts/           # ExtendScript libraries & Task Executor
+│   ├── schemas/               # Generated JSON schemas
+│   └── tools/                 # ~15 tools (Scripting First)
 │       ├── __init__.py        # Tool registration
-│       ├── execute.py         # Core script execution (1) - PRIMARY
-│       ├── documents.py       # Document I/O (10)
-│       ├── context.py         # State inspection (4)
-│       └── archive/           # Archived legacy tools (disabled)
+│       ├── execute.py         # Core (execute_script)
+│       ├── documents.py       # Document I/O
+│       ├── context.py         # Inspection
+│       ├── query.py           # Item Query (Task Protocol)
+│       └── archive/           # Archived legacy tools
 ├── proxy-server/              # [DEPRECATED] Node.js proxy (no longer needed)
 │   ├── package.json
 │   └── index.js
