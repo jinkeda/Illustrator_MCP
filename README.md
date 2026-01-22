@@ -700,6 +700,13 @@ The Node.js `proxy-server` folder is kept for reference but is no longer used.
 
 ## Changelog
 
+### v2.3.3 (2026-01-22) - EXTENDED CODE QUALITY
+- **Refactor:** Removed unused config fields (`http_port`, `proxy_host`)
+- **Added:** Timeout constants (`BRIDGE_STARTUP_TIMEOUT`, `BRIDGE_EXECUTION_BUFFER`, `RECONNECT_INTERVAL_MS`)
+- **Added:** `utils.py` with `escape_path_for_jsx()`, `validate_file_path()`, `escape_string_for_jsx()`
+- **Improved:** Specific exception handling (`ConnectionError` catch before generic `Exception`)
+- **Updated:** `websocket_bridge.py` uses named constants instead of magic numbers
+
 ### v2.3.2 (2026-01-22) - CODE QUALITY REFACTORING
 - **Refactor:** Consolidated connection handling with `check_connection_or_error()` in `shared.py`
 - **Refactor:** Added `CommandMetadata` dataclass and `ExecutionResponse` TypedDict for type safety
