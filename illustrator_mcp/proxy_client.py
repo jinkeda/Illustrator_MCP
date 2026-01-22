@@ -23,9 +23,7 @@ from illustrator_mcp.shared import (
     CommandMetadata, 
     ExecutionResponse, 
     check_connection_or_error,
-    create_connection_error
 )
-from illustrator_mcp.errors import IllustratorError
 
 # Configure logging
 logger = logging.getLogger(__name__)

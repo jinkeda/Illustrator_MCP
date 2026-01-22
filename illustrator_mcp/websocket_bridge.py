@@ -164,11 +164,12 @@ class WebSocketBridge:
         if command:
             logger.info(f"[{trace_id or 'no-trace'}] Executing {command.command_type}")
 
-        # Register request
+        # Register request with trace_id for correlation
         request_id, future = self.registry.create_request(
             self.loop, 
             script, 
-            command_info
+            command_info,
+            trace_id
         )
 
         # Build message with trace_id for correlation

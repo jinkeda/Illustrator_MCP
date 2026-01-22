@@ -700,6 +700,12 @@ The Node.js `proxy-server` folder is kept for reference but is no longer used.
 
 ## Changelog
 
+### v2.3.4 (2026-01-22) - ARCHITECTURE CLEANUP
+- **Refactor:** Extracted `LibraryResolver` to dedicated `libraries.py` module (~200 lines from execute.py)
+- **Refactor:** Propagated `trace_id` through `RequestRegistry.create_request()` for better correlation
+- **Removed:** Unused imports (`IllustratorError`, `create_connection_error` in proxy_client, `lru_cache` in execute)
+- **Simplified:** `execute.py` now imports `inject_libraries` from `libraries.py`
+
 ### v2.3.3 (2026-01-22) - EXTENDED CODE QUALITY
 - **Refactor:** Removed unused config fields (`http_port`, `proxy_host`)
 - **Added:** Timeout constants (`BRIDGE_STARTUP_TIMEOUT`, `BRIDGE_EXECUTION_BUFFER`, `RECONNECT_INTERVAL_MS`)

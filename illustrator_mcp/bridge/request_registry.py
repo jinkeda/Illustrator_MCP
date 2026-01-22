@@ -31,14 +31,21 @@ class RequestRegistry:
         self._request_id = 0
         self._lock = threading.Lock()
         
-    def create_request(self, loop: asyncio.AbstractEventLoop, script: str, command: Optional[Dict[str, Any]] = None) -> tuple[int, asyncio.Future]:
+    def create_request(
+        self,
+        loop: asyncio.AbstractEventLoop,
+        script: str,
+        command: Optional[Dict[str, Any]] = None,
+        trace_id: Optional[str] = None
+    ) -> tuple[int, asyncio.Future]:
         """
         Create a new pending request.
         
         Args:
-            loop: The event loop to attach the future to
-            script: The script being executed
-            command: Optional metadata
+            loop: The event loop to attach the future to.
+            script: The script being executed.
+            command: Optional command metadata.
+            trace_id: Optional trace ID for request correlation.
             
         Returns:
             Tuple of (request_id, future)
@@ -52,7 +59,8 @@ class RequestRegistry:
             self._pending[request_id] = PendingRequest(
                 future=future,
                 script=script,
-                command=command
+                command=command,
+                trace_id=trace_id
             )
             
         return request_id, future
