@@ -9,6 +9,35 @@
  * - Safe execution with error handling
  */
 
+// ==================== ES3 Polyfills ====================
+// ExtendScript is based on ES3 and lacks many modern array methods
+
+if (!Array.prototype.indexOf) {
+    Array.prototype.indexOf = function (searchElement, fromIndex) {
+        var k;
+        if (this == null) {
+            throw new TypeError('"this" is null or not defined');
+        }
+        var o = Object(this);
+        var len = o.length >>> 0;
+        if (len === 0) {
+            return -1;
+        }
+        var n = fromIndex | 0;
+        if (n >= len) {
+            return -1;
+        }
+        k = Math.max(n >= 0 ? n : len - Math.abs(n), 0);
+        while (k < len) {
+            if (k in o && o[k] === searchElement) {
+                return k;
+            }
+            k++;
+        }
+        return -1;
+    };
+}
+
 // ==================== Error Codes (v2.3) ====================
 // Categories: V=Validation (fail before execution), R=Runtime, S=System
 

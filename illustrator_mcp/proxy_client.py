@@ -253,6 +253,16 @@ def format_response(response: dict[str, Any]) -> str:
         except json.JSONDecodeError:
             # Not JSON - treat as raw string (common for simple ExtendScript returns)
             logger.debug(f"Result is not JSON, treating as string: {result[:100]}")
+    
+    # Handle double-wrapped result: {success: true, result: "{...}"}
+    # The proxy may wrap the script output in another success envelope
+    if isinstance(result, dict) and result.get("success") and "result" in result:
+        inner = result.get("result")
+        if isinstance(inner, str):
+            try:
+                result = json.loads(inner)
+            except json.JSONDecodeError:
+                pass  # Keep original result
 
     if isinstance(result, (dict, list)):
         return json.dumps(result, indent=2)

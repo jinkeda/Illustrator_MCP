@@ -17,30 +17,35 @@ from illustrator_mcp.tools.execute import inject_libraries
 class QueryItemsInput(BaseModel):
     """Input for querying items using declarative target selector."""
     model_config = ConfigDict(str_strip_whitespace=True)
-    
+
     target_type: str = Field(
         default="selection",
         description="Target type: 'selection', 'layer', 'all', or 'query'"
     )
-    
+
     layer_name: Optional[str] = Field(
         default=None,
         description="Layer name (required when target_type is 'layer')"
     )
-    
+
     item_type: Optional[str] = Field(
         default=None,
         description="Filter by item type: 'PathItem', 'TextFrame', 'GroupItem', etc."
     )
-    
+
     name_pattern: Optional[str] = Field(
         default=None,
         description="Name pattern to match (supports * wildcard)"
     )
-    
+
     include_trace: bool = Field(
         default=False,
         description="Include execution trace in response"
+    )
+
+    debug: bool = Field(
+        default=False,
+        description="Return raw response for debugging"
     )
 
 
@@ -95,39 +100,67 @@ async def illustrator_query_items(params: QueryItemsInput) -> str:
     payload_json = json.dumps(payload)
     
     script = f"""
-// Compute function - gather item info
-function compute(items, params, report) {{
-    var actions = [];
-    for (var i = 0; i < items.length; i++) {{
-        var item = items[i];
-        var itemRef = describeItemV2(item, {{includeIdentity: true, includeTags: true}});
-        actions.push({{
-            itemRef: itemRef,
-            name: item.name || "(unnamed)",
-            type: item.typename,
-            bounds: {{
-                left: item.left,
-                top: item.top,
-                width: item.width,
-                height: item.height
-            }}
-        }});
-        report.stats.itemsProcessed++;
+// Pre-flight check: verify library functions are available
+var _libraryCheck = {{
+    executeTask: typeof executeTask,
+    validatePayload: typeof validatePayload,
+    collectTargets: typeof collectTargets,
+    describeItemV2: typeof describeItemV2,
+    makeError: typeof makeError
+}};
+
+// If any function is undefined, return diagnostic info
+if (typeof executeTask !== "function" || typeof validatePayload !== "function") {{
+    JSON.stringify({{
+        ok: false,
+        errors: [{{
+            code: "LIB_NOT_LOADED",
+            message: "task_executor.jsx library not properly loaded",
+            stage: "preflight",
+            details: _libraryCheck
+        }}],
+        stats: {{ itemsProcessed: 0 }},
+        timing: {{ total_ms: 0 }}
+    }});
+}} else {{
+    // Compute function - gather item info AND store in artifacts
+    // (store here because apply is skipped in dryRun mode)
+    function compute(items, params, report) {{
+        var actions = [];
+        report.artifacts = report.artifacts || {{}};
+        report.artifacts.items = [];
+        
+        for (var i = 0; i < items.length; i++) {{
+            var item = items[i];
+            var itemRef = describeItemV2(item, {{includeIdentity: true, includeTags: true}});
+            var itemData = {{
+                itemRef: itemRef,
+                name: item.name || "(unnamed)",
+                type: item.typename,
+                bounds: {{
+                    left: item.left,
+                    top: item.top,
+                    width: item.width,
+                    height: item.height
+                }}
+            }};
+            actions.push(itemData);
+            report.artifacts.items.push(itemData);
+            report.stats.itemsProcessed++;
+        }}
+        return actions;
     }}
-    return actions;
-}}
 
-// Apply function - no modifications (query only)
-function apply(actions, report) {{
-    // Store results in artifacts
-    report.artifacts = report.artifacts || {{}};
-    report.artifacts.items = actions;
-}}
+    // Apply function - no-op for query (results already stored in compute)
+    function apply(actions, report) {{
+        // No-op: items stored in compute stage for dryRun compatibility
+    }}
 
-// Execute task
-var payload = {payload_json};
-var report = executeTask(payload, collectTargets, compute, apply);
-JSON.stringify(report);
+    // Execute task
+    var payload = {payload_json};
+    var report = executeTask(payload, collectTargets, compute, apply);
+    JSON.stringify(report);
+}}
 """
     
     # Inject task_executor library
@@ -142,7 +175,17 @@ JSON.stringify(report);
         tool_name="illustrator_query_items",
         params=params.model_dump()
     )
-    
+
+    # Debug mode: return raw response
+    if params.debug:
+        import json as json_module
+        debug_output = {
+            "raw_response": response,
+            "script_length": len(final_script),
+            "script_preview": final_script[:500] + "..." if len(final_script) > 500 else final_script
+        }
+        return json_module.dumps(debug_output, indent=2, default=str)
+
     # Parse and format response
     result_str = format_response(response)
     
@@ -167,6 +210,16 @@ JSON.stringify(report);
                 output += f"    - {item.get('name')} ({item.get('type')}) @ {ref.get('layerPath', '?')}\n"
             if len(items) > 20:
                 output += f"    ... and {len(items) - 20} more\n"
+        
+        # Errors
+        for e in report.get("errors", []):
+            output += f"  ✗ [{e.get('code', '?')}] {e.get('message', 'Unknown error')}\n"
+            if e.get("details"):
+                details = e.get("details")
+                if isinstance(details, dict):
+                    output += f"      Details: {json.dumps(details)}\n"
+                else:
+                    output += f"      Details: {details}\n"
         
         # Warnings
         for w in report.get("warnings", []):
