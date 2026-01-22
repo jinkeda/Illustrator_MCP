@@ -13,7 +13,7 @@ import threading
 from enum import Enum, auto
 from typing import Any, Optional, Dict
 
-from illustrator_mcp.config import config
+from illustrator_mcp.config import config, BRIDGE_STARTUP_TIMEOUT
 from illustrator_mcp.shared import (
     CommandMetadata,
     ExecutionResponse,
@@ -102,8 +102,8 @@ class WebSocketBridge:
         self._thread.start()
 
         # Wait for server to start
-        if not self._started.wait(timeout=10.0):
-            logger.error("WebSocket bridge FAILED to start within 10 seconds!")
+        if not self._started.wait(timeout=BRIDGE_STARTUP_TIMEOUT):
+            logger.error(f"WebSocket bridge FAILED to start within {BRIDGE_STARTUP_TIMEOUT} seconds!")
             self.state = ConnectionState.ERROR
         else:
             logger.info("WebSocket bridge thread started successfully")

@@ -1,8 +1,14 @@
 """
 Configuration management for Illustrator MCP.
 """
-from pydantic import Field, model_validator
+from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+
+# Named constants for timeouts (avoids magic numbers)
+BRIDGE_STARTUP_TIMEOUT: float = 10.0  # seconds to wait for bridge startup
+BRIDGE_EXECUTION_BUFFER: float = 5.0  # extra timeout for thread coordination
+RECONNECT_INTERVAL_MS: int = 3000     # CEP panel reconnect interval
 
 
 class Config(BaseSettings):
@@ -15,24 +21,17 @@ class Config(BaseSettings):
         extra='ignore'
     )
     
-    proxy_host: str = Field(default="localhost", description="Proxy host")
-    http_port: int = Field(default=8080, ge=1024, le=65535, description="HTTP port for MCP server")
+    # WebSocket settings
+    ws_host: str = Field(default="localhost", description="WebSocket host")
     ws_port: int = Field(default=8081, ge=1024, le=65535, description="WebSocket port for bridge")
+    
+    # Timeout settings
     timeout: float = Field(default=30.0, ge=1.0, le=300.0, description="Operation timeout in seconds")
-    
-    @model_validator(mode='after')
-    def ports_must_differ(self) -> 'Config':
-        if self.ws_port == self.http_port:
-            raise ValueError('WS_PORT must differ from HTTP_PORT')
-        return self
-    
-    @property
-    def proxy_url(self) -> str:
-        return f"http://{self.proxy_host}:{self.http_port}"
     
     @property
     def ws_url(self) -> str:
-        return f"ws://{self.proxy_host}:{self.ws_port}"
+        """WebSocket URL for CEP panel connection."""
+        return f"ws://{self.ws_host}:{self.ws_port}"
 
 
 # Global config instance

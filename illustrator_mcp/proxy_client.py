@@ -132,8 +132,11 @@ async def _execute_via_bridge(
         
     except TimeoutError:
         return {"error": f"TIMEOUT: Script execution timed out after {timeout}s"}
+    except ConnectionError as e:
+        logger.warning(f"CONNECTION_ERROR [{context}]: {e}")
+        return {"error": f"CONNECTION_ERROR: {str(e)}"}
     except Exception as e:
-        logger.error(f"PROXY_ERROR [{context}]: {e}")
+        logger.exception(f"PROXY_ERROR [{context}]: Unexpected error")
         return {"error": f"PROXY_ERROR: {str(e)}"}
 
 
