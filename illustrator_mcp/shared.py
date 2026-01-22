@@ -9,14 +9,92 @@ Uses lifespan management for proper WebSocket bridge startup/shutdown.
 
 import logging
 from contextlib import asynccontextmanager
-from typing import AsyncIterator, Dict, Any
+from dataclasses import dataclass, field
+from typing import AsyncIterator, Dict, Any, Optional, TypedDict, Tuple
 
 from mcp.server.fastmcp import FastMCP
 
 logger = logging.getLogger(__name__)
 
-# Global bridge reference for lifespan management
-# Managed via RuntimeContext now
+
+# ==================== Shared Types ====================
+
+@dataclass
+class CommandMetadata:
+    """Metadata for a command execution request."""
+    command_type: str
+    tool_name: Optional[str] = None
+    params: Dict[str, Any] = field(default_factory=dict)
+    trace_id: Optional[str] = None
+    
+    def to_dict(self) -> Dict[str, Any]:
+        """Convert to dictionary for JSON serialization."""
+        return {
+            "type": self.command_type,
+            "tool": self.tool_name or self.command_type,
+            "params": self.params,
+            "trace_id": self.trace_id
+        }
+
+
+class ExecutionResponse(TypedDict, total=False):
+    """Canonical response shape for script execution."""
+    result: Any
+    error: str
+    trace_id: str
+    elapsed_ms: float
+    command: str
+
+
+# ==================== Connection Helpers ====================
+
+def create_connection_error(port: int, context: str = "") -> ExecutionResponse:
+    """
+    Create a standardized connection error response.
+    
+    Args:
+        port: The WebSocket port number.
+        context: Optional context string (e.g., command type).
+        
+    Returns:
+        ExecutionResponse with error message.
+    """
+    prefix = f" [{context}]" if context else ""
+    return {
+        "error": f"ILLUSTRATOR_DISCONNECTED{prefix}: CEP panel is not connected. "
+                 "Please open Illustrator and ensure the MCP Control panel shows 'Connected'. "
+                 f"(WebSocket server running on port {port})"
+    }
+
+
+def check_connection_or_error(
+    port: int,
+    context: str = ""
+) -> Tuple[bool, Optional[ExecutionResponse]]:
+    """
+    Check bridge connection and return error response if disconnected.
+    
+    Centralizes the connection check logic used by both proxy_client
+    and websocket_bridge to avoid duplicate code.
+    
+    Args:
+        port: The WebSocket port number.
+        context: Optional context string for error message.
+        
+    Returns:
+        Tuple of (is_connected, error_response_or_none).
+        If connected: (True, None)
+        If disconnected: (False, ExecutionResponse with error)
+    """
+    from illustrator_mcp.runtime import get_runtime
+    
+    bridge = get_runtime().get_bridge()
+    if bridge.is_connected():
+        return True, None
+    return False, create_connection_error(port, context)
+
+
+# ==================== Server Lifespan ====================
 
 @asynccontextmanager
 async def server_lifespan(server: FastMCP) -> AsyncIterator[Dict[str, Any]]:
@@ -81,22 +159,3 @@ mcp = FastMCP(
     "illustrator_mcp",
     lifespan=server_lifespan
 )
-
-
-def create_connection_error(port: int, context: str = "") -> Dict[str, str]:
-    """
-    Create a standardized connection error response.
-    
-    Args:
-        port: The WebSocket port number.
-        context: Optional context string (e.g., command type).
-        
-    Returns:
-        Dict with error message.
-    """
-    prefix = f" [{context}]" if context else ""
-    return {
-        "error": f"ILLUSTRATOR_DISCONNECTED{prefix}: CEP panel is not connected. "
-                 "Please open Illustrator and ensure the MCP Control panel shows 'Connected'. "
-                 f"(WebSocket server running on port {port})"
-    }

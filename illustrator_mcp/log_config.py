@@ -7,6 +7,7 @@ import sys
 from pathlib import Path
 from typing import Optional
 
+
 def configure_logging(
     level: str = "INFO",
     log_file: Optional[Path] = None,
@@ -47,3 +48,33 @@ def configure_logging(
         handlers=handlers,
         force=True
     )
+
+
+def log_command(
+    logger: logging.Logger,
+    trace_id: str,
+    command_type: str,
+    status: str,
+    duration_ms: Optional[float] = None,
+    level: int = logging.INFO
+) -> None:
+    """
+    Log a command execution event with consistent formatting.
+    
+    This centralizes the logging format for command tracing across
+    proxy_client, websocket_bridge, and other modules.
+    
+    Args:
+        logger: Logger instance to use
+        trace_id: Request trace ID
+        command_type: Type of command being executed
+        status: Current status (starting, completed, error, etc.)
+        duration_ms: Optional duration in milliseconds
+        level: Log level (default INFO)
+    """
+    if duration_ms is not None:
+        message = f"[{trace_id}] {command_type}: {status} ({duration_ms:.1f}ms)"
+    else:
+        message = f"[{trace_id}] {command_type}: {status}"
+    
+    logger.log(level, message)

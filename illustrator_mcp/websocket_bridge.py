@@ -10,14 +10,27 @@ import asyncio
 import json
 import logging
 import threading
+from enum import Enum, auto
 from typing import Any, Optional, Dict
 
 from illustrator_mcp.config import config
-from illustrator_mcp.shared import create_connection_error
+from illustrator_mcp.shared import (
+    CommandMetadata,
+    ExecutionResponse,
+    create_connection_error
+)
 from illustrator_mcp.bridge.server import WebSocketServer
 from illustrator_mcp.bridge.request_registry import RequestRegistry
 
 logger = logging.getLogger(__name__)
+
+
+class ConnectionState(Enum):
+    """WebSocket connection state."""
+    DISCONNECTED = auto()
+    CONNECTING = auto()
+    CONNECTED = auto()
+    ERROR = auto()
 
 
 class WebSocketBridge:
@@ -32,6 +45,8 @@ class WebSocketBridge:
         self.loop: Optional[asyncio.AbstractEventLoop] = None
         self._thread: Optional[threading.Thread] = None
         self._started = threading.Event()
+        self._ready = threading.Event()  # Ready after server is actually listening
+        self.state = ConnectionState.DISCONNECTED
         
         # Initialize server (will be run in loop)
         self.server = WebSocketServer(
@@ -67,6 +82,7 @@ class WebSocketBridge:
             self.loop.run_until_complete(self.server.run(self._started))
         except Exception as e:
             logger.error(f"Server thread error: {e}")
+            self.state = ConnectionState.ERROR
         finally:
             # Cancel any pending requests on shutdown
             self.registry.cancel_all("Bridge shutting down")
@@ -78,18 +94,32 @@ class WebSocketBridge:
             logger.warning("WebSocket bridge already running")
             return
 
+        self.state = ConnectionState.CONNECTING
         logger.info("Starting WebSocket bridge thread...")
         self._started.clear()
+        self._ready.clear()
         self._thread = threading.Thread(target=self._thread_main, daemon=True, name="WebSocketBridge")
         self._thread.start()
 
-        # Wait for server to start with longer timeout
+        # Wait for server to start
         if not self._started.wait(timeout=10.0):
             logger.error("WebSocket bridge FAILED to start within 10 seconds!")
+            self.state = ConnectionState.ERROR
         else:
             logger.info("WebSocket bridge thread started successfully")
-            import time
-            time.sleep(0.1)
+            self.state = ConnectionState.CONNECTED
+            self._ready.set()
+
+    def wait_until_ready(self, timeout: float = 10.0) -> bool:
+        """Wait until the bridge is ready to accept connections.
+        
+        Args:
+            timeout: Maximum time to wait in seconds.
+            
+        Returns:
+            True if ready, False if timeout expired.
+        """
+        return self._ready.wait(timeout=timeout)
 
     def stop(self):
         """Stop the WebSocket server."""
@@ -101,6 +131,8 @@ class WebSocketBridge:
             self._thread.join(timeout=5.0)
             if self._thread.is_alive():
                 logger.warning("WebSocket bridge thread did not exit cleanly")
+        
+        self.state = ConnectionState.DISCONNECTED
 
     def is_connected(self) -> bool:
         """Check if Illustrator CEP panel is connected."""
@@ -110,23 +142,27 @@ class WebSocketBridge:
         self, 
         script: str, 
         timeout: float = 30.0,
-        command_type: str = None,
-        tool_name: str = None,
-        params: Dict[str, Any] = None
-    ) -> dict:
-        """Execute a script in Illustrator (async version)."""
+        command: Optional[CommandMetadata] = None,
+        trace_id: Optional[str] = None
+    ) -> ExecutionResponse:
+        """Execute a script in Illustrator (async version).
+        
+        Args:
+            script: JavaScript code to execute
+            timeout: Execution timeout in seconds
+            command: Optional CommandMetadata for context
+            trace_id: Optional trace ID for request correlation
+            
+        Returns:
+            ExecutionResponse with result or error
+        """
         if not self.is_connected():
             return create_connection_error(self.port)
 
-        # Build command metadata
-        command_info = None
-        if command_type:
-            command_info = {
-                "type": command_type,
-                "tool": tool_name or command_type,
-                "params": params or {}
-            }
-            logger.info(f"[{command_type}] Executing via {tool_name or 'unknown'}")
+        # Build command info for message
+        command_info = command.to_dict() if command else None
+        if command:
+            logger.info(f"[{trace_id or 'no-trace'}] Executing {command.command_type}")
 
         # Register request
         request_id, future = self.registry.create_request(
@@ -135,29 +171,31 @@ class WebSocketBridge:
             command_info
         )
 
-        # Build message
-        message_data = {"id": request_id, "script": script}
+        # Build message with trace_id for correlation
+        message_data: Dict[str, Any] = {"id": request_id, "script": script}
         if command_info:
             message_data["command"] = command_info
+        if trace_id:
+            message_data["trace_id"] = trace_id
         
         message = json.dumps(message_data)
 
         try:
             # Use server transport
             await self.server.send(message)
-            logger.debug(f"Sent request {request_id} to Illustrator")
+            logger.debug(f"Sent request {request_id} (trace: {trace_id}) to Illustrator")
 
             # Wait for future
             return await asyncio.wait_for(future, timeout=timeout)
 
         except asyncio.TimeoutError:
             self.registry.fail_request(request_id, TimeoutError("Timeout"))
-            cmd_ctx = f" [{command_type}]" if command_type else ""
+            cmd_ctx = f" [{command.command_type}]" if command else ""
             return {"error": f"TIMEOUT{cmd_ctx}: Script execution timed out after {timeout}s"}
 
         except Exception as e:
             self.registry.fail_request(request_id, e)
-            cmd_ctx = f" [{command_type}]" if command_type else ""
+            cmd_ctx = f" [{command.command_type}]" if command else ""
             return {"error": f"EXECUTION_ERROR{cmd_ctx}: {str(e)}"}
 
 

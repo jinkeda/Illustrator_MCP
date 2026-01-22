@@ -5,4 +5,6 @@ This package provides an MCP server that enables AI assistants like Claude
 to control Adobe Illustrator programmatically using natural language.
 """
 
-__version__ = "0.1.0"
+from illustrator_mcp.__version__ import __version__
+
+__all__ = ["__version__"]

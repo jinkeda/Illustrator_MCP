@@ -17,6 +17,7 @@ class PendingRequest:
     future: asyncio.Future
     script: str
     command: Optional[Dict[str, Any]] = None  # Command metadata for logging
+    trace_id: Optional[str] = None  # Trace ID for request correlation
 
 
 class RequestRegistry:

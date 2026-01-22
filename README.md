@@ -716,6 +716,22 @@ The Node.js `proxy-server` folder is kept for reference but is no longer used.
 - **Added:** `request_id` generation and timing in `proxy_client.py`
 - **Added:** Structured logging with timing information
 
+### v2.1.1 (2026-01-22) - CODE QUALITY REFACTORING
+- **Refactor:** Consolidated connection handling with `check_connection_or_error()` in `shared.py`
+- **Refactor:** Added `CommandMetadata` dataclass and `ExecutionResponse` TypedDict for type safety
+- **Refactor:** Unified `trace_id` across proxy_client and websocket_bridge (replaces request_id)
+- **Refactor:** Removed `time.sleep(0.1)` from bridge start, added `wait_until_ready()` method
+- **Refactor:** Added `ConnectionState` enum for bridge state management
+- **Refactor:** Added `log_command()` helper for centralized logging format
+- **Added:** `errors.py` with `IllustratorError` enum for standardized error codes
+- **Added:** `templates.py` with reusable script wrappers (`wrap_script_with_error_handling()`)
+- **Added:** `__version__.py` for single-source version management (now v2.1.0)
+- **Added:** JSX dependency metadata in `layout.jsx` with programmatic checks
+- **Added:** `LogLevel` enum and `setLogLevel()` in CEP panel for debug filtering
+- **Updated:** `pyproject.toml` with correct author, `pytest-cov`, dynamic versioning
+- **Updated:** ExtendScript reference moved to `resources/docs/extendscript_reference.md`
+- **Updated:** `PendingRequest` dataclass now includes `trace_id` field
+
 ### v2.3.0 (2026-01-21) - FORMALIZED PROTOCOL
 - **Protocol:** Full Task Protocol v2.3 specification with formal contract
 - **Added:** Standardized error codes with categories:

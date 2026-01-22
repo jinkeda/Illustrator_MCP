@@ -295,6 +295,7 @@ dependencies = [
     { name = "httpx" },
     { name = "mcp" },
     { name = "pydantic" },
+    { name = "pydantic-settings" },
     { name = "websockets" },
 ]
 
@@ -309,6 +310,7 @@ requires-dist = [
     { name = "httpx", specifier = ">=0.25.0" },
     { name = "mcp", specifier = ">=1.1.0" },
     { name = "pydantic", specifier = ">=2.0.0" },
+    { name = "pydantic-settings", specifier = ">=2.0.0" },
     { name = "pytest", marker = "extra == 'dev'", specifier = ">=7.0.0" },
     { name = "pytest-asyncio", marker = "extra == 'dev'", specifier = ">=0.21.0" },
     { name = "websockets", specifier = ">=12.0" },

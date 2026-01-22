@@ -19,7 +19,13 @@ import uuid
 from typing import Any, Optional
 
 from illustrator_mcp.config import config
-from illustrator_mcp.shared import create_connection_error
+from illustrator_mcp.shared import (
+    CommandMetadata, 
+    ExecutionResponse, 
+    check_connection_or_error,
+    create_connection_error
+)
+from illustrator_mcp.errors import IllustratorError
 
 # Configure logging
 logger = logging.getLogger(__name__)
@@ -27,14 +33,13 @@ logger = logging.getLogger(__name__)
 
 # ==================== Request ID Generation ====================
 
-def generate_request_id() -> str:
-    """Generate a unique request ID for tracing.
+def generate_trace_id() -> str:
+    """Generate a unique trace ID for request tracing.
     
     Format: req_<8-char-hex>
     Example: req_a1b2c3d4
     """
     return f"req_{uuid.uuid4().hex[:8]}"
-
 
 
 def _get_bridge():
@@ -43,14 +48,13 @@ def _get_bridge():
     return get_runtime().get_bridge()
 
 
-
 class IllustratorProxy:
     """Client for communicating with Illustrator via WebSocket bridge."""
 
     def __init__(self, timeout: Optional[float] = None):
         self.timeout = timeout or config.timeout
 
-    async def execute_script(self, script: str) -> dict[str, Any]:
+    async def execute_script(self, script: str) -> ExecutionResponse:
         """
         Execute a JavaScript/ExtendScript in Illustrator.
 
@@ -63,10 +67,7 @@ class IllustratorProxy:
         Returns:
             Response from Illustrator containing result or error
         """
-        return await _execute_via_bridge(
-            script=script,
-            timeout=self.timeout
-        )
+        return await _execute_via_bridge(script=script, timeout=self.timeout)
 
     async def check_connection(self) -> dict[str, Any]:
         """Check if Illustrator is connected."""
@@ -86,16 +87,14 @@ def get_proxy() -> IllustratorProxy:
 async def _execute_via_bridge(
     script: str,
     timeout: float,
-    command_type: str = "execute_script",
-    tool_name: str = None,
-    params: dict = None,
-    request_id: str = None
-) -> dict[str, Any]:
+    command: Optional[CommandMetadata] = None,
+    trace_id: Optional[str] = None
+) -> ExecutionResponse:
     """
     Centralized helper to execute scripts via the WebSocket bridge.
     
     Handles:
-    - Connection checking
+    - Connection checking (via shared helper)
     - Thread-safe bridging (run_coroutine_threadsafe)
     - Timeout management
     - Error handling
@@ -103,36 +102,29 @@ async def _execute_via_bridge(
     Args:
         script: JavaScript code to execute
         timeout: Execution timeout in seconds
-        command_type: Type of command for logging
-        tool_name: Optional tool name for context
-        params: Optional parameters for context
-        request_id: Optional request ID for tracing
+        command: Optional CommandMetadata for context
+        trace_id: Optional trace ID for request tracing
         
     Returns:
-        Response dictionary with result/error
+        ExecutionResponse dictionary with result/error
     """
+    context = command.command_type if command else "execute_script"
+    
+    # Use centralized connection check
+    is_connected, error_response = check_connection_or_error(config.ws_port, context)
+    if not is_connected:
+        return error_response
+
     bridge = _get_bridge()
-
-    if not bridge.is_connected():
-        # Only log warning if strictly needed, or let caller handle logging?
-        # For simple execute_script, we usually just return error.
-        # For context usage, duplicate logging is avoided by checking caller.
-        return create_connection_error(config.ws_port, command_type)
-
+    
     try:
         # Direct async call via thread-safe future wrapping
-        # This avoids the double-wrap of run_in_executor -> blocking wait
         conc_future = asyncio.run_coroutine_threadsafe(
             bridge.execute_script_async(
                 script=script,
                 timeout=timeout,
-                command_type=command_type,
-                tool_name=tool_name,
-                params=params,
-                # Pass request_id if supported by bridge, else it's just context here
-                # bridge.execute_script_async signature: 
-                # (script, timeout, command_type, tool_name, params)
-                # It doesn't take request_id explicitly in signature based on previous code usage
+                command=command,
+                trace_id=trace_id
             ),
             bridge.loop
         )
@@ -141,11 +133,11 @@ async def _execute_via_bridge(
     except TimeoutError:
         return {"error": f"TIMEOUT: Script execution timed out after {timeout}s"}
     except Exception as e:
-        logger.error(f"PROXY_ERROR [{command_type}]: {e}")
+        logger.error(f"PROXY_ERROR [{context}]: {e}")
         return {"error": f"PROXY_ERROR: {str(e)}"}
 
 
-async def execute_script(script: str) -> dict[str, Any]:
+async def execute_script(script: str) -> ExecutionResponse:
     """
     Execute a JavaScript script in Illustrator.
 
@@ -155,7 +147,7 @@ async def execute_script(script: str) -> dict[str, Any]:
         script: JavaScript/ExtendScript code to execute
 
     Returns:
-        Dictionary with 'result' or 'error' key
+        ExecutionResponse with 'result' or 'error' key
     """
     return await get_proxy().execute_script(script)
 
@@ -165,8 +157,8 @@ async def execute_script_with_context(
     command_type: str,
     tool_name: str = None,
     params: dict = None,
-    request_id: str = None
-) -> dict[str, Any]:
+    trace_id: str = None
+) -> ExecutionResponse:
     """
     Execute a JavaScript script with command context for hybrid protocol.
 
@@ -180,49 +172,51 @@ async def execute_script_with_context(
         command_type: Type of command (e.g., "draw_rectangle", "create_layer")
         tool_name: Name of the MCP tool (e.g., "illustrator_draw_rectangle")
         params: Parameters passed to the tool (for debugging, not execution)
-        request_id: Optional request ID for tracing (auto-generated if not provided)
+        trace_id: Optional trace ID for tracing (auto-generated if not provided)
 
     Returns:
-        Dictionary with 'result' or 'error' key
+        ExecutionResponse with 'result' or 'error' key
     """
-    # Generate request_id if not provided
-    req_id = request_id or generate_request_id()
+    # Generate trace_id if not provided
+    tid = trace_id or generate_trace_id()
     
-    # We check connection inside _execute_via_bridge, but we want to log unique warnings here
-    # So we might duplicate the check or let the helper assume connected?
-    # Let's check here for the Logging Aspect
-    bridge = _get_bridge()
-    if not bridge.is_connected():
-        logger.warning(f"[{req_id}] {command_type}: DISCONNECTED")
-        error_response = create_connection_error(config.ws_port, command_type)
-        error_response["request_id"] = req_id
+    # Build CommandMetadata
+    command = CommandMetadata(
+        command_type=command_type,
+        tool_name=tool_name,
+        params=params or {},
+        trace_id=tid
+    )
+    
+    # Use centralized connection check
+    is_connected, error_response = check_connection_or_error(config.ws_port, command_type)
+    if not is_connected:
+        logger.warning(f"[{tid}] {command_type}: DISCONNECTED")
+        error_response["trace_id"] = tid
         return error_response
 
     start_time = time.time()
-    logger.info(f"[{req_id}] {command_type}: starting")
+    logger.info(f"[{tid}] {command_type}: starting")
     
     # Execute via centralized helper
-    # We pass config.timeout or custom? usage implies config.timeout usually
     response = await _execute_via_bridge(
         script=script,
         timeout=config.timeout,
-        command_type=command_type,
-        tool_name=tool_name,
-        params=params,
-        request_id=req_id
+        command=command,
+        trace_id=tid
     )
     
     duration = time.time() - start_time
     
     # Log success/error with timing
     if response.get("error"):
-        logger.warning(f"[{req_id}] {command_type}: error in {duration:.3f}s")
+        logger.warning(f"[{tid}] {command_type}: error in {duration:.3f}s")
     else:
-        logger.info(f"[{req_id}] {command_type}: completed in {duration:.3f}s")
+        logger.info(f"[{tid}] {command_type}: completed in {duration:.3f}s")
     
-    # Add request_id and elapsed_ms to response for tracing
-    response["request_id"] = req_id
-    response["elapsed_ms"] = duration * 1000 # Convert to milliseconds
+    # Add trace_id and elapsed_ms to response for tracing
+    response["trace_id"] = tid
+    response["elapsed_ms"] = duration * 1000
     
     return response
 
