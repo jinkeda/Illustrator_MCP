@@ -251,7 +251,8 @@ def format_response(response: dict[str, Any]) -> str:
                 return f"Error: {parsed.get('error', 'Operation failed')}"
             result = parsed
         except json.JSONDecodeError:
-            pass
+            # Not JSON - treat as raw string (common for simple ExtendScript returns)
+            logger.debug(f"Result is not JSON, treating as string: {result[:100]}")
 
     if isinstance(result, (dict, list)):
         return json.dumps(result, indent=2)

@@ -6,23 +6,12 @@ import pytest
 from unittest.mock import AsyncMock, patch
 
 
-# All tool modules that import execute_script
+# Active tool modules (archived modules removed in v2.0)
 TOOL_MODULES = [
-    'illustrator_mcp.tools.shapes',
-    'illustrator_mcp.tools.documents',
-    'illustrator_mcp.tools.objects',
-    'illustrator_mcp.tools.effects',
-    'illustrator_mcp.tools.pathfinder',
-    'illustrator_mcp.tools.paths',
-    'illustrator_mcp.tools.text',
-    'illustrator_mcp.tools.typography',
-    'illustrator_mcp.tools.layers',
-    'illustrator_mcp.tools.selection',
-    'illustrator_mcp.tools.styling',
-    'illustrator_mcp.tools.arrange',
-    'illustrator_mcp.tools.transform',
-    'illustrator_mcp.tools.artboards',
     'illustrator_mcp.tools.execute',
+    'illustrator_mcp.tools.documents',
+    'illustrator_mcp.tools.context',
+    'illustrator_mcp.tools.query',
 ]
 
 

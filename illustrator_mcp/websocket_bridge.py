@@ -54,8 +54,14 @@ class WebSocketBridge:
             on_message=self._handle_message
         )
 
-    async def _handle_message(self, message: str):
+    async def _handle_message(self, message: str) -> None:
         """Callback for incoming WebSocket messages."""
+        # Guard against excessively large messages (10MB limit)
+        MAX_MESSAGE_SIZE = 10 * 1024 * 1024
+        if len(message) > MAX_MESSAGE_SIZE:
+            logger.warning(f"Rejecting oversized message: {len(message)} bytes")
+            return
+            
         try:
             data = json.loads(message)
             request_id = data.get("id")

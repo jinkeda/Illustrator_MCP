@@ -11,6 +11,7 @@ from pydantic import BaseModel, Field, ConfigDict
 
 from illustrator_mcp.shared import mcp
 from illustrator_mcp.proxy_client import execute_script_with_context, format_response
+from illustrator_mcp.utils import escape_path_for_jsx
 
 
 class ExportFormat(str, Enum):
@@ -109,7 +110,7 @@ async def illustrator_create_document(params: CreateDocumentInput) -> str:
 async def illustrator_open_document(params: OpenDocumentInput) -> str:
     """Open an existing Illustrator document."""
     # Escape backslashes for JavaScript
-    path = params.file_path.replace("\\", "\\\\")
+    path = escape_path_for_jsx(params.file_path)
     script = f"""
     (function() {{
         var file = new File("{path}");
@@ -136,7 +137,7 @@ async def illustrator_open_document(params: OpenDocumentInput) -> str:
 async def illustrator_save_document(params: SaveDocumentInput) -> str:
     """Save the current Illustrator document."""
     if params.file_path:
-        path = params.file_path.replace("\\", "\\\\")
+        path = escape_path_for_jsx(params.file_path)
         script = f"""
         (function() {{
             var doc = app.activeDocument;
@@ -168,7 +169,7 @@ async def illustrator_save_document(params: SaveDocumentInput) -> str:
 )
 async def illustrator_export_document(params: ExportDocumentInput) -> str:
     """Export the document to PNG, JPG, SVG, or PDF."""
-    path = params.file_path.replace("\\", "\\\\")
+    path = escape_path_for_jsx(params.file_path)
     fmt = params.format.value.upper()
     scale = params.scale * 100
     
@@ -310,7 +311,7 @@ async def illustrator_import_image(params: ImportImageInput) -> str:
     Returns:
         str: JSON with placed image information
     """
-    path = params.file_path.replace("\\", "\\\\")
+    path = escape_path_for_jsx(params.file_path)
     script = f"""
     (function() {{
         var doc = app.activeDocument;
@@ -424,7 +425,7 @@ async def illustrator_place_file(params: PlaceFileInput) -> str:
     Use linked=True during iterative work (e.g., updating MATLAB plots),
     then embed when ready for submission.
     """
-    path = params.file_path.replace("\\", "\\\\")
+    path = escape_path_for_jsx(params.file_path)
     script = f"""
     (function() {{
         var doc = app.activeDocument;

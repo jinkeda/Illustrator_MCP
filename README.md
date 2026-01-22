@@ -700,6 +700,13 @@ The Node.js `proxy-server` folder is kept for reference but is no longer used.
 
 ## Changelog
 
+### v2.3.5 (2026-01-22) - FINAL CLEANUP
+- **Refactor:** Consolidated path escaping in `documents.py` using `escape_path_for_jsx()` (5 instances)
+- **Refactor:** Updated `conftest.py` to only reference active tool modules (removed 11 archived)
+- **Improved:** Added debug logging for non-JSON ExtendScript returns
+- **Security:** Added 10MB message size guard in `websocket_bridge.py`
+- **Added:** Return type hint for `_handle_message()`
+
 ### v2.3.4 (2026-01-22) - ARCHITECTURE CLEANUP
 - **Refactor:** Extracted `LibraryResolver` to dedicated `libraries.py` module (~200 lines from execute.py)
 - **Refactor:** Propagated `trace_id` through `RequestRegistry.create_request()` for better correlation
