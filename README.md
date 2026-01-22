@@ -700,6 +700,10 @@ The Node.js `proxy-server` folder is kept for reference but is no longer used.
 
 ## Changelog
 
+### v2.3.6 (2026-01-22) - DEPENDENCY & DOCUMENTATION
+- **Removed:** Unused `httpx` dependency from `pyproject.toml`
+- **Added:** `docs/ARCHITECTURE.md` documenting import patterns and circular import solutions
+
 ### v2.3.5 (2026-01-22) - FINAL CLEANUP
 - **Refactor:** Consolidated path escaping in `documents.py` using `escape_path_for_jsx()` (5 instances)
 - **Refactor:** Updated `conftest.py` to only reference active tool modules (removed 11 archived)
