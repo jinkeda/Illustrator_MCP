@@ -700,7 +700,10 @@ The Node.js `proxy-server` folder is kept for reference but is no longer used.
 
 ## Changelog
 
-### v2.3.6 (2026-01-22) - DEPENDENCY & DOCUMENTATION
+### v2.3.6 (2026-01-22) - BUG FIXES & STABILITY
+- **Fixed:** `query_items` tool now correctly returns items in `dryRun` mode (moved storage to compute stage)
+- **Fixed:** Added ES3-compatible `Array.prototype.indexOf` polyfill in `task_executor.jsx` for ExtendScript
+- **Fixed:** `proxy_client.py` now correctly handles double-wrapped JSON responses from Illustrator
 - **Removed:** Unused `httpx` dependency from `pyproject.toml`
 - **Added:** `docs/ARCHITECTURE.md` documenting import patterns and circular import solutions
 
