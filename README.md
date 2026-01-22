@@ -700,23 +700,7 @@ The Node.js `proxy-server` folder is kept for reference but is no longer used.
 
 ## Changelog
 
-### v2.2.0 (2026-01-21) - TASK PROTOCOL ARCHITECTURE
-- **Added:** Task Protocol for structured, observable task execution
-- **Added:** `task_executor.jsx` (~650 lines) with:
-  - `executeTask()` - Collect → Compute → Apply execution framework
-  - `collectTargets()` - Declarative target selection
-  - `describeItem()` - Stable ItemRef generation
-  - `safeExecute()` - Error-catching wrapper with itemRef
-  - `executeTaskWithRetry()` - Auto-retry with failure detection
-  - `recordTaskHistory()` / `getTaskHistory()` - In-session backtracking
-  - `profile()` / `formatTiming()` - Performance analysis
-- **Added:** `protocol.py` with Pydantic models (TaskPayload, TaskReport, ItemRef)
-- **Added:** `illustrator_execute_task` tool for structured task execution
-- **Added:** `illustrator_query_items` pilot tool using Task Protocol
-- **Added:** `request_id` generation and timing in `proxy_client.py`
-- **Added:** Structured logging with timing information
-
-### v2.1.1 (2026-01-22) - CODE QUALITY REFACTORING
+### v2.3.2 (2026-01-22) - CODE QUALITY REFACTORING
 - **Refactor:** Consolidated connection handling with `check_connection_or_error()` in `shared.py`
 - **Refactor:** Added `CommandMetadata` dataclass and `ExecutionResponse` TypedDict for type safety
 - **Refactor:** Unified `trace_id` across proxy_client and websocket_bridge (replaces request_id)
@@ -725,7 +709,7 @@ The Node.js `proxy-server` folder is kept for reference but is no longer used.
 - **Refactor:** Added `log_command()` helper for centralized logging format
 - **Added:** `errors.py` with `IllustratorError` enum for standardized error codes
 - **Added:** `templates.py` with reusable script wrappers (`wrap_script_with_error_handling()`)
-- **Added:** `__version__.py` for single-source version management (now v2.1.0)
+- **Added:** `__version__.py` for single-source version management
 - **Added:** JSX dependency metadata in `layout.jsx` with programmatic checks
 - **Added:** `LogLevel` enum and `setLogLevel()` in CEP panel for debug filtering
 - **Updated:** `pyproject.toml` with correct author, `pytest-cov`, dynamic versioning
