@@ -11,7 +11,7 @@ from pydantic import BaseModel, Field, ConfigDict
 
 from illustrator_mcp.shared import mcp
 from illustrator_mcp.proxy_client import execute_script_with_context, format_response
-from illustrator_mcp.tools.execute import inject_libraries
+from illustrator_mcp.libraries import inject_libraries
 
 
 class QueryItemsInput(BaseModel):
