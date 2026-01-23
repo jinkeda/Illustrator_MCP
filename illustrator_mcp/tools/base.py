@@ -6,11 +6,24 @@ Provides common patterns for JSX tool execution to reduce boilerplate.
 
 from typing import Any, Optional
 
+from pydantic import BaseModel, ConfigDict
+
 from illustrator_mcp.proxy_client import (
     execute_script_with_context,
     format_response,
 )
 from illustrator_mcp.libraries import inject_libraries
+
+
+# ==================== Shared Pydantic Base ====================
+
+class ToolInputBase(BaseModel):
+    """Base class for all tool input models.
+    
+    Provides shared configuration:
+    - str_strip_whitespace: Auto-strip whitespace from string fields
+    """
+    model_config = ConfigDict(str_strip_whitespace=True)
 
 
 async def execute_jsx_tool(
