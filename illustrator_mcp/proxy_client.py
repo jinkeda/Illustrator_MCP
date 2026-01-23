@@ -156,9 +156,9 @@ async def execute_script(script: str) -> ExecutionResponse:
 async def execute_script_with_context(
     script: str,
     command_type: str,
-    tool_name: str = None,
-    params: dict = None,
-    trace_id: str = None
+    tool_name: Optional[str] = None,
+    params: Optional[dict] = None,
+    trace_id: Optional[str] = None
 ) -> ExecutionResponse:
     """
     Execute a JavaScript script with command context for hybrid protocol.
