@@ -9,6 +9,7 @@ from pydantic import BaseModel, Field, ConfigDict
 
 from illustrator_mcp.shared import mcp
 from illustrator_mcp.tools.base import execute_jsx_tool
+from illustrator_mcp import templates
 
 
 @mcp.tool(
@@ -251,23 +252,8 @@ async def illustrator_get_app_info() -> str:
         - activeDocumentName: name of active document (if any)
         - scriptingVersion: ExtendScript version
     """
-    script = """
-    (function() {
-        var result = {
-            name: app.name,
-            version: app.version,
-            locale: app.locale,
-            documentsOpen: app.documents.length,
-            activeDocumentName: app.documents.length > 0 ? app.activeDocument.name : null,
-            freeMemory: app.freeMemory,
-            scriptingVersion: app.scriptingVersion
-        };
-        return JSON.stringify(result);
-    })()
-    """
-    
     return await execute_jsx_tool(
-        script=script,
+        script=templates.GET_APP_INFO,
         command_type="get_app_info",
         tool_name="illustrator_get_app_info",
         params={}
