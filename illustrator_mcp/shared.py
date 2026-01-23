@@ -100,13 +100,13 @@ def check_connection_or_error(
 async def server_lifespan(server: FastMCP) -> AsyncIterator[Dict[str, Any]]:
     """
     Manage MCP server startup and shutdown lifecycle.
-    
+
     This ensures the WebSocket bridge is properly started before
     any tools are called, and cleanly shut down when the server stops.
     """
     from illustrator_mcp.runtime import get_runtime
     from illustrator_mcp.config import config
-    
+
     logger.info("=" * 60)
     logger.info("Adobe Illustrator MCP Server - LIFESPAN STARTUP")
     logger.info("=" * 60)

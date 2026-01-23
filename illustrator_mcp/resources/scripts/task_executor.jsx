@@ -38,6 +38,94 @@ if (!Array.prototype.indexOf) {
     };
 }
 
+if (!Array.prototype.forEach) {
+    Array.prototype.forEach = function (callback, thisArg) {
+        if (this == null) throw new TypeError('"this" is null or not defined');
+        var o = Object(this);
+        var len = o.length >>> 0;
+        if (typeof callback !== 'function') throw new TypeError(callback + ' is not a function');
+        for (var k = 0; k < len; k++) {
+            if (k in o) callback.call(thisArg, o[k], k, o);
+        }
+    };
+}
+
+if (!Array.prototype.map) {
+    Array.prototype.map = function (callback, thisArg) {
+        if (this == null) throw new TypeError('"this" is null or not defined');
+        var o = Object(this);
+        var len = o.length >>> 0;
+        if (typeof callback !== 'function') throw new TypeError(callback + ' is not a function');
+        var result = new Array(len);
+        for (var k = 0; k < len; k++) {
+            if (k in o) result[k] = callback.call(thisArg, o[k], k, o);
+        }
+        return result;
+    };
+}
+
+if (!Array.prototype.filter) {
+    Array.prototype.filter = function (callback, thisArg) {
+        if (this == null) throw new TypeError('"this" is null or not defined');
+        var o = Object(this);
+        var len = o.length >>> 0;
+        if (typeof callback !== 'function') throw new TypeError(callback + ' is not a function');
+        var result = [];
+        for (var k = 0; k < len; k++) {
+            if (k in o && callback.call(thisArg, o[k], k, o)) result.push(o[k]);
+        }
+        return result;
+    };
+}
+
+if (!Array.prototype.every) {
+    Array.prototype.every = function (callback, thisArg) {
+        if (this == null) throw new TypeError('"this" is null or not defined');
+        var o = Object(this);
+        var len = o.length >>> 0;
+        if (typeof callback !== 'function') throw new TypeError(callback + ' is not a function');
+        for (var k = 0; k < len; k++) {
+            if (k in o && !callback.call(thisArg, o[k], k, o)) return false;
+        }
+        return true;
+    };
+}
+
+if (!Array.prototype.some) {
+    Array.prototype.some = function (callback, thisArg) {
+        if (this == null) throw new TypeError('"this" is null or not defined');
+        var o = Object(this);
+        var len = o.length >>> 0;
+        if (typeof callback !== 'function') throw new TypeError(callback + ' is not a function');
+        for (var k = 0; k < len; k++) {
+            if (k in o && callback.call(thisArg, o[k], k, o)) return true;
+        }
+        return false;
+    };
+}
+
+if (!Array.prototype.reduce) {
+    Array.prototype.reduce = function (callback, initialValue) {
+        if (this == null) throw new TypeError('"this" is null or not defined');
+        var o = Object(this);
+        var len = o.length >>> 0;
+        if (typeof callback !== 'function') throw new TypeError(callback + ' is not a function');
+        var k = 0;
+        var value;
+        if (arguments.length >= 2) {
+            value = initialValue;
+        } else {
+            while (k < len && !(k in o)) k++;
+            if (k >= len) throw new TypeError('Reduce of empty array with no initial value');
+            value = o[k++];
+        }
+        for (; k < len; k++) {
+            if (k in o) value = callback(value, o[k], k, o);
+        }
+        return value;
+    };
+}
+
 // ==================== Error Codes (v2.3) ====================
 // Categories: V=Validation (fail before execution), R=Runtime, S=System
 

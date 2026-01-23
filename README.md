@@ -700,6 +700,20 @@ The Node.js `proxy-server` folder is kept for reference but is no longer used.
 
 ## Changelog
 
+### v2.3.7 (2026-01-23) - ES5 POLYFILLS & LIVING TEST
+- **Added:** ES5 array polyfills in `task_executor.jsx`:
+  - `Array.prototype.forEach()`
+  - `Array.prototype.map()`
+  - `Array.prototype.filter()`
+  - `Array.prototype.every()`
+  - `Array.prototype.some()`
+  - `Array.prototype.reduce()`
+- **Refactor:** `QueryItemsInput` now uses nested `targets` dict matching Task Protocol format
+  - Before: `target_type="layer", layer_name="Layer 1"`
+  - After: `targets={"type": "layer", "layer": "Layer 1"}`
+- **Added:** Living test suite with 10 test cases (8 PASS, 1 PARTIAL, 1 SKIPPED)
+- **Fixed:** Removed unused `Optional` import from `query.py`
+
 ### v2.3.6 (2026-01-22) - BUG FIXES & STABILITY
 - **Fixed:** `query_items` tool now correctly returns items in `dryRun` mode (moved storage to compute stage)
 - **Fixed:** Added ES3-compatible `Array.prototype.indexOf` polyfill in `task_executor.jsx` for ExtendScript

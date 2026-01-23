@@ -6,7 +6,7 @@ for more structured, observable, and debuggable operations.
 """
 
 import json
-from typing import Optional, Dict, Any, List
+from typing import Dict, Any, List
 from pydantic import BaseModel, Field, ConfigDict
 
 from illustrator_mcp.shared import mcp
@@ -15,27 +15,33 @@ from illustrator_mcp.tools.execute import inject_libraries
 
 
 class QueryItemsInput(BaseModel):
-    """Input for querying items using declarative target selector."""
+    """Input for querying items using declarative target selector.
+    
+    The targets parameter accepts a Task Protocol target selector dict:
+    
+    Target types:
+    - {"type": "selection"} - Current selection (default)
+    - {"type": "layer", "layer": "Layer 1"} - All items on a specific layer
+    - {"type": "all"} - All items in document
+    - {"type": "query", "itemType": "PathItem", "pattern": "rect_*"} - Filter by type/name
+    
+    Compound selectors (advanced):
+    - {"type": "union", "selectors": [...]} - Union of multiple selectors
+    - {"type": "intersection", "selectors": [...]} - Intersection of selectors
+    
+    Example payloads from living_test.md can be used directly.
+    """
     model_config = ConfigDict(str_strip_whitespace=True)
 
-    target_type: str = Field(
-        default="selection",
-        description="Target type: 'selection', 'layer', 'all', or 'query'"
-    )
-
-    layer_name: Optional[str] = Field(
-        default=None,
-        description="Layer name (required when target_type is 'layer')"
-    )
-
-    item_type: Optional[str] = Field(
-        default=None,
-        description="Filter by item type: 'PathItem', 'TextFrame', 'GroupItem', etc."
-    )
-
-    name_pattern: Optional[str] = Field(
-        default=None,
-        description="Name pattern to match (supports * wildcard)"
+    targets: Dict[str, Any] = Field(
+        default={"type": "selection"},
+        description=(
+            "Task Protocol target selector. Examples: "
+            "{'type': 'selection'}, "
+            "{'type': 'layer', 'layer': 'Layer 1'}, "
+            "{'type': 'all'}, "
+            "{'type': 'query', 'itemType': 'PathItem', 'pattern': 'rect_*'}"
+        )
     )
 
     include_trace: bool = Field(
@@ -75,16 +81,8 @@ async def illustrator_query_items(params: QueryItemsInput) -> str:
     Returns ItemRef for each matched item, enabling stable references.
     """
     
-    # Build targets object based on input
-    targets: Dict[str, Any] = {"type": params.target_type}
-    
-    if params.target_type == "layer" and params.layer_name:
-        targets["layer"] = params.layer_name
-    elif params.target_type == "query":
-        if params.item_type:
-            targets["itemType"] = params.item_type
-        if params.name_pattern:
-            targets["pattern"] = params.name_pattern
+    # Use targets directly from input (already matches Task Protocol format)
+    targets = params.targets
     
     # Build payload
     payload = {
@@ -197,7 +195,7 @@ if (typeof executeTask !== "function" || typeof validatePayload !== "function") 
         timing = report.get("timing", {})
         stats = report.get("stats", {})
         
-        output = f"{status} Query: {params.target_type}\n"
+        output = f"{status} Query: {params.targets.get('type', 'selection')}\n"
         output += f"  Timing: {timing.get('total_ms', 0):.0f}ms\n"
         output += f"  Found: {stats.get('itemsProcessed', 0)} items\n"
         
