@@ -699,6 +699,12 @@ The Node.js `proxy-server` folder is kept for reference but is no longer used.
 ---
 
 ## Changelog
+### v2.4.2 (2026-01-23) - TEMPLATE CONSOLIDATION
+- **Refactor:** Merged `IMPORT_IMAGE` and `PLACE_FILE` templates into single `PLACE_ITEM` template
+- **New:** `_place_item_impl()` helper function for import/place operations (~40 lines reduced)
+- **Refactor:** `undo` and `redo` now use `templates.UNDO` and `templates.REDO`
+- **New:** `ToolInputBase` class in `base.py` for shared Pydantic configuration
+
 ### v2.4.1 (2026-01-23) - CODEBASE REFACTORING
 Major refactoring to reduce duplication and improve maintainability:
 
@@ -708,7 +714,6 @@ Major refactoring to reduce duplication and improve maintainability:
 - **New:** `format_task_report()` function in `protocol.py` for shared TaskReport formatting
 - **Refactor:** Export logic in `documents.py` consolidated with config dict (4 branches → 2)
 - **New:** `templates.py` module with 15 ExtendScript templates using `string.Template`
-- **Fix:** Type hints `str = None` → `Optional[str] = None` in `proxy_client.py`
 - **New:** `test_websocket_bridge.py` with tests for `RequestRegistry`
 
 **Impact:** ~150 lines of boilerplate eliminated, 15 tools now use single-line `execute_jsx_tool()` pattern.
