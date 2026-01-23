@@ -8,7 +8,7 @@ Following the blender-mcp pattern (like get_scene_info).
 from pydantic import BaseModel, Field, ConfigDict
 
 from illustrator_mcp.shared import mcp
-from illustrator_mcp.proxy_client import execute_script_with_context, format_response
+from illustrator_mcp.tools.base import execute_jsx_tool
 
 
 @mcp.tool(
@@ -140,13 +140,12 @@ async def illustrator_get_document_structure() -> str:
     })()
     """
     
-    response = await execute_script_with_context(
+    return await execute_jsx_tool(
         script=script,
         command_type="get_document_structure",
         tool_name="illustrator_get_document_structure",
         params={}
     )
-    return format_response(response)
 
 
 @mcp.tool(
@@ -223,13 +222,12 @@ async def illustrator_get_selection_info() -> str:
     })()
     """
     
-    response = await execute_script_with_context(
+    return await execute_jsx_tool(
         script=script,
         command_type="get_selection_info",
         tool_name="illustrator_get_selection_info",
         params={}
     )
-    return format_response(response)
 
 
 @mcp.tool(
@@ -268,13 +266,12 @@ async def illustrator_get_app_info() -> str:
     })()
     """
     
-    response = await execute_script_with_context(
+    return await execute_jsx_tool(
         script=script,
         command_type="get_app_info",
         tool_name="illustrator_get_app_info",
         params={}
     )
-    return format_response(response)
 
 
 from pathlib import Path

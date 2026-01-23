@@ -10,7 +10,7 @@ from enum import Enum
 from pydantic import BaseModel, Field, ConfigDict
 
 from illustrator_mcp.shared import mcp
-from illustrator_mcp.proxy_client import execute_script_with_context, format_response
+from illustrator_mcp.tools.base import execute_jsx_tool
 from illustrator_mcp.utils import escape_path_for_jsx
 
 
@@ -94,13 +94,12 @@ async def illustrator_create_document(params: CreateDocumentInput) -> str:
         }}
     }})()
     """
-    response = await execute_script_with_context(
+    return await execute_jsx_tool(
         script=script,
         command_type="create_document",
         tool_name="illustrator_create_document",
         params={"width": params.width, "height": params.height, "name": params.name, "color_mode": params.color_mode}
     )
-    return format_response(response)
 
 
 @mcp.tool(
@@ -121,13 +120,12 @@ async def illustrator_open_document(params: OpenDocumentInput) -> str:
         return JSON.stringify({{success: true, name: doc.name, path: "{path}"}});
     }})()
     """
-    response = await execute_script_with_context(
+    return await execute_jsx_tool(
         script=script,
         command_type="open_document",
         tool_name="illustrator_open_document",
         params={"file_path": params.file_path}
     )
-    return format_response(response)
 
 
 @mcp.tool(
@@ -154,13 +152,12 @@ async def illustrator_save_document(params: SaveDocumentInput) -> str:
             return JSON.stringify({success: true, message: "Document saved"});
         })()
         """
-    response = await execute_script_with_context(
+    return await execute_jsx_tool(
         script=script,
         command_type="save_document",
         tool_name="illustrator_save_document",
         params={"file_path": params.file_path}
     )
-    return format_response(response)
 
 
 @mcp.tool(
@@ -218,13 +215,12 @@ async def illustrator_export_document(params: ExportDocumentInput) -> str:
         }})()
         """
 
-    response = await execute_script_with_context(
+    return await execute_jsx_tool(
         script=script,
         command_type="export_document",
         tool_name="illustrator_export_document",
         params={"file_path": params.file_path, "format": params.format.value, "scale": params.scale}
     )
-    return format_response(response)
 
 
 @mcp.tool(
@@ -249,13 +245,12 @@ async def illustrator_get_document_info() -> str:
         });
     })()
     """
-    response = await execute_script_with_context(
+    return await execute_jsx_tool(
         script=script,
         command_type="get_document_info",
         tool_name="illustrator_get_document_info",
         params={}
     )
-    return format_response(response)
 
 
 @mcp.tool(
@@ -272,13 +267,12 @@ async def illustrator_close_document(params: CloseDocumentInput) -> str:
         return JSON.stringify({{success: true, message: "Document closed"}});
     }})()
     """
-    response = await execute_script_with_context(
+    return await execute_jsx_tool(
         script=script,
         command_type="close_document",
         tool_name="illustrator_close_document",
         params={"save_before_close": params.save_before_close}
     )
-    return format_response(response)
 
 
 # Pydantic model for import
@@ -334,13 +328,12 @@ async def illustrator_import_image(params: ImportImageInput) -> str:
         }});
     }})()
     """
-    response = await execute_script_with_context(
+    return await execute_jsx_tool(
         script=script,
         command_type="import_image",
         tool_name="illustrator_import_image",
         params={"file_path": params.file_path, "x": params.x, "y": params.y, "link": params.link}
     )
-    return format_response(response)
 
 
 # Undo/Redo tools
@@ -364,13 +357,12 @@ async def illustrator_undo() -> str:
         }
     })()
     """
-    response = await execute_script_with_context(
+    return await execute_jsx_tool(
         script=script,
         command_type="undo",
         tool_name="illustrator_undo",
         params={}
     )
-    return format_response(response)
 
 
 @mcp.tool(
@@ -392,13 +384,12 @@ async def illustrator_redo() -> str:
         }
     })()
     """
-    response = await execute_script_with_context(
+    return await execute_jsx_tool(
         script=script,
         command_type="redo",
         tool_name="illustrator_redo",
         params={}
     )
-    return format_response(response)
 
 
 # Pydantic models for place/embed
@@ -448,13 +439,12 @@ async def illustrator_place_file(params: PlaceFileInput) -> str:
         }});
     }})()
     """
-    response = await execute_script_with_context(
+    return await execute_jsx_tool(
         script=script,
         command_type="place_file",
         tool_name="illustrator_place_file",
         params={"file_path": params.file_path, "x": params.x, "y": params.y, "linked": params.linked}
     )
-    return format_response(response)
 
 
 # DISABLED: Tool limit reduction for Antigravity
@@ -482,13 +472,12 @@ async def illustrator_embed_placed_items() -> str:
         return JSON.stringify({success: true, embeddedCount: embedded});
     })()
     """
-    response = await execute_script_with_context(
+    return await execute_jsx_tool(
         script=script,
         command_type="embed_placed_items",
         tool_name="illustrator_embed_placed_items",
         params={}
     )
-    return format_response(response)
 
 
 @mcp.tool(
@@ -517,10 +506,9 @@ async def illustrator_update_linked_items() -> str:
         return JSON.stringify({success: true, updatedCount: updated});
     })()
     """
-    response = await execute_script_with_context(
+    return await execute_jsx_tool(
         script=script,
         command_type="update_linked_items",
         tool_name="illustrator_update_linked_items",
         params={}
     )
-    return format_response(response)
