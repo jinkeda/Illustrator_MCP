@@ -700,6 +700,28 @@ The Node.js `proxy-server` folder is kept for reference but is no longer used.
 
 ## Changelog
 
+### v2.4.0 (2026-01-23) - ASSET ANALYSIS & LAYOUT PRESETS
+
+Two new ExtendScript libraries accessible via `execute_script` with `includes`:
+
+**New Libraries:**
+- **assets.jsx** - Analyze placed items (bounds, aspect ratio, orientation)
+  - `analyzeAssets(scope)` - Collect metadata for selection/document/layer
+  - `getAssetInfo(item)` - Get single item metadata
+- **presets.jsx** - Pre-defined grid layouts with slot geometry
+  - `PRESETS` - 2x2, 3x1, 1x3, 2x3, 3x2, 1x2, 2x1 grid definitions
+  - `computeSlotGeometry()` - Calculate slot positions for grid
+  - `applyPreset()` - Arrange items in grid with contain/cover modes
+
+**Usage:**
+```javascript
+// Analyze assets: includes: ["assets", "geometry"]
+var manifest = analyzeAssets("document");
+
+// Apply layout: includes: ["presets", "geometry"]
+var result = applyPreset("2x2", doc.selection, "contain");
+```
+
 ### v2.3.7 (2026-01-23) - ES5 POLYFILLS & LIVING TEST
 - **Added:** ES5 array polyfills in `task_executor.jsx`:
   - `Array.prototype.forEach()`
