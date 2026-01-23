@@ -136,45 +136,95 @@ function computeSlotGeometry(presetName, artboardRect) {
 }
 
 /**
- * Fit an item to a slot with contain or cover mode
+ * Fit an item to a slot with contain or cover mode.
+ * 
+ * IDEMPOTENT: Computes final position in absolute artboard coordinates.
+ * Running this function multiple times produces the same result.
+ * 
+ * CLIPPED GROUPS: Uses getVisibleBounds() which returns the mask bounds
+ * for clipped groups, ensuring predictable sizing and positioning.
+ * 
  * @param {PageItem} item - Item to fit
- * @param {Object} slot - Slot with x, y, width, height
+ * @param {Object} slot - Slot with x, y, width, height (y is top edge)
  * @param {string} mode - "contain" (fit inside) or "cover" (fill completely)
+ * @returns {Object} Result with applied scale and position
  */
 function fitToSlot(item, slot, mode) {
     mode = mode || "contain";
 
+    // 1. Get current visible bounds (handles clipped groups correctly)
     var bounds = getVisibleBounds(item);
-    var itemW = bounds[2] - bounds[0];
-    var itemH = Math.abs(bounds[1] - bounds[3]);
+    var currentLeft = bounds[0];
+    var currentTop = bounds[1];
+    var currentRight = bounds[2];
+    var currentBottom = bounds[3];
 
-    if (itemW === 0 || itemH === 0) {
-        return; // Can't scale empty item
+    var currentW = currentRight - currentLeft;
+    var currentH = currentTop - currentBottom;  // Top > Bottom in Illustrator coords
+
+    if (currentW <= 0 || currentH <= 0) {
+        return { error: "Item has zero dimensions", scaled: false };
     }
 
+    // 2. Compute target center in artboard coordinates (absolute, idempotent)
+    //    Slot: x=left edge, y=top edge, width, height
+    var targetCenterX = slot.x + slot.width / 2;
+    var targetCenterY = slot.y - slot.height / 2;  // Y decreases downward
+
+    // 3. Compute scale factor
     var scale;
     if (mode === "cover") {
-        // Scale to fill slot completely (may crop)
-        scale = Math.max(slot.width / itemW, slot.height / itemH);
+        // Scale to fill slot completely (may extend beyond slot)
+        scale = Math.max(slot.width / currentW, slot.height / currentH);
     } else {
         // Scale to fit inside slot (may have margins)
-        scale = Math.min(slot.width / itemW, slot.height / itemH);
+        scale = Math.min(slot.width / currentW, slot.height / currentH);
     }
 
-    // Apply scale (percentage)
+    // 4. Compute final dimensions after scaling
+    var finalW = currentW * scale;
+    var finalH = currentH * scale;
+
+    // 5. Compute where the visible bounds should be after positioning
+    //    (centered in slot)
+    var targetLeft = targetCenterX - finalW / 2;
+    var targetTop = targetCenterY + finalH / 2;
+
+    // 6. Apply scale (percentage-based, relative to current size)
+    //    Note: resize() scales relative to current, not absolute
     item.resize(scale * 100, scale * 100);
 
-    // Get new bounds after scaling
+    // 7. Get new visible bounds after scaling
     var newBounds = getVisibleBounds(item);
-    var newW = newBounds[2] - newBounds[0];
-    var newH = Math.abs(newBounds[1] - newBounds[3]);
+    var newLeft = newBounds[0];
+    var newTop = newBounds[1];
 
-    // Center in slot
-    // Position is top-left corner in Illustrator
+    // 8. Compute position delta: difference between current anchor and visible bounds
+    //    item.position is the anchor point (usually top-left of bounding box)
+    //    We need to move anchor such that visible bounds land at target
+    var currentAnchor = item.position;  // [x, y]
+
+    // Delta from anchor to visible bounds top-left
+    var anchorToVisibleX = newLeft - currentAnchor[0];
+    var anchorToVisibleY = newTop - currentAnchor[1];
+
+    // 9. Set new anchor position (idempotent - uses absolute target coords)
     item.position = [
-        slot.x + (slot.width - newW) / 2,
-        slot.y - (slot.height - newH) / 2
+        targetLeft - anchorToVisibleX,
+        targetTop - anchorToVisibleY
     ];
+
+    return {
+        scaled: true,
+        scale: scale,
+        finalBounds: {
+            left: targetLeft,
+            top: targetTop,
+            width: finalW,
+            height: finalH
+        },
+        slotCenter: { x: targetCenterX, y: targetCenterY }
+    };
 }
 
 /**
