@@ -12,6 +12,7 @@ from pydantic import BaseModel, Field, ConfigDict
 from illustrator_mcp.shared import mcp
 from illustrator_mcp.tools.base import execute_jsx_tool
 from illustrator_mcp.utils import escape_path_for_jsx
+from illustrator_mcp import templates
 
 
 class ExportFormat(str, Enum):
@@ -67,33 +68,14 @@ class CloseDocumentInput(BaseModel):
 async def illustrator_create_document(params: CreateDocumentInput) -> str:
     """Create a new Illustrator document with specified dimensions."""
     color_space = 'CMYK' if params.color_mode == 'CMYK' else 'RGB'
-    script = f"""
-    (function() {{
-        try {{
-            var preset = new DocumentPreset();
-            preset.width = {params.width};
-            preset.height = {params.height};
-            preset.colorMode = DocumentColorSpace.{color_space};
-            preset.units = RulerUnits.Points;
-            {f'preset.title = "{params.name}";' if params.name else ''}
-
-            // Use addDocument with preset for reliable document creation
-            var doc = app.documents.addDocument(DocumentColorSpace.{color_space}, preset);
-
-            return JSON.stringify({{
-                success: true,
-                name: doc.name,
-                width: doc.width,
-                height: doc.height
-            }});
-        }} catch (e) {{
-            return JSON.stringify({{
-                success: false,
-                error: e.message || String(e)
-            }});
-        }}
-    }})()
-    """
+    title_line = f'preset.title = "{params.name}";' if params.name else ''
+    
+    script = templates.CREATE_DOCUMENT.substitute(
+        width=params.width,
+        height=params.height,
+        color_space=color_space,
+        title_line=title_line
+    )
     return await execute_jsx_tool(
         script=script,
         command_type="create_document",
@@ -108,18 +90,8 @@ async def illustrator_create_document(params: CreateDocumentInput) -> str:
 )
 async def illustrator_open_document(params: OpenDocumentInput) -> str:
     """Open an existing Illustrator document."""
-    # Escape backslashes for JavaScript
     path = escape_path_for_jsx(params.file_path)
-    script = f"""
-    (function() {{
-        var file = new File("{path}");
-        if (!file.exists) {{
-            throw new Error("File not found: {path}");
-        }}
-        var doc = app.open(file);
-        return JSON.stringify({{success: true, name: doc.name, path: "{path}"}});
-    }})()
-    """
+    script = templates.OPEN_DOCUMENT.substitute(path=path)
     return await execute_jsx_tool(
         script=script,
         command_type="open_document",
@@ -136,22 +108,9 @@ async def illustrator_save_document(params: SaveDocumentInput) -> str:
     """Save the current Illustrator document."""
     if params.file_path:
         path = escape_path_for_jsx(params.file_path)
-        script = f"""
-        (function() {{
-            var doc = app.activeDocument;
-            var file = new File("{path}");
-            doc.saveAs(file);
-            return JSON.stringify({{success: true, path: "{path}"}});
-        }})()
-        """
+        script = templates.SAVE_DOCUMENT.substitute(path=path)
     else:
-        script = """
-        (function() {
-            var doc = app.activeDocument;
-            doc.save();
-            return JSON.stringify({success: true, message: "Document saved"});
-        })()
-        """
+        script = templates.SAVE_DOCUMENT_SIMPLE
     return await execute_jsx_tool(
         script=script,
         command_type="save_document",
