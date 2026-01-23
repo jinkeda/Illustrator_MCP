@@ -145,36 +145,13 @@ GET_APP_INFO = """
 
 # ==================== Import/Place ====================
 
-IMPORT_IMAGE = Template("""
+# Single template for both import_image and place_file (they're 95% identical)
+PLACE_ITEM = Template("""
 (function() {
     var doc = app.activeDocument;
     var file = new File("${path}");
     if (!file.exists) {
-        throw new Error("Image file not found: ${path}");
-    }
-    var placed = doc.placedItems.add();
-    placed.file = file;
-    placed.left = ${x};
-    placed.top = ${neg_y};
-    ${embed_line}
-    return JSON.stringify({
-        success: true,
-        path: "${path}",
-        linked: ${linked},
-        position: {x: ${x}, y: ${y}},
-        width: placed.width,
-        height: placed.height
-    });
-})()
-""")
-
-
-PLACE_FILE = Template("""
-(function() {
-    var doc = app.activeDocument;
-    var file = new File("${path}");
-    if (!file.exists) {
-        throw new Error("File not found: ${path}");
+        throw new Error("${error_prefix} not found: ${path}");
     }
     var placed = doc.placedItems.add();
     placed.file = file;

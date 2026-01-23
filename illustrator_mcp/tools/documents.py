@@ -60,6 +60,38 @@ class CloseDocumentInput(BaseModel):
     save_before_close: bool = Field(default=False, description="Save before closing")
 
 
+# ==================== Helper Functions ====================
+
+async def _place_item_impl(
+    file_path: str,
+    x: float,
+    y: float,
+    linked: bool,
+    command_type: str,
+    tool_name: str,
+    error_prefix: str = "File"
+) -> str:
+    """Shared implementation for import_image and place_file operations."""
+    path = escape_path_for_jsx(file_path)
+    embed_line = "" if linked else "placed.embed();"
+    
+    script = templates.PLACE_ITEM.substitute(
+        path=path,
+        x=x,
+        neg_y=-y,
+        y=y,
+        linked=str(linked).lower(),
+        embed_line=embed_line,
+        error_prefix=error_prefix
+    )
+    return await execute_jsx_tool(
+        script=script,
+        command_type=command_type,
+        tool_name=tool_name,
+        params={"file_path": file_path, "x": x, "y": y, "linked": linked}
+    )
+
+
 # Tool implementations using execute_script
 @mcp.tool(
     name="illustrator_create_document",
@@ -243,45 +275,15 @@ async def illustrator_import_image(params: ImportImageInput) -> str:
     
     Places the image at the specified position. By default, images are linked
     (referenced from the file). Set link=False to embed the image data.
-    
-    Args:
-        params: Import parameters:
-            - file_path: Full path to the image file
-            - x: X position to place the image (default: 0)
-            - y: Y position to place the image (default: 0)
-            - link: Link (True) or embed (False) the image
-    
-    Returns:
-        str: JSON with placed image information
     """
-    path = escape_path_for_jsx(params.file_path)
-    script = f"""
-    (function() {{
-        var doc = app.activeDocument;
-        var file = new File("{path}");
-        if (!file.exists) {{
-            throw new Error("Image file not found: {path}");
-        }}
-        var placed = doc.placedItems.add();
-        placed.file = file;
-        placed.left = {params.x};
-        placed.top = {-params.y};
-        {"" if params.link else "placed.embed();"}
-        return JSON.stringify({{
-            success: true,
-            path: "{path}",
-            linked: {str(params.link).lower()},
-            position: {{x: {params.x}, y: {params.y}}},
-            width: placed.width,
-            height: placed.height
-        }});
-    }})()
-    """
-    return await execute_jsx_tool(
-        script=script,
+    return await _place_item_impl(
+        file_path=params.file_path,
+        x=params.x,
+        y=params.y,
+        linked=params.link,
         command_type="import_image",
         tool_name="illustrator_import_image",
-        params={"file_path": params.file_path, "x": params.x, "y": params.y, "link": params.link}
+        error_prefix="Image file"
     )
 
 
@@ -296,18 +298,8 @@ async def illustrator_undo() -> str:
     Use this to revert mistakes or unwanted changes.
     Multiple calls will undo multiple actions.
     """
-    script = """
-    (function() {
-        try {
-            app.undo();
-            return JSON.stringify({success: true, message: "Undo successful"});
-        } catch (e) {
-            return JSON.stringify({success: false, message: "Nothing to undo"});
-        }
-    })()
-    """
     return await execute_jsx_tool(
-        script=script,
+        script=templates.UNDO,
         command_type="undo",
         tool_name="illustrator_undo",
         params={}
@@ -323,18 +315,8 @@ async def illustrator_redo() -> str:
     
     Use this to restore an action after undo.
     """
-    script = """
-    (function() {
-        try {
-            app.redo();
-            return JSON.stringify({success: true, message: "Redo successful"});
-        } catch (e) {
-            return JSON.stringify({success: false, message: "Nothing to redo"});
-        }
-    })()
-    """
     return await execute_jsx_tool(
-        script=script,
+        script=templates.REDO,
         command_type="redo",
         tool_name="illustrator_redo",
         params={}
@@ -365,34 +347,14 @@ async def illustrator_place_file(params: PlaceFileInput) -> str:
     Use linked=True during iterative work (e.g., updating MATLAB plots),
     then embed when ready for submission.
     """
-    path = escape_path_for_jsx(params.file_path)
-    script = f"""
-    (function() {{
-        var doc = app.activeDocument;
-        var file = new File("{path}");
-        if (!file.exists) {{
-            throw new Error("File not found: {path}");
-        }}
-        var placed = doc.placedItems.add();
-        placed.file = file;
-        placed.left = {params.x};
-        placed.top = {-params.y};
-        {"" if params.linked else "placed.embed();"}
-        return JSON.stringify({{
-            success: true,
-            path: "{path}",
-            linked: {str(params.linked).lower()},
-            position: {{x: {params.x}, y: {params.y}}},
-            width: placed.width,
-            height: placed.height
-        }});
-    }})()
-    """
-    return await execute_jsx_tool(
-        script=script,
+    return await _place_item_impl(
+        file_path=params.file_path,
+        x=params.x,
+        y=params.y,
+        linked=params.linked,
         command_type="place_file",
         tool_name="illustrator_place_file",
-        params={"file_path": params.file_path, "x": params.x, "y": params.y, "linked": params.linked}
+        error_prefix="File"
     )
 
 
