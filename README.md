@@ -699,6 +699,20 @@ The Node.js `proxy-server` folder is kept for reference but is no longer used.
 ---
 
 ## Changelog
+### v2.4.1 (2026-01-23) - CODEBASE REFACTORING
+Major refactoring to reduce duplication and improve maintainability:
+
+- **New:** `tools/base.py` with `execute_jsx_tool()` helper - reduces ~10 lines boilerplate per tool
+- **Refactor:** `format_response()` now uses `_try_parse_json()` and `_unwrap_result()` helpers
+- **New:** Pytest markers `@pytest.mark.live` and `@pytest.mark.unit` in `conftest.py`
+- **New:** `format_task_report()` function in `protocol.py` for shared TaskReport formatting
+- **Refactor:** Export logic in `documents.py` consolidated with config dict (4 branches → 2)
+- **New:** `templates.py` module with 15 ExtendScript templates using `string.Template`
+- **Fix:** Type hints `str = None` → `Optional[str] = None` in `proxy_client.py`
+- **New:** `test_websocket_bridge.py` with tests for `RequestRegistry`
+
+**Impact:** ~150 lines of boilerplate eliminated, 15 tools now use single-line `execute_jsx_tool()` pattern.
+
 
 ### v2.4.0 (2026-01-23) - ASSET ANALYSIS & LAYOUT PRESETS
 
@@ -722,25 +736,6 @@ var manifest = analyzeAssets("document");
 var result = applyPreset("2x2", doc.selection, "contain");
 ```
 
-### v2.4.1 (2026-01-23) - CODEBASE REFACTORING
-
-Major refactoring to reduce duplication and improve maintainability:
-
-**Phase 1: High-Impact Cleanup**
-- **New:** `tools/base.py` with `execute_jsx_tool()` helper - reduces ~10 lines boilerplate per tool
-- **Refactor:** `format_response()` now uses `_try_parse_json()` and `_unwrap_result()` helpers
-- **New:** Pytest markers `@pytest.mark.live` and `@pytest.mark.unit` in `conftest.py`
-
-**Phase 2: DRY Improvements**
-- **New:** `format_task_report()` function in `protocol.py` for shared TaskReport formatting
-- **Refactor:** Export logic in `documents.py` consolidated with config dict (4 branches → 2)
-- **New:** `templates.py` module with 15 ExtendScript templates using `string.Template`
-
-**Phase 3: Polish**
-- **Fix:** Type hints `str = None` → `Optional[str] = None` in `proxy_client.py`
-- **New:** `test_websocket_bridge.py` with tests for `RequestRegistry`
-
-**Impact:** ~150 lines of boilerplate eliminated, 15 tools now use single-line `execute_jsx_tool()` pattern.
 
 
 ### v2.3.7 (2026-01-23) - ES5 POLYFILLS & LIVING TEST
