@@ -6,6 +6,12 @@ import pytest
 from unittest.mock import AsyncMock, patch
 
 
+def pytest_configure(config):
+    """Register custom markers."""
+    config.addinivalue_line("markers", "live: requires running Illustrator (deselect with -m 'not live')")
+    config.addinivalue_line("markers", "unit: unit tests with mocks only")
+
+
 # Active tool modules (archived modules removed in v2.0)
 TOOL_MODULES = [
     'illustrator_mcp.tools.execute',

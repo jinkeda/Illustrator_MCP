@@ -222,6 +222,40 @@ async def execute_script_with_context(
     return response
 
 
+def _try_parse_json(value: str) -> Any:
+    """Attempt JSON parse, return original on failure."""
+    try:
+        return json.loads(value)
+    except json.JSONDecodeError:
+        return value
+
+
+def _unwrap_result(result: Any) -> Any:
+    """
+    Recursively unwrap nested success/result envelopes.
+    
+    Handles double-wrapped results like:
+    {success: true, result: "{\"success\": true, \"result\": ...}"}
+    """
+    if not isinstance(result, dict):
+        return result
+    
+    # Check for error in current level
+    if result.get("error"):
+        return result
+    if result.get("success") is False:
+        return result
+    
+    # Unwrap success envelope
+    if result.get("success") and "result" in result:
+        inner = result["result"]
+        # Parse if string, then recurse
+        parsed = _try_parse_json(inner) if isinstance(inner, str) else inner
+        return _unwrap_result(parsed)
+    
+    return result
+
+
 def format_response(response: dict[str, Any]) -> str:
     """
     Format the response from Illustrator for MCP output.
@@ -232,6 +266,7 @@ def format_response(response: dict[str, Any]) -> str:
     Returns:
         Formatted string for MCP tool response
     """
+    # Handle top-level errors
     if response.get("error"):
         error = response['error']
         # Make connection errors very prominent
@@ -239,31 +274,25 @@ def format_response(response: dict[str, Any]) -> str:
             return f"⚠️ {error}\n\n[STOP: Do not retry until connection is restored]"
         return f"Error: {error}"
 
+    # Get and unwrap result
     result = response.get("result", response)
-
-    # Handle nested result from ExtendScript
-    if isinstance(result, str):
-        try:
-            parsed = json.loads(result)
-            if isinstance(parsed, dict) and parsed.get("error"):
-                return f"Error: {parsed['error']}"
-            if isinstance(parsed, dict) and parsed.get("success") is False:
-                return f"Error: {parsed.get('error', 'Operation failed')}"
-            result = parsed
-        except json.JSONDecodeError:
-            # Not JSON - treat as raw string (common for simple ExtendScript returns)
-            logger.debug(f"Result is not JSON, treating as string: {result[:100]}")
     
-    # Handle double-wrapped result: {success: true, result: "{...}"}
-    # The proxy may wrap the script output in another success envelope
-    if isinstance(result, dict) and result.get("success") and "result" in result:
-        inner = result.get("result")
-        if isinstance(inner, str):
-            try:
-                result = json.loads(inner)
-            except json.JSONDecodeError:
-                pass  # Keep original result
+    # Parse string results
+    if isinstance(result, str):
+        result = _try_parse_json(result)
+    
+    # Unwrap nested envelopes
+    result = _unwrap_result(result)
+    
+    # Check for errors in unwrapped result
+    if isinstance(result, dict):
+        if result.get("error"):
+            return f"Error: {result['error']}"
+        if result.get("success") is False:
+            return f"Error: {result.get('error', 'Operation failed')}"
 
+    # Format output
     if isinstance(result, (dict, list)):
         return json.dumps(result, indent=2)
     return str(result)
+
