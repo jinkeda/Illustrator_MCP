@@ -12,7 +12,7 @@ from typing import List, Optional
 from pydantic import BaseModel, Field, ConfigDict
 from illustrator_mcp.shared import mcp
 from illustrator_mcp.proxy_client import execute_script_with_context, format_response
-from illustrator_mcp.protocol import TaskPayload, TaskReport
+from illustrator_mcp.protocol import TaskPayload, TaskReport, format_task_report
 from illustrator_mcp.libraries import inject_libraries
 
 # Set up logging for telemetry
@@ -257,36 +257,7 @@ JSON.stringify(report);
         try:
             report_data = json.loads(result_str)
             report = TaskReport.model_validate(report_data)
-            
-            # Build human-readable output
-            status = "✓" if report.ok else "✗"
-            output = f"{status} Task: {params.payload.task}\n"
-            output += f"  Timing: collect={report.timing.collect_ms:.0f}ms, "
-            output += f"compute={report.timing.compute_ms:.0f}ms, "
-            output += f"apply={report.timing.apply_ms:.0f}ms\n"
-            output += f"  Stats: {report.stats.itemsProcessed} processed, "
-            output += f"{report.stats.itemsModified} modified, "
-            output += f"{report.stats.itemsSkipped} skipped\n"
-            
-            if report.warnings:
-                output += f"  ⚠ Warnings ({len(report.warnings)}):\n"
-                for w in report.warnings:
-                    output += f"    [{w.stage}] {w.message}\n"
-            
-            if report.errors:
-                output += f"  ✗ Errors ({len(report.errors)}):\n"
-                for e in report.errors:
-                    loc = ""
-                    if e.itemRef:
-                        loc = f" at {e.itemRef.layerPath}[{e.itemRef.indexPath}]"
-                    output += f"    [{e.stage}] {e.code}: {e.message}{loc}\n"
-            
-            if report.trace:
-                output += f"  Trace:\n"
-                for t in report.trace:
-                    output += f"    {t}\n"
-            
-            return output
+            return format_task_report(report, params.payload.task)
             
         except (json.JSONDecodeError, Exception) as parse_error:
             # Fallback: return raw result if parsing fails

@@ -167,51 +167,41 @@ async def illustrator_save_document(params: SaveDocumentInput) -> str:
 async def illustrator_export_document(params: ExportDocumentInput) -> str:
     """Export the document to PNG, JPG, SVG, or PDF."""
     path = escape_path_for_jsx(params.file_path)
-    fmt = params.format.value.upper()
     scale = params.scale * 100
     
-    if params.format == ExportFormat.PNG:
-        script = f"""
-        (function() {{
-            var doc = app.activeDocument;
-            var file = new File("{path}");
-            var opts = new ExportOptionsPNG24();
+    # Config-driven export (consolidates 4 branches into 1)
+    export_configs = {
+        ExportFormat.PNG: {"options": "ExportOptionsPNG24", "type": "ExportType.PNG24", "scales": True},
+        ExportFormat.JPG: {"options": "ExportOptionsJPEG", "type": "ExportType.JPEG", "scales": True},
+        ExportFormat.SVG: {"options": "ExportOptionsSVG", "type": "ExportType.SVG", "scales": False},
+        ExportFormat.PDF: {"options": "PDFSaveOptions", "type": None, "scales": False},  # Uses saveAs
+    }
+    
+    config = export_configs[params.format]
+    fmt_name = params.format.value.upper()
+    
+    if config["type"]:  # Standard exportFile
+        scale_opts = f"""
             opts.horizontalScale = {scale};
-            opts.verticalScale = {scale};
-            doc.exportFile(file, ExportType.PNG24, opts);
-            return JSON.stringify({{success: true, path: "{path}", format: "PNG"}});
-        }})()
-        """
-    elif params.format == ExportFormat.JPG:
+            opts.verticalScale = {scale};""" if config["scales"] else ""
+        
         script = f"""
         (function() {{
             var doc = app.activeDocument;
             var file = new File("{path}");
-            var opts = new ExportOptionsJPEG();
-            opts.horizontalScale = {scale};
-            opts.verticalScale = {scale};
-            doc.exportFile(file, ExportType.JPEG, opts);
-            return JSON.stringify({{success: true, path: "{path}", format: "JPG"}});
+            var opts = new {config["options"]}();{scale_opts}
+            doc.exportFile(file, {config["type"]}, opts);
+            return JSON.stringify({{success: true, path: "{path}", format: "{fmt_name}"}});
         }})()
         """
-    elif params.format == ExportFormat.SVG:
+    else:  # PDF uses saveAs
         script = f"""
         (function() {{
             var doc = app.activeDocument;
             var file = new File("{path}");
-            var opts = new ExportOptionsSVG();
-            doc.exportFile(file, ExportType.SVG, opts);
-            return JSON.stringify({{success: true, path: "{path}", format: "SVG"}});
-        }})()
-        """
-    else:  # PDF
-        script = f"""
-        (function() {{
-            var doc = app.activeDocument;
-            var file = new File("{path}");
-            var opts = new PDFSaveOptions();
+            var opts = new {config["options"]}();
             doc.saveAs(file, opts);
-            return JSON.stringify({{success: true, path: "{path}", format: "PDF"}});
+            return JSON.stringify({{success: true, path: "{path}", format: "{fmt_name}"}});
         }})()
         """
 

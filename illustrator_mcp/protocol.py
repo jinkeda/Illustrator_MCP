@@ -354,3 +354,58 @@ class TaskPayload(BaseModel):
     )
     params: Dict[str, Any] = Field(default_factory=dict, description="Task parameters")
     options: TaskOptions = Field(default_factory=TaskOptions)
+
+
+# ==================== Output Formatting ====================
+
+def format_task_report(report: TaskReport, task_name: str) -> str:
+    """
+    Format a TaskReport as human-readable output.
+    
+    Provides consistent formatting for all Task Protocol tools (execute_task, query_items, etc.)
+    
+    Args:
+        report: The TaskReport to format
+        task_name: Name/description of the task for the header
+        
+    Returns:
+        Human-readable formatted string
+    """
+    status = "✓" if report.ok else "✗"
+    lines = [f"{status} Task: {task_name}"]
+    
+    # Timing
+    timing = report.timing
+    lines.append(f"  Timing: collect={timing.collect_ms:.0f}ms, "
+                 f"compute={timing.compute_ms:.0f}ms, "
+                 f"apply={timing.apply_ms:.0f}ms")
+    
+    # Stats
+    stats = report.stats
+    lines.append(f"  Stats: {stats.itemsProcessed} processed, "
+                 f"{stats.itemsModified} modified, "
+                 f"{stats.itemsSkipped} skipped")
+    
+    # Warnings
+    if report.warnings:
+        lines.append(f"  ⚠ Warnings ({len(report.warnings)}):")
+        for w in report.warnings:
+            lines.append(f"    [{w.stage}] {w.message}")
+    
+    # Errors
+    if report.errors:
+        lines.append(f"  ✗ Errors ({len(report.errors)}):")
+        for e in report.errors:
+            loc = ""
+            if e.itemRef:
+                loc = f" at {e.itemRef.locator.layerPath}[{e.itemRef.locator.indexPath}]"
+            lines.append(f"    [{e.stage}] {e.code}: {e.message}{loc}")
+    
+    # Trace
+    if report.trace:
+        lines.append("  Trace:")
+        for t in report.trace:
+            lines.append(f"    {t}")
+    
+    return "\n".join(lines)
+
