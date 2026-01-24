@@ -699,6 +699,11 @@ The Node.js `proxy-server` folder is kept for reference but is no longer used.
 ---
 
 ## Changelog
+### v2.4.4 (2026-01-24) - TOOLINPUTBASE MIGRATION
+- **Refactor:** All 10 Pydantic input models now inherit from `ToolInputBase`
+  - Removes ~30 lines of repeated `model_config = ConfigDict(str_strip_whitespace=True)`
+  - Affected: `documents.py` (7 models), `execute.py` (2 models), `query.py` (1 model)
+
 ### v2.4.3 (2026-01-24) - EDITABLE PDF IMPORT
 - **New:** `embed_editable` parameter in `illustrator_place_file` tool
   - Opens PDF as document, copies content, pastes as editable vectors
