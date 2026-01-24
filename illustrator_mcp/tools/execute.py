@@ -9,11 +9,12 @@ should be done via this tool rather than specialized atomic tools.
 import json
 import logging
 from typing import List, Optional
-from pydantic import BaseModel, Field, ConfigDict
+from pydantic import Field
 from illustrator_mcp.shared import mcp
 from illustrator_mcp.proxy_client import execute_script_with_context, format_response
 from illustrator_mcp.protocol import TaskPayload, TaskReport, format_task_report
 from illustrator_mcp.libraries import inject_libraries
+from illustrator_mcp.tools.base import ToolInputBase
 
 # Set up logging for telemetry
 logger = logging.getLogger("illustrator_mcp")
@@ -22,9 +23,8 @@ logger = logging.getLogger("illustrator_mcp")
 
 
 
-class ExecuteScriptInput(BaseModel):
+class ExecuteScriptInput(ToolInputBase):
     """Input for executing raw JavaScript in Illustrator."""
-    model_config = ConfigDict(str_strip_whitespace=True)
     
     script: str = Field(
         ...,
@@ -147,9 +147,8 @@ async def illustrator_execute_script(params: ExecuteScriptInput) -> str:
 # ==================== Task Protocol Tool ====================
 
 
-class ExecuteTaskInput(BaseModel):
+class ExecuteTaskInput(ToolInputBase):
     """Input for executing a structured task (Task Protocol v2.1)."""
-    model_config = ConfigDict(str_strip_whitespace=True)
     
     payload: TaskPayload = Field(..., description="Task payload with targets, params, and options")
     

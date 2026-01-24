@@ -7,14 +7,15 @@ for more structured, observable, and debuggable operations.
 
 import json
 from typing import Dict, Any, List
-from pydantic import BaseModel, Field, ConfigDict
+from pydantic import Field
 
 from illustrator_mcp.shared import mcp
 from illustrator_mcp.proxy_client import execute_script_with_context, format_response
 from illustrator_mcp.libraries import inject_libraries
+from illustrator_mcp.tools.base import ToolInputBase
 
 
-class QueryItemsInput(BaseModel):
+class QueryItemsInput(ToolInputBase):
     """Input for querying items using declarative target selector.
     
     The targets parameter accepts a Task Protocol target selector dict:
@@ -31,7 +32,6 @@ class QueryItemsInput(BaseModel):
     
     Example payloads from living_test.md can be used directly.
     """
-    model_config = ConfigDict(str_strip_whitespace=True)
 
     targets: Dict[str, Any] = Field(
         default={"type": "selection"},

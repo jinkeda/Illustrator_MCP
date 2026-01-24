@@ -7,10 +7,10 @@ These tools use execute_script internally to run JavaScript in Illustrator.
 from typing import Optional
 from enum import Enum
 
-from pydantic import BaseModel, Field, ConfigDict
+from pydantic import Field
 
 from illustrator_mcp.shared import mcp
-from illustrator_mcp.tools.base import execute_jsx_tool
+from illustrator_mcp.tools.base import execute_jsx_tool, ToolInputBase
 from illustrator_mcp.utils import escape_path_for_jsx
 from illustrator_mcp import templates
 
@@ -23,40 +23,34 @@ class ExportFormat(str, Enum):
     PDF = "pdf"
 
 
-# Pydantic models
-class CreateDocumentInput(BaseModel):
+# Pydantic models - inherit from ToolInputBase for shared config
+class CreateDocumentInput(ToolInputBase):
     """Input for creating a new document."""
-    model_config = ConfigDict(str_strip_whitespace=True)
-    
     width: float = Field(default=800, description="Width in points", ge=1, le=16383)
     height: float = Field(default=600, description="Height in points", ge=1, le=16383)
     name: Optional[str] = Field(default=None, description="Document name", max_length=255)
     color_mode: str = Field(default="RGB", description="RGB or CMYK")
 
 
-class OpenDocumentInput(BaseModel):
+class OpenDocumentInput(ToolInputBase):
     """Input for opening a document."""
-    model_config = ConfigDict(str_strip_whitespace=True)
     file_path: str = Field(..., description="Full path to the file", min_length=1)
 
 
-class SaveDocumentInput(BaseModel):
+class SaveDocumentInput(ToolInputBase):
     """Input for saving a document."""
-    model_config = ConfigDict(str_strip_whitespace=True)
     file_path: Optional[str] = Field(default=None, description="Path for Save As")
 
 
-class ExportDocumentInput(BaseModel):
+class ExportDocumentInput(ToolInputBase):
     """Input for exporting a document."""
-    model_config = ConfigDict(str_strip_whitespace=True)
     file_path: str = Field(..., description="Export path with extension", min_length=1)
     format: ExportFormat = Field(default=ExportFormat.PNG, description="Export format")
     scale: float = Field(default=1.0, description="Scale factor", ge=0.1, le=10.0)
 
 
-class CloseDocumentInput(BaseModel):
+class CloseDocumentInput(ToolInputBase):
     """Input for closing a document."""
-    model_config = ConfigDict(str_strip_whitespace=True)
     save_before_close: bool = Field(default=False, description="Save before closing")
 
 
@@ -327,9 +321,8 @@ async def illustrator_close_document(params: CloseDocumentInput) -> str:
 
 
 # Pydantic model for import
-class ImportImageInput(BaseModel):
+class ImportImageInput(ToolInputBase):
     """Input for importing an image."""
-    model_config = ConfigDict(str_strip_whitespace=True)
     file_path: str = Field(..., description="Full path to the image file (PNG, JPG, etc.)", min_length=1)
     x: float = Field(default=0, description="X position to place the image")
     y: float = Field(default=0, description="Y position to place the image")
@@ -394,9 +387,8 @@ async def illustrator_redo() -> str:
 
 
 # Pydantic models for place/embed
-class PlaceFileInput(BaseModel):
+class PlaceFileInput(ToolInputBase):
     """Input for placing a file."""
-    model_config = ConfigDict(str_strip_whitespace=True)
     file_path: str = Field(..., description="Full path to file (EPS, AI, PDF, PNG, etc.)", min_length=1)
     x: float = Field(default=0, description="X position")
     y: float = Field(default=0, description="Y position")
