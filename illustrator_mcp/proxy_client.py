@@ -189,13 +189,7 @@ async def execute_script_with_context(
         trace_id=tid
     )
     
-    # Use centralized connection check
-    is_connected, error_response = check_connection_or_error(config.ws_port, command_type)
-    if not is_connected:
-        logger.warning(f"[{tid}] {command_type}: DISCONNECTED")
-        error_response["trace_id"] = tid
-        return error_response
-
+    # Note: Connection check is done in _execute_via_bridge, avoiding duplication
     start_time = time.time()
     logger.info(f"[{tid}] {command_type}: starting")
     

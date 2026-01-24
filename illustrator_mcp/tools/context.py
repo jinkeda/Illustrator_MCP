@@ -5,7 +5,7 @@ These tools help agents understand the current document state before writing scr
 Following the blender-mcp pattern (like get_scene_info).
 """
 
-from pydantic import BaseModel, Field, ConfigDict
+from pathlib import Path
 
 from illustrator_mcp.shared import mcp
 from illustrator_mcp.tools.base import execute_jsx_tool
@@ -258,9 +258,6 @@ async def illustrator_get_app_info() -> str:
         tool_name="illustrator_get_app_info",
         params={}
     )
-
-
-from pathlib import Path
 
 
 def _get_scripting_reference() -> str:
