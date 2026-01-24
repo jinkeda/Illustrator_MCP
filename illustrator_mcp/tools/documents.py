@@ -69,26 +69,96 @@ async def _place_item_impl(
     linked: bool,
     command_type: str,
     tool_name: str,
-    error_prefix: str = "File"
+    error_prefix: str = "File",
+    embed_editable: bool = False
 ) -> str:
-    """Shared implementation for import_image and place_file operations."""
-    path = escape_path_for_jsx(file_path)
-    embed_line = "" if linked else "placed.embed();"
+    """Shared implementation for import_image and place_file operations.
     
-    script = templates.PLACE_ITEM.substitute(
-        path=path,
-        x=x,
-        neg_y=-y,
-        y=y,
-        linked=str(linked).lower(),
-        embed_line=embed_line,
-        error_prefix=error_prefix
-    )
+    Args:
+        embed_editable: If True, opens the file (PDF) and copies content as editable vectors
+                       instead of placing as a linked/embedded item.
+    """
+    path = escape_path_for_jsx(file_path)
+    
+    if embed_editable:
+        # Open/copy/paste workflow for editable content
+        script = f'''
+(function() {{
+    var targetDoc = app.activeDocument;
+    var targetDocName = targetDoc.name;
+    
+    try {{
+        // Open PDF as new document
+        var pdfFile = new File("{path}");
+        var pdfDoc = app.open(pdfFile);
+        
+        // Select all and copy
+        pdfDoc.selectObjectsOnActiveArtboard();
+        app.executeMenuCommand('copy');
+        
+        // Close PDF without saving
+        pdfDoc.close(SaveOptions.DONOTSAVECHANGES);
+        
+        // Find and activate target document
+        for (var d = 0; d < app.documents.length; d++) {{
+            if (app.documents[d].name === targetDocName) {{
+                app.activeDocument = app.documents[d];
+                targetDoc = app.documents[d];
+                break;
+            }}
+        }}
+        
+        // Paste
+        app.executeMenuCommand('paste');
+        
+        // Get pasted selection and group
+        var sel = targetDoc.selection;
+        if (sel && sel.length > 0) {{
+            var group;
+            if (sel.length > 1) {{
+                app.executeMenuCommand('group');
+                group = targetDoc.selection[0];
+            }} else {{
+                group = sel[0];
+            }}
+            
+            // Position
+            group.position = [{x}, {-y}];
+            
+            var bounds = group.geometricBounds;
+            targetDoc.selection = null;
+            
+            return JSON.stringify({{
+                success: true,
+                type: "editable",
+                position: [{x}, {y}],
+                width: bounds[2] - bounds[0],
+                height: bounds[1] - bounds[3]
+            }});
+        }}
+        throw new Error("No content pasted");
+    }} catch(e) {{
+        return JSON.stringify({{success: false, error: e.message}});
+    }}
+}})();
+'''
+    else:
+        embed_line = "" if linked else "placed.embed();"
+        script = templates.PLACE_ITEM.substitute(
+            path=path,
+            x=x,
+            neg_y=-y,
+            y=y,
+            linked=str(linked).lower(),
+            embed_line=embed_line,
+            error_prefix=error_prefix
+        )
+    
     return await execute_jsx_tool(
         script=script,
         command_type=command_type,
         tool_name=tool_name,
-        params={"file_path": file_path, "x": x, "y": y, "linked": linked}
+        params={"file_path": file_path, "x": x, "y": y, "linked": linked, "embed_editable": embed_editable}
     )
 
 
@@ -331,6 +401,7 @@ class PlaceFileInput(BaseModel):
     x: float = Field(default=0, description="X position")
     y: float = Field(default=0, description="Y position")
     linked: bool = Field(default=True, description="Keep linked (True) or embed immediately (False)")
+    embed_editable: bool = Field(default=False, description="Open PDF and paste as editable vectors (slower but fully editable)")
 
 
 @mcp.tool(
@@ -343,6 +414,7 @@ async def illustrator_place_file(params: PlaceFileInput) -> str:
     Workflow:
     - linked=True (drafting): File updates automatically when source changes
     - linked=False (final): File is embedded and fully editable
+    - embed_editable=True: Opens PDF, copies content as editable vectors (slower)
     
     Use linked=True during iterative work (e.g., updating MATLAB plots),
     then embed when ready for submission.
@@ -354,7 +426,8 @@ async def illustrator_place_file(params: PlaceFileInput) -> str:
         linked=params.linked,
         command_type="place_file",
         tool_name="illustrator_place_file",
-        error_prefix="File"
+        error_prefix="File",
+        embed_editable=params.embed_editable
     )
 
 

@@ -699,6 +699,12 @@ The Node.js `proxy-server` folder is kept for reference but is no longer used.
 ---
 
 ## Changelog
+### v2.4.3 (2026-01-24) - EDITABLE PDF IMPORT
+- **New:** `embed_editable` parameter in `illustrator_place_file` tool
+  - Opens PDF as document, copies content, pastes as editable vectors
+  - Slower than linked placement but produces fully editable GroupItems
+  - Usage: `place_file(file_path, x, y, embed_editable=True)`
+
 ### v2.4.2 (2026-01-23) - TEMPLATE CONSOLIDATION
 - **Refactor:** Merged `IMPORT_IMAGE` and `PLACE_FILE` templates into single `PLACE_ITEM` template
 - **New:** `_place_item_impl()` helper function for import/place operations (~40 lines reduced)
