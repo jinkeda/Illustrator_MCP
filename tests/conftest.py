@@ -32,8 +32,7 @@ def mock_execute_script():
     for module in TOOL_MODULES:
         patches.append(patch(f'{module}.execute_script', mock))
     
-    # Also patch execute_script_with_context in shapes module where it's used
-    patches.append(patch('illustrator_mcp.tools.shapes.execute_script_with_context', mock))
+
 
     for p in patches:
         p.start()

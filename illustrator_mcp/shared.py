@@ -50,20 +50,25 @@ class ExecutionResponse(TypedDict, total=False):
 
 def create_connection_error(port: int, context: str = "") -> ExecutionResponse:
     """
-    Create a standardized connection error response.
+    Create a standardized connection error response with actionable suggestions.
     
     Args:
         port: The WebSocket port number.
         context: Optional context string (e.g., command type).
         
     Returns:
-        ExecutionResponse with error message.
+        ExecutionResponse with error message and quick fixes.
     """
     prefix = f" [{context}]" if context else ""
     return {
-        "error": f"ILLUSTRATOR_DISCONNECTED{prefix}: CEP panel is not connected. "
-                 "Please open Illustrator and ensure the MCP Control panel shows 'Connected'. "
-                 f"(WebSocket server running on port {port})"
+        "error": (
+            f"ILLUSTRATOR_DISCONNECTED{prefix}: CEP panel is not connected.\n\n"
+            "Quick Fixes:\n"
+            "1. Open Adobe Illustrator if not running\n"
+            "2. Window > Extensions > MCP Control\n"
+            "3. Click 'Connect' in the panel\n\n"
+            f"(WebSocket server running on port {port})"
+        )
     }
 
 

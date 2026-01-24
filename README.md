@@ -699,6 +699,14 @@ The Node.js `proxy-server` folder is kept for reference but is no longer used.
 ---
 
 ## Changelog
+
+### v2.5.0 (2026-01-24) - CODE QUALITY REFACTORING
+- **New:** `response_models.py` - Pydantic models for ExtendScript responses (DocumentInfo, OperationResult, ExportResult, PlaceItemResult)
+- **Improved:** Error messages now include actionable quick fixes for connection issues
+- **Refactor:** Consolidated inline scripts to templates in `documents.py` (export, get_document_info)
+- **Cleanup:** Removed dead test files for archived tools (test_shapes, test_pathfinder, test_effects, test_objects, test_selection)
+- **Fixed:** `conftest.py` no longer references non-existent shapes module
+
 ### v2.4.4 (2026-01-24) - TOOLINPUTBASE MIGRATION
 - **Refactor:** All 10 Pydantic input models now inherit from `ToolInputBase`
   - Removes ~30 lines of repeated `model_config = ConfigDict(str_strip_whitespace=True)`

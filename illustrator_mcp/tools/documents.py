@@ -223,42 +223,31 @@ async def illustrator_export_document(params: ExportDocumentInput) -> str:
     """Export the document to PNG, JPG, SVG, or PDF."""
     path = escape_path_for_jsx(params.file_path)
     scale = params.scale * 100
+    fmt_name = params.format.value.upper()
     
-    # Config-driven export (consolidates 4 branches into 1)
+    # Config-driven export
     export_configs = {
         ExportFormat.PNG: {"options": "ExportOptionsPNG24", "type": "ExportType.PNG24", "scales": True},
         ExportFormat.JPG: {"options": "ExportOptionsJPEG", "type": "ExportType.JPEG", "scales": True},
         ExportFormat.SVG: {"options": "ExportOptionsSVG", "type": "ExportType.SVG", "scales": False},
-        ExportFormat.PDF: {"options": "PDFSaveOptions", "type": None, "scales": False},  # Uses saveAs
+        ExportFormat.PDF: {"options": "PDFSaveOptions", "type": None, "scales": False},
     }
     
     config = export_configs[params.format]
-    fmt_name = params.format.value.upper()
     
-    if config["type"]:  # Standard exportFile
+    if config["type"]:  # Standard exportFile (PNG, JPG, SVG)
         scale_opts = f"""
             opts.horizontalScale = {scale};
             opts.verticalScale = {scale};""" if config["scales"] else ""
-        
-        script = f"""
-        (function() {{
-            var doc = app.activeDocument;
-            var file = new File("{path}");
-            var opts = new {config["options"]}();{scale_opts}
-            doc.exportFile(file, {config["type"]}, opts);
-            return JSON.stringify({{success: true, path: "{path}", format: "{fmt_name}"}});
-        }})()
-        """
+        script = templates.EXPORT_FILE.substitute(
+            path=path,
+            options_class=config["options"],
+            scale_opts=scale_opts,
+            export_type=config["type"],
+            format_name=fmt_name
+        )
     else:  # PDF uses saveAs
-        script = f"""
-        (function() {{
-            var doc = app.activeDocument;
-            var file = new File("{path}");
-            var opts = new {config["options"]}();
-            doc.saveAs(file, opts);
-            return JSON.stringify({{success: true, path: "{path}", format: "{fmt_name}"}});
-        }})()
-        """
+        script = templates.EXPORT_PDF.substitute(path=path)
 
     return await execute_jsx_tool(
         script=script,
@@ -274,24 +263,8 @@ async def illustrator_export_document(params: ExportDocumentInput) -> str:
 )
 async def illustrator_get_document_info() -> str:
     """Get information about the active document."""
-    script = """
-    (function() {
-        if (app.documents.length === 0) {
-            throw new Error("No document is open");
-        }
-        var doc = app.activeDocument;
-        return JSON.stringify({
-            name: doc.name,
-            width: doc.width,
-            height: doc.height,
-            colorMode: doc.documentColorSpace == DocumentColorSpace.CMYK ? "CMYK" : "RGB",
-            layerCount: doc.layers.length,
-            saved: doc.saved
-        });
-    })()
-    """
     return await execute_jsx_tool(
-        script=script,
+        script=templates.GET_DOCUMENT_INFO,
         command_type="get_document_info",
         tool_name="illustrator_get_document_info",
         params={}
