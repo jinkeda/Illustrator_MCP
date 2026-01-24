@@ -123,7 +123,7 @@ async def server_lifespan(server: FastMCP) -> AsyncIterator[Dict[str, Any]]:
         bridge = get_runtime().get_bridge()
         
         # Verify bridge started successfully
-        if bridge._thread and bridge._thread.is_alive():
+        if bridge.is_running():
             logger.info(f"✓ WebSocket bridge started on port {config.ws_port}")
             logger.info(f"  CEP panel should connect to: ws://localhost:{config.ws_port}")
         else:

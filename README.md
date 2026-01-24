@@ -700,6 +700,14 @@ The Node.js `proxy-server` folder is kept for reference but is no longer used.
 
 ## Changelog
 
+### v2.6.0 (2026-01-24) - TEMPLATE CONSOLIDATION
+- **Refactor:** Moved 5 more inline scripts to templates:
+  - `close_document`, `embed_placed_items`, `update_linked_items` in `documents.py`
+  - `get_document_structure`, `get_selection_info` in `context.py`
+- **Improved:** Test fixtures now use `ExitStack` for cleaner patch management
+- **New:** `is_running()` method on `WebSocketBridge` for better encapsulation
+- **Refactor:** `shared.py` now uses `bridge.is_running()` instead of accessing `_thread` directly
+
 ### v2.5.0 (2026-01-24) - CODE QUALITY REFACTORING
 - **New:** `response_models.py` - Pydantic models for ExtendScript responses (DocumentInfo, OperationResult, ExportResult, PlaceItemResult)
 - **Improved:** Error messages now include actionable quick fixes for connection issues

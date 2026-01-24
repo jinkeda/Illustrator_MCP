@@ -278,13 +278,7 @@ async def illustrator_get_document_info() -> str:
 async def illustrator_close_document(params: CloseDocumentInput) -> str:
     """Close the active document."""
     save_option = "SaveOptions.SAVECHANGES" if params.save_before_close else "SaveOptions.DONOTSAVECHANGES"
-    script = f"""
-    (function() {{
-        var doc = app.activeDocument;
-        doc.close({save_option});
-        return JSON.stringify({{success: true, message: "Document closed"}});
-    }})()
-    """
+    script = templates.CLOSE_DOCUMENT.substitute(save_option=save_option)
     return await execute_jsx_tool(
         script=script,
         command_type="close_document",
@@ -407,22 +401,8 @@ async def illustrator_embed_placed_items() -> str:
     Use when finalizing a figure for submission.
     After embedding, all elements become editable paths and text.
     """
-    script = """
-    (function() {
-        var doc = app.activeDocument;
-        var embedded = 0;
-        // Iterate backwards since embedding changes the collection
-        for (var i = doc.placedItems.length - 1; i >= 0; i--) {
-            try {
-                doc.placedItems[i].embed();
-                embedded++;
-            } catch(e) {}
-        }
-        return JSON.stringify({success: true, embeddedCount: embedded});
-    })()
-    """
     return await execute_jsx_tool(
-        script=script,
+        script=templates.EMBED_PLACED_ITEMS,
         command_type="embed_placed_items",
         tool_name="illustrator_embed_placed_items",
         params={}
@@ -438,25 +418,8 @@ async def illustrator_update_linked_items() -> str:
     
     Use when source files (e.g., MATLAB exports) have been regenerated.
     """
-    script = """
-    (function() {
-        var doc = app.activeDocument;
-        var updated = 0;
-        for (var i = 0; i < doc.placedItems.length; i++) {
-            try {
-                // Relink to same file forces update
-                var file = doc.placedItems[i].file;
-                if (file && file.exists) {
-                    doc.placedItems[i].relink(file);
-                    updated++;
-                }
-            } catch(e) {}
-        }
-        return JSON.stringify({success: true, updatedCount: updated});
-    })()
-    """
     return await execute_jsx_tool(
-        script=script,
+        script=templates.UPDATE_LINKED_ITEMS,
         command_type="update_linked_items",
         tool_name="illustrator_update_linked_items",
         params={}

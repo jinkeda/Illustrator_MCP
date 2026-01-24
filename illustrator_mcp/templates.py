@@ -143,6 +143,161 @@ GET_APP_INFO = """
 """
 
 
+# ==================== Context/Inspection ====================
+
+GET_DOCUMENT_STRUCTURE = """
+(function() {
+    var doc = app.activeDocument;
+    
+    function getItemInfo(item, maxDepth, currentDepth) {
+        if (currentDepth > maxDepth) return null;
+        
+        var info = {
+            name: item.name || "(unnamed)",
+            type: item.typename,
+            position: item.position ? [item.position[0], item.position[1]] : null,
+            bounds: item.geometricBounds ? {
+                left: item.geometricBounds[0],
+                top: item.geometricBounds[1],
+                right: item.geometricBounds[2],
+                bottom: item.geometricBounds[3]
+            } : null
+        };
+        
+        if (item.typename === "PathItem") {
+            info.filled = item.filled;
+            info.stroked = item.stroked;
+        }
+        
+        if (item.typename === "TextFrame") {
+            info.contents = item.contents.substring(0, 50);
+        }
+        
+        return info;
+    }
+    
+    function getLayerInfo(layer, maxItems) {
+        var layerInfo = {
+            name: layer.name,
+            visible: layer.visible,
+            locked: layer.locked,
+            itemCount: layer.pageItems.length,
+            items: []
+        };
+        
+        var itemLimit = Math.min(layer.pageItems.length, maxItems);
+        for (var i = 0; i < itemLimit; i++) {
+            var itemInfo = getItemInfo(layer.pageItems[i], 2, 0);
+            if (itemInfo) layerInfo.items.push(itemInfo);
+        }
+        
+        if (layer.pageItems.length > maxItems) {
+            layerInfo.truncated = true;
+            layerInfo.totalItems = layer.pageItems.length;
+        }
+        
+        layerInfo.sublayers = [];
+        for (var j = 0; j < layer.layers.length; j++) {
+            layerInfo.sublayers.push({
+                name: layer.layers[j].name,
+                visible: layer.layers[j].visible,
+                locked: layer.layers[j].locked
+            });
+        }
+        
+        return layerInfo;
+    }
+    
+    var result = {
+        document: {
+            name: doc.name,
+            width: doc.width,
+            height: doc.height,
+            colorMode: doc.documentColorSpace.toString(),
+            artboardCount: doc.artboards.length,
+            artboards: []
+        },
+        layers: []
+    };
+    
+    for (var a = 0; a < doc.artboards.length; a++) {
+        var ab = doc.artboards[a];
+        result.document.artboards.push({
+            name: ab.name,
+            bounds: ab.artboardRect
+        });
+    }
+    
+    var layerLimit = Math.min(doc.layers.length, 20);
+    for (var i = 0; i < layerLimit; i++) {
+        result.layers.push(getLayerInfo(doc.layers[i], 50));
+    }
+    
+    if (doc.layers.length > 20) {
+        result.layersTruncated = true;
+        result.totalLayers = doc.layers.length;
+    }
+    
+    return JSON.stringify(result);
+})()
+"""
+
+
+GET_SELECTION_INFO = """
+(function() {
+    var doc = app.activeDocument;
+    var sel = doc.selection;
+    
+    if (!sel || sel.length === 0) {
+        return JSON.stringify({
+            selected: false,
+            count: 0,
+            items: []
+        });
+    }
+    
+    var items = [];
+    var limit = Math.min(sel.length, 50);
+    
+    for (var i = 0; i < limit; i++) {
+        var item = sel[i];
+        var info = {
+            name: item.name || "(unnamed)",
+            type: item.typename,
+            position: item.position ? [item.position[0], item.position[1]] : null,
+            bounds: item.geometricBounds ? {
+                left: item.geometricBounds[0],
+                top: item.geometricBounds[1],
+                right: item.geometricBounds[2],
+                bottom: item.geometricBounds[3]
+            } : null
+        };
+        
+        if (item.typename === "PathItem") {
+            info.filled = item.filled;
+            info.stroked = item.stroked;
+            if (item.filled && item.fillColor) {
+                info.fillType = item.fillColor.typename;
+            }
+        }
+        
+        if (item.typename === "TextFrame") {
+            info.contents = item.contents.substring(0, 100);
+        }
+        
+        items.push(info);
+    }
+    
+    return JSON.stringify({
+        selected: true,
+        count: sel.length,
+        items: items,
+        truncated: sel.length > 50
+    });
+})()
+"""
+
+
 # ==================== Import/Place ====================
 
 # Single template for both import_image and place_file (they're 95% identical)

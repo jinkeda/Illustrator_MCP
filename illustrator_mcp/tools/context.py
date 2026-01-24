@@ -2,7 +2,6 @@
 Context and state inspection tools for Adobe Illustrator.
 
 These tools help agents understand the current document state before writing scripts.
-Following the blender-mcp pattern (like get_scene_info).
 """
 
 from pathlib import Path
@@ -38,111 +37,8 @@ async def illustrator_get_document_structure() -> str:
     
     Use this before writing scripts that modify existing objects.
     """
-    script = """
-    (function() {
-        var doc = app.activeDocument;
-        
-        function getItemInfo(item, maxDepth, currentDepth) {
-            if (currentDepth > maxDepth) return null;
-            
-            var info = {
-                name: item.name || "(unnamed)",
-                type: item.typename,
-                position: item.position ? [item.position[0], item.position[1]] : null,
-                bounds: item.geometricBounds ? {
-                    left: item.geometricBounds[0],
-                    top: item.geometricBounds[1],
-                    right: item.geometricBounds[2],
-                    bottom: item.geometricBounds[3]
-                } : null
-            };
-            
-            // Get fill/stroke for path items
-            if (item.typename === "PathItem") {
-                info.filled = item.filled;
-                info.stroked = item.stroked;
-            }
-            
-            // Get text content for text frames
-            if (item.typename === "TextFrame") {
-                info.contents = item.contents.substring(0, 50);
-            }
-            
-            return info;
-        }
-        
-        function getLayerInfo(layer, maxItems) {
-            var layerInfo = {
-                name: layer.name,
-                visible: layer.visible,
-                locked: layer.locked,
-                itemCount: layer.pageItems.length,
-                items: []
-            };
-            
-            // Limit items per layer to avoid huge responses
-            var itemLimit = Math.min(layer.pageItems.length, maxItems);
-            for (var i = 0; i < itemLimit; i++) {
-                var itemInfo = getItemInfo(layer.pageItems[i], 2, 0);
-                if (itemInfo) layerInfo.items.push(itemInfo);
-            }
-            
-            if (layer.pageItems.length > maxItems) {
-                layerInfo.truncated = true;
-                layerInfo.totalItems = layer.pageItems.length;
-            }
-            
-            // Get sublayers
-            layerInfo.sublayers = [];
-            for (var j = 0; j < layer.layers.length; j++) {
-                layerInfo.sublayers.push({
-                    name: layer.layers[j].name,
-                    visible: layer.layers[j].visible,
-                    locked: layer.layers[j].locked
-                });
-            }
-            
-            return layerInfo;
-        }
-        
-        var result = {
-            document: {
-                name: doc.name,
-                width: doc.width,
-                height: doc.height,
-                colorMode: doc.documentColorSpace.toString(),
-                artboardCount: doc.artboards.length,
-                artboards: []
-            },
-            layers: []
-        };
-        
-        // Get artboards
-        for (var a = 0; a < doc.artboards.length; a++) {
-            var ab = doc.artboards[a];
-            result.document.artboards.push({
-                name: ab.name,
-                bounds: ab.artboardRect
-            });
-        }
-        
-        // Get layers (limit to 20, 50 items each)
-        var layerLimit = Math.min(doc.layers.length, 20);
-        for (var i = 0; i < layerLimit; i++) {
-            result.layers.push(getLayerInfo(doc.layers[i], 50));
-        }
-        
-        if (doc.layers.length > 20) {
-            result.layersTruncated = true;
-            result.totalLayers = doc.layers.length;
-        }
-        
-        return JSON.stringify(result);
-    })()
-    """
-    
     return await execute_jsx_tool(
-        script=script,
+        script=templates.GET_DOCUMENT_STRUCTURE,
         command_type="get_document_structure",
         tool_name="illustrator_get_document_structure",
         params={}
@@ -169,62 +65,8 @@ async def illustrator_get_selection_info() -> str:
         - Fill/stroke info for paths
         - Text contents for text frames
     """
-    script = """
-    (function() {
-        var doc = app.activeDocument;
-        var sel = doc.selection;
-        
-        if (!sel || sel.length === 0) {
-            return JSON.stringify({
-                selected: false,
-                count: 0,
-                items: []
-            });
-        }
-        
-        var items = [];
-        var limit = Math.min(sel.length, 50);
-        
-        for (var i = 0; i < limit; i++) {
-            var item = sel[i];
-            var info = {
-                name: item.name || "(unnamed)",
-                type: item.typename,
-                position: item.position ? [item.position[0], item.position[1]] : null,
-                bounds: item.geometricBounds ? {
-                    left: item.geometricBounds[0],
-                    top: item.geometricBounds[1],
-                    right: item.geometricBounds[2],
-                    bottom: item.geometricBounds[3]
-                } : null
-            };
-            
-            if (item.typename === "PathItem") {
-                info.filled = item.filled;
-                info.stroked = item.stroked;
-                if (item.filled && item.fillColor) {
-                    info.fillType = item.fillColor.typename;
-                }
-            }
-            
-            if (item.typename === "TextFrame") {
-                info.contents = item.contents.substring(0, 100);
-            }
-            
-            items.push(info);
-        }
-        
-        return JSON.stringify({
-            selected: true,
-            count: sel.length,
-            items: items,
-            truncated: sel.length > 50
-        });
-    })()
-    """
-    
     return await execute_jsx_tool(
-        script=script,
+        script=templates.GET_SELECTION_INFO,
         command_type="get_selection_info",
         tool_name="illustrator_get_selection_info",
         params={}

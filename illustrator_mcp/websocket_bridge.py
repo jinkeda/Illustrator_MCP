@@ -140,6 +140,10 @@ class WebSocketBridge:
         
         self.state = ConnectionState.DISCONNECTED
 
+    def is_running(self) -> bool:
+        """Check if the bridge thread is alive and running."""
+        return self._thread is not None and self._thread.is_alive()
+
     def is_connected(self) -> bool:
         """Check if Illustrator CEP panel is connected."""
         return self.server.is_connected()
