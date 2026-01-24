@@ -24,6 +24,7 @@ from illustrator_mcp.shared import (
     ExecutionResponse, 
     check_connection_or_error,
 )
+from illustrator_mcp.log_config import log_command
 
 # Configure logging
 logger = logging.getLogger(__name__)
@@ -191,7 +192,7 @@ async def execute_script_with_context(
     
     # Note: Connection check is done in _execute_via_bridge, avoiding duplication
     start_time = time.time()
-    logger.info(f"[{tid}] {command_type}: starting")
+    log_command(logger, tid, command_type, "starting")
     
     # Execute via centralized helper
     response = await _execute_via_bridge(
@@ -201,17 +202,17 @@ async def execute_script_with_context(
         trace_id=tid
     )
     
-    duration = time.time() - start_time
+    duration_ms = (time.time() - start_time) * 1000
     
     # Log success/error with timing
     if response.get("error"):
-        logger.warning(f"[{tid}] {command_type}: error in {duration:.3f}s")
+        log_command(logger, tid, command_type, "error", duration_ms, logging.WARNING)
     else:
-        logger.info(f"[{tid}] {command_type}: completed in {duration:.3f}s")
+        log_command(logger, tid, command_type, "completed", duration_ms)
     
     # Add trace_id and elapsed_ms to response for tracing
     response["trace_id"] = tid
-    response["elapsed_ms"] = duration * 1000
+    response["elapsed_ms"] = duration_ms
     
     return response
 
