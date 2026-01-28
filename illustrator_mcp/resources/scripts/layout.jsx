@@ -1,8 +1,27 @@
 /**
  * layout.jsx - Grid and layout engine
  * Part of Illustrator MCP Standard Library
- * Dependencies: geometry.jsx
+ * 
+ * @requires geometry.jsx
+ * @optional selection.jsx
  */
+
+// Dependency metadata for programmatic checking
+var LAYOUT_DEPENDENCIES = {
+    required: ['geometry'],
+    optional: ['selection']
+};
+
+// Check required dependencies
+(function checkDependencies() {
+    if (typeof getVisibleInfo === 'undefined') {
+        throw new Error('layout.jsx requires geometry.jsx to be loaded first. ' +
+            'Ensure geometry.jsx is executed before layout.jsx.');
+    }
+    if (typeof mmToPoints === 'undefined') {
+        throw new Error('layout.jsx requires mmToPoints from geometry.jsx.');
+    }
+})();
 
 /**
  * Arrange items into a grid.
@@ -14,9 +33,6 @@
  */
 function arrangeInGrid(items, columns, spacingMm) {
     if (!items || items.length === 0) return;
-    if (typeof getVisibleInfo === 'undefined') {
-        throw new Error("Dependency missing: geometry.jsx is required for layout.jsx");
-    }
 
     var spacingPt = mmToPoints(spacingMm);
     var startX = null;

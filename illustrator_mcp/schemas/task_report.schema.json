@@ -1,0 +1,409 @@
+{
+  "$defs": {
+    "IdSource": {
+      "description": "Source of item identity.",
+      "enum": [
+        "none",
+        "note",
+        "name"
+      ],
+      "title": "IdSource",
+      "type": "string"
+    },
+    "Idempotency": {
+      "description": "Idempotency classification for operations.",
+      "enum": [
+        "safe",
+        "unknown",
+        "unsafe"
+      ],
+      "title": "Idempotency",
+      "type": "string"
+    },
+    "ItemIdentity": {
+      "description": "Stable identity (mutates document when assigned).\nUse for operations that need to re-find items across sessions.",
+      "properties": {
+        "itemId": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Unique ID (e.g., 'mcp_1705834200_42')",
+          "title": "Itemid"
+        },
+        "idSource": {
+          "$ref": "#/$defs/IdSource",
+          "default": "none",
+          "description": "Where the ID is stored"
+        }
+      },
+      "title": "ItemIdentity",
+      "type": "object"
+    },
+    "ItemLocator": {
+      "description": "Positional locator (volatile - changes when structure changes).\nUse for one-shot operations where you don't need to re-find the item.",
+      "properties": {
+        "layerPath": {
+          "description": "Layer path: 'Layer 1/Group A'",
+          "title": "Layerpath",
+          "type": "string"
+        },
+        "indexPath": {
+          "description": "Index path: [0, 2, 5]",
+          "items": {
+            "type": "integer"
+          },
+          "title": "Indexpath",
+          "type": "array"
+        }
+      },
+      "required": [
+        "layerPath"
+      ],
+      "title": "ItemLocator",
+      "type": "object"
+    },
+    "ItemRef": {
+      "description": "Complete item reference with separated concerns.\n\n- locator: Volatile positional reference\n- identity: Stable ID (opt-in, mutates document)\n- tags: User-controlled semantic tags\n- metadata: Item type and name for debugging",
+      "properties": {
+        "locator": {
+          "$ref": "#/$defs/ItemLocator",
+          "description": "Positional locator"
+        },
+        "identity": {
+          "$ref": "#/$defs/ItemIdentity",
+          "description": "Stable identity"
+        },
+        "tags": {
+          "$ref": "#/$defs/ItemTags",
+          "description": "User-defined tags"
+        },
+        "itemType": {
+          "description": "PathItem, TextFrame, etc.",
+          "title": "Itemtype",
+          "type": "string"
+        },
+        "itemName": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "item.name value",
+          "title": "Itemname"
+        }
+      },
+      "required": [
+        "locator",
+        "itemType"
+      ],
+      "title": "ItemRef",
+      "type": "object"
+    },
+    "ItemTags": {
+      "description": "User-controlled tags (parsed from name or note).\nUse for semantic selection without forcing UUID assignment.\n\nExample: item.name = \"Panel A @mcp:role=header @mcp:order=1\"\nParsed as: {role: \"header\", order: \"1\"}",
+      "properties": {
+        "tags": {
+          "additionalProperties": {
+            "type": "string"
+          },
+          "description": "Parsed @mcp:key=value pairs",
+          "title": "Tags",
+          "type": "object"
+        }
+      },
+      "title": "ItemTags",
+      "type": "object"
+    },
+    "RetryInfo": {
+      "description": "Retry execution details.",
+      "properties": {
+        "attempts": {
+          "description": "Total attempts made",
+          "title": "Attempts",
+          "type": "integer"
+        },
+        "succeeded": {
+          "title": "Succeeded",
+          "type": "boolean"
+        },
+        "retriedStages": {
+          "description": "Stages that were retried",
+          "items": {
+            "type": "string"
+          },
+          "title": "Retriedstages",
+          "type": "array"
+        },
+        "idempotency": {
+          "$ref": "#/$defs/Idempotency",
+          "default": "unknown"
+        }
+      },
+      "required": [
+        "attempts",
+        "succeeded"
+      ],
+      "title": "RetryInfo",
+      "type": "object"
+    },
+    "TaskError": {
+      "description": "Error information with full context.",
+      "properties": {
+        "stage": {
+          "enum": [
+            "validate",
+            "collect",
+            "compute",
+            "apply",
+            "export"
+          ],
+          "title": "Stage",
+          "type": "string"
+        },
+        "code": {
+          "description": "Error code: V001-V008, R001-R006, S001-S004",
+          "title": "Code",
+          "type": "string"
+        },
+        "message": {
+          "title": "Message",
+          "type": "string"
+        },
+        "itemRef": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ItemRef"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "details": {
+          "anyOf": [
+            {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Additional error context",
+          "title": "Details"
+        }
+      },
+      "required": [
+        "stage",
+        "code",
+        "message"
+      ],
+      "title": "TaskError",
+      "type": "object"
+    },
+    "TaskStats": {
+      "description": "Statistics.",
+      "properties": {
+        "itemsProcessed": {
+          "default": 0,
+          "title": "Itemsprocessed",
+          "type": "integer"
+        },
+        "itemsModified": {
+          "default": 0,
+          "title": "Itemsmodified",
+          "type": "integer"
+        },
+        "itemsSkipped": {
+          "default": 0,
+          "title": "Itemsskipped",
+          "type": "integer"
+        }
+      },
+      "title": "TaskStats",
+      "type": "object"
+    },
+    "TaskWarning": {
+      "description": "Warning information.",
+      "properties": {
+        "stage": {
+          "enum": [
+            "validate",
+            "collect",
+            "compute",
+            "apply",
+            "export"
+          ],
+          "title": "Stage",
+          "type": "string"
+        },
+        "message": {
+          "title": "Message",
+          "type": "string"
+        },
+        "itemRef": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ItemRef"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "suggestion": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Suggestion"
+        }
+      },
+      "required": [
+        "stage",
+        "message"
+      ],
+      "title": "TaskWarning",
+      "type": "object"
+    },
+    "TimingInfo": {
+      "description": "Stage timings.",
+      "properties": {
+        "collect_ms": {
+          "default": 0,
+          "description": "Target collection time",
+          "title": "Collect Ms",
+          "type": "number"
+        },
+        "compute_ms": {
+          "default": 0,
+          "description": "Computation/validation time",
+          "title": "Compute Ms",
+          "type": "number"
+        },
+        "apply_ms": {
+          "default": 0,
+          "description": "Apply/modification time",
+          "title": "Apply Ms",
+          "type": "number"
+        },
+        "export_ms": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Export time (if applicable)",
+          "title": "Export Ms"
+        },
+        "total_ms": {
+          "default": 0,
+          "description": "Total time",
+          "title": "Total Ms",
+          "type": "number"
+        }
+      },
+      "title": "TimingInfo",
+      "type": "object"
+    }
+  },
+  "description": "Standard task report.",
+  "properties": {
+    "ok": {
+      "description": "Whether the task succeeded",
+      "title": "Ok",
+      "type": "boolean"
+    },
+    "stats": {
+      "$ref": "#/$defs/TaskStats"
+    },
+    "timing": {
+      "$ref": "#/$defs/TimingInfo"
+    },
+    "warnings": {
+      "items": {
+        "$ref": "#/$defs/TaskWarning"
+      },
+      "title": "Warnings",
+      "type": "array"
+    },
+    "errors": {
+      "items": {
+        "$ref": "#/$defs/TaskError"
+      },
+      "title": "Errors",
+      "type": "array"
+    },
+    "artifacts": {
+      "anyOf": [
+        {
+          "additionalProperties": true,
+          "type": "object"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "Task artifacts: {exportedPath: '/path/to/file.svg'}",
+      "title": "Artifacts"
+    },
+    "trace": {
+      "anyOf": [
+        {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "Detailed execution trace (only when options.trace=true)",
+      "title": "Trace"
+    },
+    "retryInfo": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/RetryInfo"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "Present if retry was attempted"
+    }
+  },
+  "required": [
+    "ok"
+  ],
+  "title": "TaskReport",
+  "type": "object",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://illustrator-mcp.local/schemas/task_report.json"
+}

@@ -1,0 +1,271 @@
+{
+  "$defs": {
+    "AllTarget": {
+      "description": "Target: all items in document.",
+      "properties": {
+        "type": {
+          "const": "all",
+          "default": "all",
+          "title": "Type",
+          "type": "string"
+        },
+        "recursive": {
+          "default": false,
+          "title": "Recursive",
+          "type": "boolean"
+        }
+      },
+      "title": "AllTarget",
+      "type": "object"
+    },
+    "CompoundTarget": {
+      "description": "Compound target selector with boolean logic.\n\nExamples:\n    # Union of multiple sources\n    {\"type\": \"compound\", \"anyOf\": [{\"type\": \"layer\", \"layer\": \"Panels\"}, {\"type\": \"selection\"}]}\n    \n    # With exclusions\n    {\"type\": \"compound\", \"anyOf\": [...], \"exclude\": {\"locked\": true, \"hidden\": true}}",
+      "properties": {
+        "type": {
+          "const": "compound",
+          "default": "compound",
+          "title": "Type",
+          "type": "string"
+        },
+        "anyOf": {
+          "description": "Union of targets",
+          "items": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/SelectionTarget"
+              },
+              {
+                "$ref": "#/$defs/LayerTarget"
+              },
+              {
+                "$ref": "#/$defs/AllTarget"
+              },
+              {
+                "$ref": "#/$defs/QueryTarget"
+              }
+            ]
+          },
+          "minItems": 1,
+          "title": "Anyof",
+          "type": "array"
+        },
+        "exclude": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ExcludeFilter"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Exclusion filter"
+        }
+      },
+      "required": [
+        "anyOf"
+      ],
+      "title": "CompoundTarget",
+      "type": "object"
+    },
+    "ExcludeFilter": {
+      "description": "Filter to exclude items from results.",
+      "properties": {
+        "locked": {
+          "default": false,
+          "description": "Exclude locked items",
+          "title": "Locked",
+          "type": "boolean"
+        },
+        "hidden": {
+          "default": false,
+          "description": "Exclude hidden items",
+          "title": "Hidden",
+          "type": "boolean"
+        },
+        "guides": {
+          "default": false,
+          "description": "Exclude guides",
+          "title": "Guides",
+          "type": "boolean"
+        },
+        "clipped": {
+          "default": false,
+          "description": "Exclude items inside clipping masks",
+          "title": "Clipped",
+          "type": "boolean"
+        }
+      },
+      "title": "ExcludeFilter",
+      "type": "object"
+    },
+    "LayerTarget": {
+      "description": "Target: all items on a layer.",
+      "properties": {
+        "type": {
+          "const": "layer",
+          "default": "layer",
+          "title": "Type",
+          "type": "string"
+        },
+        "layer": {
+          "description": "Layer name",
+          "minLength": 1,
+          "title": "Layer",
+          "type": "string"
+        },
+        "recursive": {
+          "default": false,
+          "title": "Recursive",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "layer"
+      ],
+      "title": "LayerTarget",
+      "type": "object"
+    },
+    "OrderBy": {
+      "description": "Deterministic ordering modes for target results.",
+      "enum": [
+        "zOrder",
+        "zOrderReverse",
+        "reading",
+        "column",
+        "name",
+        "positionX",
+        "positionY",
+        "area"
+      ],
+      "title": "OrderBy",
+      "type": "string"
+    },
+    "QueryTarget": {
+      "description": "Target: items matching query filters.",
+      "properties": {
+        "type": {
+          "const": "query",
+          "default": "query",
+          "title": "Type",
+          "type": "string"
+        },
+        "itemType": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "PathItem, TextFrame, etc.",
+          "title": "Itemtype"
+        },
+        "pattern": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Name pattern with * wildcard",
+          "title": "Pattern"
+        },
+        "layer": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Layer"
+        },
+        "recursive": {
+          "default": false,
+          "title": "Recursive",
+          "type": "boolean"
+        }
+      },
+      "title": "QueryTarget",
+      "type": "object"
+    },
+    "SelectionTarget": {
+      "description": "Target: current selection.",
+      "properties": {
+        "type": {
+          "const": "selection",
+          "default": "selection",
+          "title": "Type",
+          "type": "string"
+        }
+      },
+      "title": "SelectionTarget",
+      "type": "object"
+    }
+  },
+  "description": "Complete target selector with ordering.\n\nThe 'target' field can be a simple selector or compound.\nThe 'orderBy' field ensures deterministic result ordering.",
+  "properties": {
+    "target": {
+      "discriminator": {
+        "mapping": {
+          "all": "#/$defs/AllTarget",
+          "compound": "#/$defs/CompoundTarget",
+          "layer": "#/$defs/LayerTarget",
+          "query": "#/$defs/QueryTarget",
+          "selection": "#/$defs/SelectionTarget"
+        },
+        "propertyName": "type"
+      },
+      "oneOf": [
+        {
+          "$ref": "#/$defs/SelectionTarget"
+        },
+        {
+          "$ref": "#/$defs/LayerTarget"
+        },
+        {
+          "$ref": "#/$defs/AllTarget"
+        },
+        {
+          "$ref": "#/$defs/QueryTarget"
+        },
+        {
+          "$ref": "#/$defs/CompoundTarget"
+        }
+      ],
+      "title": "Target"
+    },
+    "orderBy": {
+      "$ref": "#/$defs/OrderBy",
+      "default": "zOrder",
+      "description": "Result ordering (critical for layout reproducibility)"
+    },
+    "exclude": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/ExcludeFilter"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "Global exclusion filter (applied after target resolution)"
+    }
+  },
+  "required": [
+    "target"
+  ],
+  "title": "TargetSelector",
+  "type": "object",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://illustrator-mcp.local/schemas/target_selector.json"
+}

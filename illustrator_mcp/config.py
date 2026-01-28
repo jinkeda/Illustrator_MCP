@@ -1,54 +1,38 @@
 """
 Configuration management for Illustrator MCP.
-
-Loads settings from environment variables or .env file.
 """
-
-import os
-from pathlib import Path
-from typing import Optional
+from pydantic import Field
+from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
-def _load_env_file():
-    """Load .env file if it exists."""
-    env_path = Path(__file__).parent.parent / ".env"
-    if env_path.exists():
-        with open(env_path, 'r') as f:
-            for line in f:
-                line = line.strip()
-                if line and not line.startswith('#') and '=' in line:
-                    key, value = line.split('=', 1)
-                    key = key.strip()
-                    value = value.strip().strip('"').strip("'")
-                    if key not in os.environ:  # Don't override existing env vars
-                        os.environ[key] = value
+# Named constants for timeouts (avoids magic numbers)
+BRIDGE_STARTUP_TIMEOUT: float = 10.0  # seconds to wait for bridge startup
+BRIDGE_EXECUTION_BUFFER: float = 5.0  # extra timeout for thread coordination
+RECONNECT_INTERVAL_MS: int = 3000     # CEP panel reconnect interval
 
 
-# Load .env file on module import
-_load_env_file()
-
-
-class Config:
-    """Configuration settings for Illustrator MCP."""
+class Config(BaseSettings):
+    """Configuration with validation and .env support."""
     
-    # Proxy server settings
-    PROXY_HOST: str = os.getenv("PROXY_HOST", "localhost")
-    HTTP_PORT: int = int(os.getenv("HTTP_PORT", "8080"))
-    WS_PORT: int = int(os.getenv("WS_PORT", "8081"))
+    model_config = SettingsConfigDict(
+        env_file='.env',
+        env_file_encoding='utf-8',
+        case_sensitive=False,
+        extra='ignore'
+    )
+    
+    # WebSocket settings
+    ws_host: str = Field(default="localhost", description="WebSocket host")
+    ws_port: int = Field(default=8081, ge=1024, le=65535, description="WebSocket port for bridge")
     
     # Timeout settings
-    TIMEOUT: float = float(os.getenv("TIMEOUT", "30"))
+    timeout: float = Field(default=30.0, ge=1.0, le=300.0, description="Operation timeout in seconds")
     
-    @classmethod
-    def get_proxy_url(cls) -> str:
-        """Get the full proxy URL."""
-        return f"http://{cls.PROXY_HOST}:{cls.HTTP_PORT}"
-    
-    @classmethod
-    def get_ws_url(cls) -> str:
-        """Get the WebSocket URL for the proxy."""
-        return f"ws://{cls.PROXY_HOST}:{cls.WS_PORT}"
+    @property
+    def ws_url(self) -> str:
+        """WebSocket URL for CEP panel connection."""
+        return f"ws://{self.ws_host}:{self.ws_port}"
 
 
-# Singleton instance
+# Global config instance
 config = Config()

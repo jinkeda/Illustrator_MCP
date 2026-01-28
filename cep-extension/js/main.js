@@ -6,13 +6,21 @@
 // Configuration
 const PROXY_WS_URL = 'ws://localhost:8081';
 
+// Log levels for filtering and display
+const LogLevel = {
+    DEBUG: 0,
+    INFO: 1,
+    WARN: 2,
+    ERROR: 3
+};
+
+// Current log level (can be adjusted for debugging)
+let currentLogLevel = LogLevel.INFO;
+
 // Global variables
 let ws = null;
 let csInterface = null;
 let reconnectInterval = null;
-
-// Initialize when DOM is ready
-document.addEventListener('DOMContentLoaded', init);
 
 /**
  * Format command parameters for logging
@@ -242,9 +250,27 @@ function updateButton(text) {
 }
 
 /**
- * Log message to panel
+ * Log message to panel with level support
+ * @param {string} message - Message to log
+ * @param {string} type - Log type: 'debug', 'info', 'success', 'warning', 'error'
  */
 function log(message, type = 'info') {
+    // Map type to log level for filtering
+    const levelMap = {
+        'debug': LogLevel.DEBUG,
+        'info': LogLevel.INFO,
+        'success': LogLevel.INFO,
+        'warning': LogLevel.WARN,
+        'error': LogLevel.ERROR
+    };
+
+    const messageLevel = levelMap[type] ?? LogLevel.INFO;
+
+    // Filter messages below current log level
+    if (messageLevel < currentLogLevel) {
+        return;
+    }
+
     const logArea = document.getElementById('logArea');
     const time = new Date().toLocaleTimeString();
 
@@ -260,3 +286,15 @@ function log(message, type = 'info') {
         logArea.removeChild(logArea.firstChild);
     }
 }
+
+/**
+ * Set the log level for filtering
+ * @param {number} level - LogLevel.DEBUG, LogLevel.INFO, LogLevel.WARN, or LogLevel.ERROR
+ */
+function setLogLevel(level) {
+    currentLogLevel = level;
+    log(`Log level set to ${Object.keys(LogLevel).find(k => LogLevel[k] === level)}`, 'info');
+}
+
+// Initialize when DOM is ready
+document.addEventListener('DOMContentLoaded', init);

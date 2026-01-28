@@ -31,30 +31,21 @@ Core tools (~15 total):
 """
 
 import logging
+from illustrator_mcp.log_config import configure_logging
 
-# Configure logging to stderr (required for stdio transport)
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-    handlers=[logging.StreamHandler()]
-)
+# Configure logging
+configure_logging()
 logger = logging.getLogger(__name__)
 
 # Import the shared mcp instance (includes lifespan management)
 from illustrator_mcp.shared import mcp
 
-# Import tool modules following SCRIPTING FIRST architecture
-# Only essential tools are enabled - use execute_script for everything else
-from illustrator_mcp.tools import (
-    execute,      # Core execute_script (1 tool) - PRIMARY tool
-    documents,    # Document I/O (10 tools) - create, open, save, export, etc.
-    context,      # Document state inspection (4 tools) - structure, selection, etc.
-)
+# Import tool registration function
+from illustrator_mcp.tools import register_tools
 
-# DISABLED modules - use illustrator_execute_script instead:
-# artboards, shapes, paths, pathfinder, text, typography,
-# layers, objects, selection, styling, effects, arrange,
-# transform, composite, patterns
+# Register tools explicitly
+# Only essential tools are enabled - use execute_script for everything else
+register_tools(mcp)
 
 
 def main():

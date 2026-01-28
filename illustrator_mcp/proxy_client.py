@@ -14,47 +14,51 @@ Architecture (simplified):
 import asyncio
 import json
 import logging
+import time
+import uuid
 from typing import Any, Optional
 
 from illustrator_mcp.config import config
+from illustrator_mcp.shared import (
+    CommandMetadata, 
+    ExecutionResponse, 
+    check_connection_or_error,
+)
+from illustrator_mcp.log_config import log_command
 
 # Configure logging
 logger = logging.getLogger(__name__)
 
 
-# Lazy import to avoid circular dependencies
-_bridge = None
+# ==================== Request ID Generation ====================
+
+def generate_trace_id() -> str:
+    """Generate a unique trace ID for request tracing.
+    
+    Format: req_<8-char-hex>
+    Example: req_a1b2c3d4
+    """
+    return f"req_{uuid.uuid4().hex[:8]}"
 
 
 def _get_bridge():
-    """Get the WebSocket bridge instance, ensuring it's running.
-
-    Uses ensure_bridge_running() to check if the bridge thread is alive
-    and restart it if needed (e.g., if it failed due to port conflict).
-    """
-    global _bridge
-    from illustrator_mcp.websocket_bridge import ensure_bridge_running
-    _bridge = ensure_bridge_running()
-    return _bridge
+    """Get the WebSocket bridge instance."""
+    from illustrator_mcp.runtime import get_runtime
+    return get_runtime().get_bridge()
 
 
 class IllustratorProxy:
     """Client for communicating with Illustrator via WebSocket bridge."""
 
     def __init__(self, timeout: Optional[float] = None):
-        self.timeout = timeout or config.TIMEOUT
+        self.timeout = timeout or config.timeout
 
-    async def execute_script(self, script: str) -> dict[str, Any]:
+    async def execute_script(self, script: str) -> ExecutionResponse:
         """
         Execute a JavaScript/ExtendScript in Illustrator.
 
         This is the core method that all tools use internally.
-        Uses the integrated WebSocket bridge (no separate proxy needed).
-
-        IMPORTANT: The WebSocket bridge runs in a SEPARATE THREAD with its own
-        event loop. We must use run_in_executor to call the bridge's synchronous
-        execute_script method (which internally uses run_coroutine_threadsafe
-        to properly coordinate with the bridge's event loop).
+        Uses the integrated WebSocket bridge via the centralized helper.
 
         Args:
             script: JavaScript code to execute in Illustrator
@@ -62,51 +66,80 @@ class IllustratorProxy:
         Returns:
             Response from Illustrator containing result or error
         """
-        bridge = _get_bridge()
-
-        if not bridge.is_connected():
-            return {
-                "error": "ILLUSTRATOR_DISCONNECTED: CEP panel is not connected. "
-                         "Please open Illustrator and ensure the MCP Control panel shows 'Connected'. "
-                         f"(WebSocket server running on port {config.WS_PORT})"
-            }
-
-        try:
-            # Use run_in_executor to call the bridge's SYNC method which properly
-            # coordinates with the bridge's event loop via run_coroutine_threadsafe
-            loop = asyncio.get_running_loop()
-            result = await loop.run_in_executor(
-                None,  # Use default thread pool
-                lambda: bridge.execute_script(script, timeout=self.timeout)
-            )
-            return result
-
-        except Exception as e:
-            logger.error(f"Unexpected error: {e}")
-            return {"error": f"UNEXPECTED_ERROR: {str(e)}"}
+        return await _execute_via_bridge(script=script, timeout=self.timeout)
 
     async def check_connection(self) -> dict[str, Any]:
         """Check if Illustrator is connected."""
         bridge = _get_bridge()
         return {
             "connected": bridge.is_connected(),
-            "ws_port": config.WS_PORT
+            "ws_port": config.ws_port
         }
-
-
-# Global proxy instance
-_proxy: Optional[IllustratorProxy] = None
 
 
 def get_proxy() -> IllustratorProxy:
     """Get the global proxy instance."""
-    global _proxy
-    if _proxy is None:
-        _proxy = IllustratorProxy()
-    return _proxy
+    from illustrator_mcp.runtime import get_runtime
+    return get_runtime().get_proxy()
 
 
-async def execute_script(script: str) -> dict[str, Any]:
+async def _execute_via_bridge(
+    script: str,
+    timeout: float,
+    command: Optional[CommandMetadata] = None,
+    trace_id: Optional[str] = None
+) -> ExecutionResponse:
+    """
+    Centralized helper to execute scripts via the WebSocket bridge.
+    
+    Handles:
+    - Connection checking (via shared helper)
+    - Thread-safe bridging (run_coroutine_threadsafe)
+    - Timeout management
+    - Error handling
+    
+    Args:
+        script: JavaScript code to execute
+        timeout: Execution timeout in seconds
+        command: Optional CommandMetadata for context
+        trace_id: Optional trace ID for request tracing
+        
+    Returns:
+        ExecutionResponse dictionary with result/error
+    """
+    context = command.command_type if command else "execute_script"
+    
+    # Use centralized connection check
+    is_connected, error_response = check_connection_or_error(config.ws_port, context)
+    if not is_connected:
+        return error_response
+
+    bridge = _get_bridge()
+    
+    try:
+        # Direct async call via thread-safe future wrapping
+        conc_future = asyncio.run_coroutine_threadsafe(
+            bridge.execute_script_async(
+                script=script,
+                timeout=timeout,
+                command=command,
+                trace_id=trace_id
+            ),
+            bridge.loop
+        )
+        return await asyncio.wrap_future(conc_future)
+        
+    except TimeoutError:
+        return {"error": f"TIMEOUT: Script execution timed out after {timeout}s"}
+    except ConnectionError as e:
+        logger.warning(f"CONNECTION_ERROR [{context}]: {e}")
+        return {"error": f"CONNECTION_ERROR: {str(e)}"}
+    except Exception as e:
+        logger.exception(f"PROXY_ERROR [{context}]: Unexpected error")
+        return {"error": f"PROXY_ERROR: {str(e)}"}
+
+
+async def execute_script(script: str) -> ExecutionResponse:
     """
     Execute a JavaScript script in Illustrator.
 
@@ -116,7 +149,7 @@ async def execute_script(script: str) -> dict[str, Any]:
         script: JavaScript/ExtendScript code to execute
 
     Returns:
-        Dictionary with 'result' or 'error' key
+        ExecutionResponse with 'result' or 'error' key
     """
     return await get_proxy().execute_script(script)
 
@@ -124,56 +157,98 @@ async def execute_script(script: str) -> dict[str, Any]:
 async def execute_script_with_context(
     script: str,
     command_type: str,
-    tool_name: str = None,
-    params: dict = None
-) -> dict[str, Any]:
+    tool_name: Optional[str] = None,
+    params: Optional[dict] = None,
+    trace_id: Optional[str] = None
+) -> ExecutionResponse:
     """
     Execute a JavaScript script with command context for hybrid protocol.
 
     This provides better logging and debugging by including metadata
     about what operation is being performed.
-
-    IMPORTANT: The WebSocket bridge runs in a SEPARATE THREAD with its own
-    event loop. We must use run_in_executor to call the bridge's synchronous
-    execute_script method.
+    
+    Delegates to _execute_via_bridge for actual execution.
 
     Args:
         script: JavaScript/ExtendScript code to execute
         command_type: Type of command (e.g., "draw_rectangle", "create_layer")
         tool_name: Name of the MCP tool (e.g., "illustrator_draw_rectangle")
         params: Parameters passed to the tool (for debugging, not execution)
+        trace_id: Optional trace ID for tracing (auto-generated if not provided)
 
     Returns:
-        Dictionary with 'result' or 'error' key
+        ExecutionResponse with 'result' or 'error' key
     """
-    bridge = _get_bridge()
+    # Generate trace_id if not provided
+    tid = trace_id or generate_trace_id()
+    
+    # Build CommandMetadata
+    command = CommandMetadata(
+        command_type=command_type,
+        tool_name=tool_name,
+        params=params or {},
+        trace_id=tid
+    )
+    
+    # Note: Connection check is done in _execute_via_bridge, avoiding duplication
+    start_time = time.time()
+    log_command(logger, tid, command_type, "starting")
+    
+    # Execute via centralized helper
+    response = await _execute_via_bridge(
+        script=script,
+        timeout=config.timeout,
+        command=command,
+        trace_id=tid
+    )
+    
+    duration_ms = (time.time() - start_time) * 1000
+    
+    # Log success/error with timing
+    if response.get("error"):
+        log_command(logger, tid, command_type, "error", duration_ms, logging.WARNING)
+    else:
+        log_command(logger, tid, command_type, "completed", duration_ms)
+    
+    # Add trace_id and elapsed_ms to response for tracing
+    response["trace_id"] = tid
+    response["elapsed_ms"] = duration_ms
+    
+    return response
 
-    if not bridge.is_connected():
-        return {
-            "error": f"ILLUSTRATOR_DISCONNECTED [{command_type}]: CEP panel is not connected. "
-                     "Please open Illustrator and ensure the MCP Control panel shows 'Connected'. "
-                     f"(WebSocket server running on port {config.WS_PORT})"
-        }
 
+def _try_parse_json(value: str) -> Any:
+    """Attempt JSON parse, return original on failure."""
     try:
-        # Use run_in_executor to call the bridge's SYNC method which properly
-        # coordinates with the bridge's event loop via run_coroutine_threadsafe
-        loop = asyncio.get_running_loop()
-        result = await loop.run_in_executor(
-            None,  # Use default thread pool
-            lambda: bridge.execute_script(
-                script=script,
-                timeout=config.TIMEOUT,
-                command_type=command_type,
-                tool_name=tool_name,
-                params=params
-            )
-        )
-        return result
+        return json.loads(value)
+    except json.JSONDecodeError:
+        return value
 
-    except Exception as e:
-        logger.error(f"[{command_type}] Unexpected error: {e}")
-        return {"error": f"UNEXPECTED_ERROR [{command_type}]: {str(e)}"}
+
+def _unwrap_result(result: Any) -> Any:
+    """
+    Recursively unwrap nested success/result envelopes.
+    
+    Handles double-wrapped results like:
+    {success: true, result: "{\"success\": true, \"result\": ...}"}
+    """
+    if not isinstance(result, dict):
+        return result
+    
+    # Check for error in current level
+    if result.get("error"):
+        return result
+    if result.get("success") is False:
+        return result
+    
+    # Unwrap success envelope
+    if result.get("success") and "result" in result:
+        inner = result["result"]
+        # Parse if string, then recurse
+        parsed = _try_parse_json(inner) if isinstance(inner, str) else inner
+        return _unwrap_result(parsed)
+    
+    return result
 
 
 def format_response(response: dict[str, Any]) -> str:
@@ -186,6 +261,7 @@ def format_response(response: dict[str, Any]) -> str:
     Returns:
         Formatted string for MCP tool response
     """
+    # Handle top-level errors
     if response.get("error"):
         error = response['error']
         # Make connection errors very prominent
@@ -193,20 +269,25 @@ def format_response(response: dict[str, Any]) -> str:
             return f"⚠️ {error}\n\n[STOP: Do not retry until connection is restored]"
         return f"Error: {error}"
 
+    # Get and unwrap result
     result = response.get("result", response)
-
-    # Handle nested result from ExtendScript
+    
+    # Parse string results
     if isinstance(result, str):
-        try:
-            parsed = json.loads(result)
-            if isinstance(parsed, dict) and parsed.get("error"):
-                return f"Error: {parsed['error']}"
-            if isinstance(parsed, dict) and parsed.get("success") is False:
-                return f"Error: {parsed.get('error', 'Operation failed')}"
-            result = parsed
-        except json.JSONDecodeError:
-            pass
+        result = _try_parse_json(result)
+    
+    # Unwrap nested envelopes
+    result = _unwrap_result(result)
+    
+    # Check for errors in unwrapped result
+    if isinstance(result, dict):
+        if result.get("error"):
+            return f"Error: {result['error']}"
+        if result.get("success") is False:
+            return f"Error: {result.get('error', 'Operation failed')}"
 
+    # Format output
     if isinstance(result, (dict, list)):
         return json.dumps(result, indent=2)
     return str(result)
+

@@ -25,6 +25,12 @@ An MCP (Model Context Protocol) server that enables AI assistants like Claude to
 
 - **Scripting First Architecture** - Minimal toolset 
 - **~15 Core Tools** - Essential operations; everything else via `illustrator_execute_script`
+- **Task Protocol v2.3** - Structured execution with:
+  - Standardized error codes (V/R/S categories)
+  - Compound target selectors with deterministic ordering
+  - Safe retry semantics (never auto-retries `apply`)
+  - Stable references with locator/identity/tag separation
+- **Manifest-Driven Libraries** - Transitive dependency resolution with collision detection
 - **Simplified Architecture** - Single Python server with integrated WebSocket bridge (no Node.js required!)
 - **Input Validation** - Pydantic models prevent errors before execution
 - **Cross-Platform** - Works on Windows and macOS
@@ -60,6 +66,46 @@ Previous versions required a separate Node.js proxy server. The new architecture
 - ✅ **Fewer dependencies** - No Node.js required
 - ✅ **More reliable** - No inter-process communication issues
 - ✅ **Easier troubleshooting** - Single point of failure
+
+### Thread Architecture
+
+The MCP server uses a dual-thread architecture to handle async MCP calls and WebSocket communication:
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│ MCP Server Process                                           │
+│                                                              │
+│  ┌──────────────────┐         ┌───────────────────────┐    │
+│  │  Main Thread     │         │  Bridge Thread        │    │
+│  │  (MCP Event Loop)│◀────────▶│  (WebSocket Loop)    │    │
+│  │                  │  Future │                       │    │
+│  │  - Tool calls    │         │  - WebSocket server   │    │
+│  │  - run_in_executor()────────▶run_coroutine_threadsafe()│ │
+│  └──────────────────┘         └───────────────────────┘    │
+└─────────────────────────────────────────────────────────────┘
+                                        │
+                                        │ WebSocket (port 8081)
+                                        ▼
+                                ┌───────────────┐
+                                │  CEP Panel    │
+                                │  (Illustrator)│
+                                └───────────────┘
+```
+
+| Component | Description |
+|-----------|-------------|
+| **Main Thread** | Runs the MCP event loop, handles tool calls from Claude |
+| **Bridge Thread** | Runs WebSocket server, manages CEP panel connection |
+| **Coordination** | Uses `run_in_executor()` + `run_coroutine_threadsafe()` for cross-thread communication |
+
+### Extension Support
+
+| Extension | Directory | Status |
+|-----------|-----------|--------|
+| **CEP Extension** | `cep-extension/` | ✅ Fully supported (primary) |
+| **UXP Plugin** | `uxp-plugin/` | 🚧 Reserved for future use |
+
+> **Note:** The UXP plugin directory exists but is not yet functional. CEP remains the primary extension for Illustrator 2021-2024+.
 
 ---
 
@@ -104,7 +150,32 @@ resources/scripts/
 
 Scripts can request libraries via `inject_libraries(script, includes=["geometry"])`.
 
-### 4. Context Before Creation
+### 5. Task Protocol Architecture (v2.2)
+
+For complex, multi-item operations, use the **Task Protocol** for structured execution:
+
+```javascript
+// Task execution with collect → compute → apply stages
+var payload = {
+    task: 'apply_fill',
+    targets: {type: 'selection'},  // Declarative targeting
+    params: {color: [255, 0, 0]},
+    options: {trace: true}
+};
+
+var report = executeTask(payload, collectTargets, compute, apply);
+// Returns: {ok: true, stats: {...}, timing: {...}, errors: [], warnings: []}
+```
+
+| Feature | Description |
+|---------|-------------|
+| **Declarative Targets** | `{type: 'selection'}`, `{type: 'layer', layer: 'Layer 1'}`, `{type: 'all'}` |
+| **Structured Reports** | Timing breakdown, item stats, error localization |
+| **Stable References** | `ItemRef` with layerPath, indexPath, itemId |
+| **Trace Mode** | Step-by-step execution logging |
+| **Retry Mechanism** | `executeTaskWithRetry()` for fault tolerance |
+
+### 6. Context Before Creation
 
 AI should always inspect document state before writing modification scripts:
 
@@ -114,7 +185,7 @@ AI should always inspect document state before writing modification scripts:
 3. execute_script          →  Modify with confidence
 ```
 
-### 5. Fail Fast with Clear Errors
+### 7. Fail Fast with Clear Errors
 
 | Error Type | Handling |
 |------------|----------|
@@ -252,6 +323,9 @@ WS_PORT=8081
 
 # Timeout for script execution (seconds)
 TIMEOUT=30
+
+# Note: Configuration is validated on startup.
+# Ports must be valid integers (1024-65535) and distinct.
 ```
 
 | Setting | Default | Description |
@@ -528,17 +602,27 @@ The MCP server includes an integrated WebSocket server on port 8081. If connecti
 Illustrator_MCP/
 ├── illustrator_mcp/           # Python MCP server
 │   ├── __init__.py
-│   ├── server.py              # Entry point (includes WebSocket bridge)
-│   ├── shared.py              # Shared MCP instance
-│   ├── config.py              # Configuration management
-│   ├── websocket_bridge.py    # Integrated WebSocket server
+│   ├── server.py              # Entry point
+│   ├── runtime.py             # Runtime dependency injection
+│   ├── log_config.py          # Structured logging configuration
+│   ├── protocol.py            # Task Protocol Pydantic models
+│   ├── config.py              # Configuration (Pydantic Settings)
+│   ├── websocket_bridge.py    # Bridge facade
+│   ├── shared.py              # Shared context
 │   ├── proxy_client.py        # Script execution client
-│   └── tools/                 # ~15 tools (Scripting First architecture)
-│       ├── __init__.py        # Module loader (most modules disabled)
-│       ├── execute.py         # Core script execution (1) - PRIMARY
-│       ├── documents.py       # Document I/O (10)
-│       ├── context.py         # State inspection (4)
-│       └── [disabled]/        # artboards, shapes, paths, etc.
+│   ├── bridge/                # WebSocket bridge components
+│   │   ├── server.py          # WebSocket server transport
+│   │   └── request_registry.py # Async request management
+│   ├── resources/             # Static resources
+│   │   └── scripts/           # ExtendScript libraries & Task Executor
+│   ├── schemas/               # Generated JSON schemas
+│   └── tools/                 # ~15 tools (Scripting First)
+│       ├── __init__.py        # Tool registration
+│       ├── execute.py         # Core (execute_script)
+│       ├── documents.py       # Document I/O
+│       ├── context.py         # Inspection
+│       ├── query.py           # Item Query (Task Protocol)
+│       └── archive/           # Archived legacy tools
 ├── proxy-server/              # [DEPRECATED] Node.js proxy (no longer needed)
 │   ├── package.json
 │   └── index.js
@@ -615,6 +699,190 @@ The Node.js `proxy-server` folder is kept for reference but is no longer used.
 ---
 
 ## Changelog
+
+### v2.6.0 (2026-01-24) - TEMPLATE CONSOLIDATION
+- **Refactor:** Moved 5 more inline scripts to templates:
+  - `close_document`, `embed_placed_items`, `update_linked_items` in `documents.py`
+  - `get_document_structure`, `get_selection_info` in `context.py`
+- **Improved:** Test fixtures now use `ExitStack` for cleaner patch management
+- **New:** `is_running()` method on `WebSocketBridge` for better encapsulation
+- **Refactor:** `shared.py` now uses `bridge.is_running()` instead of accessing `_thread` directly
+
+### v2.5.0 (2026-01-24) - CODE QUALITY REFACTORING
+- **New:** `response_models.py` - Pydantic models for ExtendScript responses (DocumentInfo, OperationResult, ExportResult, PlaceItemResult)
+- **Improved:** Error messages now include actionable quick fixes for connection issues
+- **Refactor:** Consolidated inline scripts to templates in `documents.py` (export, get_document_info)
+- **Cleanup:** Removed dead test files for archived tools (test_shapes, test_pathfinder, test_effects, test_objects, test_selection)
+- **Fixed:** `conftest.py` no longer references non-existent shapes module
+
+### v2.4.4 (2026-01-24) - TOOLINPUTBASE MIGRATION
+- **Refactor:** All 10 Pydantic input models now inherit from `ToolInputBase`
+  - Removes ~30 lines of repeated `model_config = ConfigDict(str_strip_whitespace=True)`
+  - Affected: `documents.py` (7 models), `execute.py` (2 models), `query.py` (1 model)
+
+### v2.4.3 (2026-01-24) - EDITABLE PDF IMPORT
+- **New:** `embed_editable` parameter in `illustrator_place_file` tool
+  - Opens PDF as document, copies content, pastes as editable vectors
+  - Slower than linked placement but produces fully editable GroupItems
+  - Usage: `place_file(file_path, x, y, embed_editable=True)`
+
+### v2.4.2 (2026-01-23) - TEMPLATE CONSOLIDATION
+- **Refactor:** Merged `IMPORT_IMAGE` and `PLACE_FILE` templates into single `PLACE_ITEM` template
+- **New:** `_place_item_impl()` helper function for import/place operations (~40 lines reduced)
+- **Refactor:** `undo` and `redo` now use `templates.UNDO` and `templates.REDO`
+- **New:** `ToolInputBase` class in `base.py` for shared Pydantic configuration
+
+### v2.4.1 (2026-01-23) - CODEBASE REFACTORING
+Major refactoring to reduce duplication and improve maintainability:
+
+- **New:** `tools/base.py` with `execute_jsx_tool()` helper - reduces ~10 lines boilerplate per tool
+- **Refactor:** `format_response()` now uses `_try_parse_json()` and `_unwrap_result()` helpers
+- **New:** Pytest markers `@pytest.mark.live` and `@pytest.mark.unit` in `conftest.py`
+- **New:** `format_task_report()` function in `protocol.py` for shared TaskReport formatting
+- **Refactor:** Export logic in `documents.py` consolidated with config dict (4 branches → 2)
+- **New:** `templates.py` module with 15 ExtendScript templates using `string.Template`
+- **New:** `test_websocket_bridge.py` with tests for `RequestRegistry`
+
+**Impact:** ~150 lines of boilerplate eliminated, 15 tools now use single-line `execute_jsx_tool()` pattern.
+
+
+### v2.4.0 (2026-01-23) - ASSET ANALYSIS & LAYOUT PRESETS
+
+Two new ExtendScript libraries accessible via `execute_script` with `includes`:
+
+**New Libraries:**
+- **assets.jsx** - Analyze placed items (bounds, aspect ratio, orientation)
+  - `analyzeAssets(scope)` - Collect metadata for selection/document/layer
+  - `getAssetInfo(item)` - Get single item metadata
+- **presets.jsx** - Pre-defined grid layouts with slot geometry
+  - `PRESETS` - 2x2, 3x1, 1x3, 2x3, 3x2, 1x2, 2x1 grid definitions
+  - `computeSlotGeometry()` - Calculate slot positions for grid
+  - `applyPreset()` - Arrange items in grid with contain/cover modes
+
+**Usage:**
+```javascript
+// Analyze assets: includes: ["assets", "geometry"]
+var manifest = analyzeAssets("document");
+
+// Apply layout: includes: ["presets", "geometry"]
+var result = applyPreset("2x2", doc.selection, "contain");
+```
+
+
+
+### v2.3.7 (2026-01-23) - ES5 POLYFILLS & LIVING TEST
+- **Added:** ES5 array polyfills in `task_executor.jsx`:
+  - `Array.prototype.forEach()`
+  - `Array.prototype.map()`
+  - `Array.prototype.filter()`
+  - `Array.prototype.every()`
+  - `Array.prototype.some()`
+  - `Array.prototype.reduce()`
+- **Refactor:** `QueryItemsInput` now uses nested `targets` dict matching Task Protocol format
+  - Before: `target_type="layer", layer_name="Layer 1"`
+  - After: `targets={"type": "layer", "layer": "Layer 1"}`
+- **Added:** Living test suite with 10 test cases (8 PASS, 1 PARTIAL, 1 SKIPPED)
+- **Fixed:** Removed unused `Optional` import from `query.py`
+
+### v2.3.6 (2026-01-22) - BUG FIXES & STABILITY
+- **Fixed:** `query_items` tool now correctly returns items in `dryRun` mode (moved storage to compute stage)
+- **Fixed:** Added ES3-compatible `Array.prototype.indexOf` polyfill in `task_executor.jsx` for ExtendScript
+- **Fixed:** `proxy_client.py` now correctly handles double-wrapped JSON responses from Illustrator
+- **Removed:** Unused `httpx` dependency from `pyproject.toml`
+- **Added:** `docs/ARCHITECTURE.md` documenting import patterns and circular import solutions
+
+### v2.3.5 (2026-01-22) - FINAL CLEANUP
+- **Refactor:** Consolidated path escaping in `documents.py` using `escape_path_for_jsx()` (5 instances)
+- **Refactor:** Updated `conftest.py` to only reference active tool modules (removed 11 archived)
+- **Improved:** Added debug logging for non-JSON ExtendScript returns
+- **Security:** Added 10MB message size guard in `websocket_bridge.py`
+- **Added:** Return type hint for `_handle_message()`
+
+### v2.3.4 (2026-01-22) - ARCHITECTURE CLEANUP
+- **Refactor:** Extracted `LibraryResolver` to dedicated `libraries.py` module (~200 lines from execute.py)
+- **Refactor:** Propagated `trace_id` through `RequestRegistry.create_request()` for better correlation
+- **Removed:** Unused imports (`IllustratorError`, `create_connection_error` in proxy_client, `lru_cache` in execute)
+- **Simplified:** `execute.py` now imports `inject_libraries` from `libraries.py`
+
+### v2.3.3 (2026-01-22) - EXTENDED CODE QUALITY
+- **Refactor:** Removed unused config fields (`http_port`, `proxy_host`)
+- **Added:** Timeout constants (`BRIDGE_STARTUP_TIMEOUT`, `BRIDGE_EXECUTION_BUFFER`, `RECONNECT_INTERVAL_MS`)
+- **Added:** `utils.py` with `escape_path_for_jsx()`, `validate_file_path()`, `escape_string_for_jsx()`
+- **Improved:** Specific exception handling (`ConnectionError` catch before generic `Exception`)
+- **Updated:** `websocket_bridge.py` uses named constants instead of magic numbers
+
+### v2.3.2 (2026-01-22) - CODE QUALITY REFACTORING
+- **Refactor:** Consolidated connection handling with `check_connection_or_error()` in `shared.py`
+- **Refactor:** Added `CommandMetadata` dataclass and `ExecutionResponse` TypedDict for type safety
+- **Refactor:** Unified `trace_id` across proxy_client and websocket_bridge (replaces request_id)
+- **Refactor:** Removed `time.sleep(0.1)` from bridge start, added `wait_until_ready()` method
+- **Refactor:** Added `ConnectionState` enum for bridge state management
+- **Refactor:** Added `log_command()` helper for centralized logging format
+- **Added:** `errors.py` with `IllustratorError` enum for standardized error codes
+- **Added:** `templates.py` with reusable script wrappers (`wrap_script_with_error_handling()`)
+- **Added:** `__version__.py` for single-source version management
+- **Added:** JSX dependency metadata in `layout.jsx` with programmatic checks
+- **Added:** `LogLevel` enum and `setLogLevel()` in CEP panel for debug filtering
+- **Updated:** `pyproject.toml` with correct author, `pytest-cov`, dynamic versioning
+- **Updated:** ExtendScript reference moved to `resources/docs/extendscript_reference.md`
+- **Updated:** `PendingRequest` dataclass now includes `trace_id` field
+
+### v2.3.0 (2026-01-21) - FORMALIZED PROTOCOL
+- **Protocol:** Full Task Protocol v2.3 specification with formal contract
+- **Added:** Standardized error codes with categories:
+  - Validation (V001-V008): Fail before execution
+  - Runtime (R001-R006): Fail during execution (retryable)
+  - System (S001-S004): Environment issues
+- **Added:** `makeError()` helper for structured error creation
+- **Added:** Compound target selectors with `anyOf` and `exclude` filters
+- **Added:** Deterministic ordering via `OrderBy` enum (8 modes: reading, column, zOrder, name, etc.)
+- **Added:** `sortItems()` and `filterItems()` functions in task_executor.jsx
+- **Added:** Stable reference refactoring:
+  - Separated `ItemLocator` (volatile) / `ItemIdentity` (stable) / `ItemTags` (user-controlled)
+  - `parseMcpTags()` for `@mcp:key=value` syntax
+  - `describeItemV2()` with new structure
+  - `assignItemIdV2()` with `IdPolicy` (none/opt_in/always/preserve) and conflict detection
+- **Added:** Safe retry semantics:
+  - `executeTaskWithRetrySafe()` that never auto-retries `apply` stage
+  - `isRetryable()` helper for stage-aware retry decisions
+  - `Idempotency` enum (safe/unknown/unsafe)
+  - `RetryPolicy` and `RetryInfo` models
+- **Added:** Payload validation with `validatePayload()` for fail-fast errors
+- **Added:** JSON Schema generation from Pydantic models (`schemas/` directory)
+- **Added:** Manifest-driven library injection (`manifest.json`):
+  - Transitive dependency resolution
+  - Symbol collision detection
+  - Library content caching
+- **Added:** `PROTOCOL.md` comprehensive protocol reference
+- **Deprecated:** `executeTaskWithRetry()` (use `executeTaskWithRetrySafe()`)
+
+### v2.3.1 (2026-01-21) - V2.3 IMPLEMENTATION FIXES
+- **Fixed:** Compound target selectors now properly implemented in `collectTargets()`
+- **Fixed:** `TargetSelector` wrapper handling now correctly unwraps in `executeTask()`
+- **Fixed:** Global exclusion and ordering applied after target collection
+- **Fixed:** Protocol version string in `protocol.py` updated from 2.3.0 to 2.3.1
+- **Added:** `validatePayload()` function for version validation (fails fast on major version mismatch)
+- **Added:** Thread architecture diagram to README
+- **Added:** Runtime schema validation utilities in `schemas/__init__.py`
+- **Updated:** `safeExecute()` now uses `describeItemV2()` for error reporting
+- **Updated:** `executeTask()` uses `assignItemIdV2()` with `idPolicy` option
+- **Deprecated:** `describeItem()` and `assignItemId()` (use V2 variants, removed in v3.0)
+- **Improved:** Added explanatory comments to silent catch blocks for debugging
+- **Tests:** Added `test_protocol.py` for V2.3 ItemRef structure
+- **Tests:** Added `test_task_protocol_v23.py` for compound selectors, TargetSelector, retry policies
+- **Fixed:** Consolidated duplicate `validatePayload` in `task_executor.jsx` (hoisting conflict)
+- **Fixed:** `manifest.json` export name typo (`recordTaskExecution` -> `recordTaskHistory`)
+- **Fixed:** Recursive `collectLayerItems` for deep nested group support
+- **Added:** `exclude.clipped` filter support in `collectTargets`
+- **Refactor:** Unified connection error handling (ILLUSTRATOR_DISCONNECTED) in shared/proxy/bridge
+- **Refactor:** Centralized logging configuration in `log_config.py` with structured JSON support
+- **Refactor:** Thread-safe `LibraryResolver` with locks and `lru_cache`
+- **Refactor:** Deterministic `WebSocketBridge` shutdown using `asyncio.Event`
+- **Refactor:** Decomposed `WebSocketBridge` into `bridge/server.py` and `bridge/request_registry.py`
+- **Refactor:** Configuration via `pydantic-settings` with validation
+- **Refactor:** Explicit tool registration in `tools/__init__.py` (removed side-effect imports)
+- **Cleanup:** Archived 15 disabled legacy tool modules to `tools/archive/`
+- **Improved:** Dynamic tool counting in startup log (replaces hardcoded "94 tools")
 
 ### v2.1.0 (2026-01-17) - THICK SCRIPTS
 - **Added:** Standard Library Injection support in `illustrator_execute_script`
