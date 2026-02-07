@@ -249,3 +249,145 @@ registerOpHandler("hash_structure", function (params, targets, ctx) {
         }
     };
 });
+
+/**
+ * Assert that targets have expected fill/stroke styles.
+ * Supports RGB and CMYK color modes.
+ * 
+ * @param {Object} params.fill - Expected fill color {r, g, b} or {c, m, y, k} (optional)
+ * @param {Object} params.stroke - Expected stroke color {r, g, b} or {c, m, y, k} (optional)
+ * @param {number} params.strokeWidth - Expected stroke width (optional)
+ * @param {number} params.opacity - Expected opacity 0-100 (optional)
+ * @param {number} params.tolerance - Color tolerance (default: 1)
+ */
+registerOpHandler("assert_style", function (params, targets, ctx) {
+    var tolerance = params.tolerance || 1;
+    var passed = [];
+    var failed = [];
+
+    function rgbMatches(actual, expected, tol) {
+        if (!actual || !expected) return false;
+        return Math.abs(actual.red - expected.r) <= tol &&
+            Math.abs(actual.green - expected.g) <= tol &&
+            Math.abs(actual.blue - expected.b) <= tol;
+    }
+
+    function cmykMatches(actual, expected, tol) {
+        if (!actual || !expected) return false;
+        return Math.abs(actual.cyan - expected.c) <= tol &&
+            Math.abs(actual.magenta - expected.m) <= tol &&
+            Math.abs(actual.yellow - expected.y) <= tol &&
+            Math.abs(actual.black - expected.k) <= tol;
+    }
+
+    function checkColor(actualColor, expected, tol) {
+        if (!actualColor) return { ok: false, message: "no color" };
+
+        var typename = actualColor.typename;
+
+        // RGB color check
+        if (typename === "RGBColor") {
+            if (expected.r !== undefined) {
+                if (rgbMatches(actualColor, expected, tol)) {
+                    return { ok: true };
+                } else {
+                    return {
+                        ok: false,
+                        message: "mismatch: expected rgb(" + expected.r + "," + expected.g + "," + expected.b +
+                            ") got rgb(" + actualColor.red + "," + actualColor.green + "," + actualColor.blue + ")"
+                    };
+                }
+            } else {
+                return { ok: false, message: "expected CMYK but got RGB" };
+            }
+        }
+
+        // CMYK color check  
+        if (typename === "CMYKColor") {
+            if (expected.c !== undefined) {
+                if (cmykMatches(actualColor, expected, tol)) {
+                    return { ok: true };
+                } else {
+                    return {
+                        ok: false,
+                        message: "mismatch: expected cmyk(" + expected.c + "," + expected.m + "," + expected.y + "," + expected.k +
+                            ") got cmyk(" + actualColor.cyan + "," + actualColor.magenta + "," + actualColor.yellow + "," + actualColor.black + ")"
+                    };
+                }
+            } else {
+                return { ok: false, message: "expected RGB but got CMYK" };
+            }
+        }
+
+        // Unsupported color type
+        return { ok: false, message: "unsupported color type: " + typename };
+    }
+
+    for (var i = 0; i < targets.length; i++) {
+        var item = targets[i];
+        var issues = [];
+
+        try {
+            // Check fill color
+            if (params.fill) {
+                if (item.filled && item.fillColor) {
+                    var fillResult = checkColor(item.fillColor, params.fill, tolerance);
+                    if (!fillResult.ok) {
+                        issues.push("fill " + fillResult.message);
+                    }
+                } else if (!item.filled) {
+                    issues.push("no fill");
+                }
+            }
+
+            // Check stroke color
+            if (params.stroke) {
+                if (item.stroked && item.strokeColor) {
+                    var strokeResult = checkColor(item.strokeColor, params.stroke, tolerance);
+                    if (!strokeResult.ok) {
+                        issues.push("stroke " + strokeResult.message);
+                    }
+                } else if (!item.stroked) {
+                    issues.push("no stroke");
+                }
+            }
+
+            // Check stroke width
+            if (params.strokeWidth !== undefined) {
+                if (item.stroked) {
+                    if (Math.abs(item.strokeWidth - params.strokeWidth) > tolerance) {
+                        issues.push("strokeWidth mismatch: expected " + params.strokeWidth + " got " + item.strokeWidth);
+                    }
+                } else {
+                    issues.push("no stroke");
+                }
+            }
+
+            // Check opacity
+            if (params.opacity !== undefined) {
+                if (Math.abs(item.opacity - params.opacity) > tolerance) {
+                    issues.push("opacity mismatch: expected " + params.opacity + " got " + item.opacity);
+                }
+            }
+
+            if (issues.length === 0) {
+                passed.push(i);
+            } else {
+                failed.push({ index: i, name: item.name || null, issues: issues });
+            }
+
+        } catch (e) {
+            failed.push({ index: i, name: item.name || null, issues: ["error: " + e.message] });
+        }
+    }
+
+    return {
+        ok: failed.length === 0,
+        data: {
+            passed: passed.length,
+            failed: failed.length,
+            details: failed.slice(0, 10)  // Limit to first 10 failures
+        }
+    };
+});
+

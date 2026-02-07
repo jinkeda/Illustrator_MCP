@@ -25,6 +25,14 @@ from illustrator_mcp.shared import (
     check_connection_or_error,
 )
 from illustrator_mcp.log_config import log_command
+from illustrator_mcp.logging import log_request as log_request_to_file
+from illustrator_mcp.utils.chunking import (
+    ChunkConfig,
+    chunk_ops,
+    merge_chunk_results,
+    should_chunk,
+    estimate_chunk_count,
+)
 
 # Configure logging
 logger = logging.getLogger(__name__)
@@ -242,11 +250,105 @@ async def execute_script_with_context(
     else:
         log_command(logger, tid, command_type, "completed", duration_ms)
     
+    # Log to persistent file (for debugging/replay)
+    try:
+        log_request_to_file(
+            trace_id=tid,
+            script=script,
+            includes=None,  # Includes added at higher level
+            result=response,
+            duration_ms=duration_ms
+        )
+    except Exception as e:
+        logger.debug(f"Request logging failed: {e}")
+    
     # Add trace_id and elapsed_ms to response for tracing
     response["trace_id"] = tid
     response["elapsed_ms"] = duration_ms
     
     return response
+
+
+async def execute_op_batch_chunked(
+    ops: List[Dict[str, Any]],
+    options: Optional[Dict[str, Any]] = None,
+    config: Optional[ChunkConfig] = None,
+    timeout: Optional[float] = None
+) -> ExecutionResponse:
+    """
+    Execute an operation batch with automatic chunking for large batches.
+    
+    If the batch is small enough, executes directly.
+    If chunking is needed, splits the batch and merges results.
+    
+    Args:
+        ops: List of SOC operations
+        options: executeOpBatch options (strict, trace, rollback, etc.)
+        config: Chunking configuration
+        timeout: Per-chunk execution timeout
+        
+    Returns:
+        Merged ExecutionResponse with aggregated stats
+    """
+    config = config or ChunkConfig()
+    options = options or {}
+    timeout = timeout or config.timeout if hasattr(config, 'timeout') else 60.0
+    
+    # If chunking not needed, execute directly
+    if not should_chunk(ops, config):
+        script = f"executeOpBatch({json.dumps(ops)}, {json.dumps(options)})"
+        return await execute_script_with_context(
+            script=script,
+            command_type="op_batch",
+            params={"op_count": len(ops)},
+            timeout=timeout
+        )
+    
+    # Execute in chunks
+    chunk_count = estimate_chunk_count(ops, config)
+    logger.info(f"Chunking {len(ops)} ops into {chunk_count} chunks")
+    
+    results = []
+    created_ids = []
+    
+    for i, chunk in enumerate(chunk_ops(ops, config)):
+        # Add summaryOnly to reduce response size
+        chunk_options = {**options, "summaryOnly": config.use_summary_only}
+        
+        script = f"executeOpBatch({json.dumps(chunk)}, {json.dumps(chunk_options)})"
+        trace_id = f"chunk_{i+1}_{chunk_count}"
+        
+        response = await execute_script_with_context(
+            script=script,
+            command_type="op_batch_chunk",
+            params={"chunk": i + 1, "total": chunk_count, "ops": len(chunk)},
+            trace_id=trace_id,
+            timeout=timeout
+        )
+        
+        if response.get("error"):
+            # Chunk failed - return error or continue based on strict mode
+            if config.strict:
+                return {
+                    "ok": False,
+                    "error": f"Chunk {i+1}/{chunk_count} failed: {response['error']}",
+                    "chunks_completed": i,
+                    "createdIds": created_ids
+                }
+            results.append({"ok": False, "error": response["error"]})
+            continue
+        
+        # Parse result and accumulate created IDs
+        result = _unwrap_result(response.get("result", response))
+        if isinstance(result, dict):
+            results.append(result)
+            created_ids.extend(result.get("createdIds", []))
+        
+        # Stop on first failure in strict mode
+        if config.strict and isinstance(result, dict) and not result.get("ok", True):
+            return merge_chunk_results(results, created_ids)
+    
+    return merge_chunk_results(results, created_ids)
 
 
 def _try_parse_json(value: Any) -> Any:

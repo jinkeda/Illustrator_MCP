@@ -175,14 +175,16 @@ illustrator_execute_script({
 | `selection` | `getOrderedSelection` | Spatial sorting of selection |
 | `task_executor` | `executeTask`, `collectTargets` | Structured task execution |
 | `validate` | `countItemsOnArtboard` | Bounds validation and preflight checks |
-| `ops_core` | `executeOpBatch`, `registerOpHandler` | SOC batch executor and validation |
+| `op_schemas` | `validateOpParams`, `getOpSchema` | Auto-generated parameter schemas for SOC ops |
+| `snapshot` | `captureSnapshot`, `restoreSnapshot` | Document state snapshot/restore for rollback |
+| `ops_core` | `executeOpBatch`, `registerOpHandler`, `invalidateIdIndex` | SOC batch executor with ID index caching |
 | `ops_element` | — | Create, modify, delete shapes |
 | `ops_group` | — | Group/ungroup, z-order |
 | `ops_layer` | — | Layer CRUD |
 | `ops_style` | — | Fill, stroke, opacity |
 | `ops_text` | — | Text frame operations |
 | `ops_align` | — | Alignment, distribution |
-| `ops_measure` | — | Assertions, snapshots |
+| `ops_measure` | — | Assertions (count, bounds, exists, style), snapshots |
 
 ### 5. Task Protocol Architecture (v2.2)
 
@@ -226,9 +228,15 @@ var report = executeOpBatch(ops, {strict: true, trace: true});
 | Feature | Description |
 |---------|-------------|
 | **Stable ID Targeting** | `@mcp:id=UUID` in item.note for deterministic refs |
-| **Batch Validation** | All ops validated before execution |
-| **Strict/Continue Modes** | Stop on error or collect all errors |
+| **Batch Validation** | Schema-validated params (auto-generated from `gen_schemas.py`) |
+| **Strict/Continue Modes** | Stop on first error or collect all errors |
 | **Per-Op Reporting** | Index, task, duration, warnings per operation |
+| **summaryOnly Mode** | Omit per-op details for ~80% response size reduction |
+| **Global ID Index** | O(1) element lookups cached in `$.global.mcpIdIndex` |
+| **Snapshot Rollback** | `{rollback: true, snapshot: true}` for state-based undo |
+| **Python Chunking** | `execute_op_batch_chunked()` auto-splits large batches |
+| **assert_style** | Verify fill/stroke/opacity with RGB + CMYK support |
+| **WebSocket Streaming** | Progress updates via `execute_script_streaming()` |
 
 > See `.agent/skills/state-ops-checks/SKILL.md` for full documentation.
 
@@ -682,10 +690,14 @@ Illustrator_MCP/
 │   ├── config.py              # Configuration (Pydantic Settings)
 │   ├── websocket_bridge.py    # Bridge facade
 │   ├── shared.py              # Shared context
-│   ├── proxy_client.py        # Script execution client
+│   ├── proxy_client.py        # Script execution client + chunked batch execution
 │   ├── bridge/                # WebSocket bridge components
 │   │   ├── server.py          # WebSocket server transport
-│   │   └── request_registry.py # Async request management
+│   │   └── request_registry.py # Async request management + streaming support
+│   ├── logging/               # Structured request logging
+│   │   └── request_log.py     # JSON-lines logger (~/.illustrator-mcp/logs/)
+│   ├── utils/                 # Utility modules
+│   │   └── chunking.py        # Op batch chunking for large operations
 │   ├── resources/             # Static resources
 │   │   └── scripts/           # ExtendScript libraries
 │   │       ├── manifest.json  # Library metadata & exports
@@ -694,7 +706,17 @@ Illustrator_MCP/
 │   │       ├── presets.jsx    # Layout presets & color palettes (v2.0)
 │   │       ├── selection.jsx  # Selection utilities
 │   │       ├── task_executor.jsx # Task Protocol framework
-│   │       └── validate.jsx   # Bounds validation & preflight
+│   │       ├── validate.jsx   # Bounds validation & preflight
+│   │       ├── op_schemas.jsx # Auto-generated param schemas (from gen_schemas.py)
+│   │       ├── snapshot.jsx   # Document state snapshot/restore
+│   │       ├── ops_core.jsx   # SOC batch executor + ID index
+│   │       ├── ops_element.jsx # Element create/modify/delete
+│   │       ├── ops_group.jsx  # Group/ungroup, z-order
+│   │       ├── ops_layer.jsx  # Layer CRUD
+│   │       ├── ops_style.jsx  # Fill, stroke, opacity
+│   │       ├── ops_text.jsx   # Text frame operations
+│   │       ├── ops_align.jsx  # Alignment, distribution
+│   │       └── ops_measure.jsx # Assertions + measurement
 │   ├── schemas/               # Generated JSON schemas
 │   └── tools/                 # ~15 tools (Scripting First)
 │       ├── __init__.py        # Tool registration
@@ -720,6 +742,8 @@ Illustrator_MCP/
 │   ├── test_effects.py
 │   ├── test_pathfinder.py
 │   └── test_selection.py      # Selection tool tests
+├── scripts/                   # Developer tools
+│   └── gen_schemas.py         # Schema codegen (python -m scripts.gen_schemas)
 ├── install-cep.bat            # Windows CEP installer
 ├── pyproject.toml             # Python package config
 └── README.md
@@ -779,6 +803,90 @@ The Node.js `proxy-server` folder is kept for reference but is no longer used.
 ---
 
 ## Changelog
+
+### v2.12.0 (2026-02-07) - SOC HARDENING & INTEGRATION
+
+Fixes and integrations based on code review of v2.11.0 changes.
+
+**Bug Fixes**
+- **ID index invalidation on deletes:** `element_delete` handler now calls `invalidateIdIndex()` after successful deletes, preventing stale index lookups
+- **Streaming race condition:** `push_update` and `complete_streaming` in `request_registry.py` now perform lookup + queue put entirely inside the lock, eliminating race between concurrent calls
+- **Streaming queue bounded:** `asyncio.Queue(maxsize=1000)` prevents unbounded memory growth on long-running streaming operations
+- **Snapshot rollback now deletes created items:** On batch failure, newly created elements are removed before restoring snapshot state (previously they were orphaned)
+
+**Schema Unification**
+- Deleted hand-written `op_schemas.jsx` — now auto-generated from `gen_schemas.py` as single source of truth
+- All parameter names synchronized: `contents`/`fontSize`/`fontName`/`mode` (codegen wins)
+- Generated file includes `AUTO-GENERATED` header with timestamp
+
+**Chunking Integration**
+- **New:** `execute_op_batch_chunked()` in `proxy_client.py` — auto-splits large batches with `should_chunk()` check
+- Automatically applies `summaryOnly` to each chunk for reduced response size
+- Merges chunk results with `merge_chunk_results()` for unified stats
+
+**CMYK Support in assert_style**
+- New `cmykMatches()` and unified `checkColor()` helper in `ops_measure.jsx`
+- Handles RGBColor, CMYKColor, and reports unsupported color types with clear messages
+- Color mode mismatch produces descriptive errors (e.g., "expected CMYK but got RGB")
+
+### v2.11.0 (2026-02-07) - ADVANCED IMPROVEMENTS
+
+Major reliability and developer experience improvements for complex workflows.
+
+**Session 1: Core SOC Improvements**
+- **summaryOnly option** (`ops_core.jsx`) — Reduces response size ~80% for large batches by omitting per-op details, returning only stats + createdIds
+- **Global ID Index** (`ops_core.jsx`) — O(1) element lookups cached in `$.global.mcpIdIndex` with auto-invalidation on document change. Helpers: `invalidateIdIndex()`, `registerIdInIndex()`
+- **assert_style check op** (`ops_measure.jsx`) — Verify fill/stroke/opacity with tolerance-based color matching
+
+**Session 2: Advanced Infrastructure**
+
+**Request Logging** (`logging/request_log.py`)
+- JSON-lines structured logging to `~/.illustrator-mcp/logs/`
+- Session management with trace ID correlation
+- Script files saved on errors for debugging and replay
+
+**Schema Codegen** (`scripts/gen_schemas.py`)
+- Generates `op_schemas.jsx` from Python `OpSchema` definitions
+- Single source of truth for parameter validation schemas
+- Run: `python -m scripts.gen_schemas`
+
+**Python Chunking** (`utils/chunking.py`)
+- Automatic splitting of large operation batches
+- Separate limits for create ops (heavier) vs general ops
+- Iterator-based for memory efficiency
+
+**Snapshot/Restore Rollback** (`snapshot.jsx`)
+- Replaces fragile undo-based rollback with explicit state capture
+- Captures geometry, fill, stroke, opacity for MCP-managed items
+- Color serialization for RGB, CMYK, Gray, Spot, and NoColor
+- Usage: `executeOpBatch(ops, {rollback: true, snapshot: true})`
+
+**WebSocket Streaming** (`request_registry.py`, `websocket_bridge.py`, `main.js`)
+- New `execute_script_streaming()` async generator for progress updates
+- `StreamingRequest` with bounded async queue (`maxsize=1000`)
+- CEP panel wrapper for `$.global.__mcpProgress()` callbacks
+- Usage:
+```python
+async for update in bridge.execute_script_streaming(script):
+    if update["type"] == "progress":
+        print(f"Progress: {update['data']}")
+```
+
+**Files Changed:**
+| File | Change |
+|------|--------|
+| `logging/request_log.py` | NEW (~200 lines) |
+| `scripts/gen_schemas.py` | NEW (~320 lines) |
+| `utils/chunking.py` | NEW (~180 lines) |
+| `snapshot.jsx` | NEW (~280 lines) |
+| `op_schemas.jsx` | NEW (auto-generated, ~500 lines) |
+| `request_registry.py` | MODIFY (+120 lines) |
+| `websocket_bridge.py` | MODIFY (+80 lines) |
+| `cep-extension/js/main.js` | MODIFY (+75 lines) |
+| `proxy_client.py` | MODIFY (+80 lines) |
+| `ops_core.jsx` | MODIFY (+40 lines) |
+| `ops_measure.jsx` | MODIFY (+80 lines) |
+| `manifest.json` | MODIFY (+12 lines) |
 
 ### v2.10.0 (2026-02-07) - VISUAL FEEDBACK & ROBUSTNESS
 

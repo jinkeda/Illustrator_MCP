@@ -122,11 +122,38 @@
             ],
             "description": "Bounds validation with clipping mask, scope, and layer-visibility support"
         },
+        "op_schemas": {
+            "file": "op_schemas.jsx",
+            "version": "1.0.0",
+            "dependencies": [
+                "task_executor"
+            ],
+            "exports": [
+                "OP_PARAM_SCHEMAS",
+                "validateOpParams",
+                "getOpSchema",
+                "listSchemaOps"
+            ],
+            "description": "Parameter schemas for SOC op validation"
+        },
+        "snapshot": {
+            "file": "snapshot.jsx",
+            "version": "1.0.0",
+            "dependencies": [],
+            "exports": [
+                "captureSnapshot",
+                "restoreSnapshot",
+                "serializeColor",
+                "deserializeColor"
+            ],
+            "description": "Document state snapshot/restore for safer rollback"
+        },
         "ops_core": {
             "file": "ops_core.jsx",
             "version": "1.0.0",
             "dependencies": [
-                "task_executor"
+                "task_executor",
+                "op_schemas"
             ],
             "exports": [
                 "OP_SCHEMA_VERSION",
@@ -137,9 +164,11 @@
                 "resolveById",
                 "resolveTargets",
                 "executeOpBatch",
-                "profileOp"
+                "profileOp",
+                "invalidateIdIndex",
+                "registerIdInIndex"
             ],
-            "description": "SOC operation batch executor with ID-based targeting and validation"
+            "description": "SOC operation batch executor with ID-based targeting, validation, and global index caching"
         },
         "ops_element": {
             "file": "ops_element.jsx",

@@ -128,8 +128,8 @@ function connect() {
                     log(`Received script (id: ${message.id})`, 'info');
                 }
 
-                // Execute script via ExtendScript
-                executeScript(message.id, message.script, message.command);
+                // Execute script via ExtendScript (pass streaming flag)
+                executeScript(message.id, message.script, message.command, message.streaming === true);
 
             } catch (error) {
                 log(`Parse error: ${error.message}`, 'error');
@@ -188,8 +188,9 @@ function disconnect() {
  * @param {number} id - Request ID
  * @param {string} script - JavaScript/ExtendScript code to execute
  * @param {object} command - Optional command metadata for logging
+ * @param {boolean} streaming - Whether to enable streaming progress updates
  */
-function executeScript(id, script, command = null) {
+function executeScript(id, script, command = null, streaming = false) {
     // Get command type (now contains description or script preview)
     const commandType = command ? (command.type || 'script') : 'raw_script';
     // Truncate for display
@@ -203,27 +204,101 @@ function executeScript(id, script, command = null) {
         .replace(/\n/g, '\\n')
         .replace(/\r/g, '\\r');
 
-    // Call ExtendScript host function
-    csInterface.evalScript(`executeScript('${escapedScript}')`, (result) => {
-        const duration = Date.now() - startTime;
+    if (streaming) {
+        // For streaming requests, wrap script to capture progress updates
+        const streamingWrapper = `
+            (function() {
+                var __requestId = ${id};
+                if (!$.global.__progressQueue) $.global.__progressQueue = [];
+                
+                $.global.__mcpProgress = function(data) {
+                    $.global.__progressQueue.push({id: __requestId, type: 'progress', data: data});
+                };
+                
+                try {
+                    var __result = (function() { ${escapedScript} })();
+                    return JSON.stringify({
+                        id: __requestId,
+                        type: 'complete',
+                        result: __result,
+                        progressQueue: $.global.__progressQueue
+                    });
+                } catch (e) {
+                    return JSON.stringify({
+                        id: __requestId,
+                        type: 'complete',
+                        error: e.message,
+                        progressQueue: $.global.__progressQueue
+                    });
+                } finally {
+                    $.global.__progressQueue = [];
+                    $.global.__mcpProgress = null;
+                }
+            })()
+        `.replace(/\\/g, '\\\\').replace(/'/g, "\\'").replace(/\n/g, '\\n').replace(/\r/g, '\\r');
 
-        // Log with command context - show the descriptive type
-        log(`✓ ${displayType} (${duration}ms)`, 'success');
+        csInterface.evalScript(streamingWrapper, (rawResult) => {
+            const duration = Date.now() - startTime;
+            log(`✓ ${displayType} (streaming, ${duration}ms)`, 'success');
 
-        // Send response back with command info
-        const response = {
-            id: id,
-            command: commandType,
-            result: result,
-            duration: duration
-        };
+            try {
+                const parsed = JSON.parse(rawResult);
 
-        if (ws && ws.readyState === WebSocket.OPEN) {
-            ws.send(JSON.stringify(response));
-        } else {
-            log('Cannot send response - not connected', 'error');
-        }
-    });
+                // Send progress updates first
+                if (parsed.progressQueue) {
+                    for (const progress of parsed.progressQueue) {
+                        if (ws && ws.readyState === WebSocket.OPEN) {
+                            ws.send(JSON.stringify(progress));
+                        }
+                    }
+                }
+
+                // Send final result
+                const response = {
+                    id: id,
+                    type: 'complete',
+                    command: commandType,
+                    result: parsed.result || null,
+                    error: parsed.error || null,
+                    duration: duration
+                };
+
+                if (ws && ws.readyState === WebSocket.OPEN) {
+                    ws.send(JSON.stringify(response));
+                }
+            } catch (parseErr) {
+                const response = {
+                    id: id,
+                    type: 'complete',
+                    command: commandType,
+                    result: rawResult,
+                    duration: duration
+                };
+                if (ws && ws.readyState === WebSocket.OPEN) {
+                    ws.send(JSON.stringify(response));
+                }
+            }
+        });
+    } else {
+        // Non-streaming execution (original behavior)
+        csInterface.evalScript(`executeScript('${escapedScript}')`, (result) => {
+            const duration = Date.now() - startTime;
+            log(`✓ ${displayType} (${duration}ms)`, 'success');
+
+            const response = {
+                id: id,
+                command: commandType,
+                result: result,
+                duration: duration
+            };
+
+            if (ws && ws.readyState === WebSocket.OPEN) {
+                ws.send(JSON.stringify(response));
+            } else {
+                log('Cannot send response - not connected', 'error');
+            }
+        });
+    }
 }
 
 /**

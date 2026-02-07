@@ -271,6 +271,11 @@ registerOpHandler("element_delete", function (params, targets, ctx) {
         }
     }
 
+    // Invalidate ID index after deletes (deleted items would cause stale references)
+    if (deleted > 0 && typeof invalidateIdIndex === "function") {
+        invalidateIdIndex();
+    }
+
     return {
         ok: deleted > 0 || targets.length === 0,
         data: { deleted: deleted, total: targets.length, failed: targets.length - deleted },

@@ -65,13 +65,25 @@ class WebSocketBridge:
         try:
             data = json.loads(message)
             request_id = data.get("id")
+            msg_type = data.get("type", "complete")
 
             if request_id:
-                # Delegate completion to registry
-                if self.registry.complete_request(request_id, data):
-                    logger.debug(f"Request {request_id} completed")
+                # Check if this is a streaming request
+                if self.registry.is_streaming(request_id):
+                    if msg_type == "progress":
+                        # Push progress update to streaming queue
+                        self.registry.push_update(request_id, data)
+                        logger.debug(f"Progress update for streaming request {request_id}")
+                    else:
+                        # Final result - complete the streaming
+                        self.registry.complete_streaming(request_id, data)
+                        logger.debug(f"Streaming request {request_id} completed")
                 else:
-                    logger.debug(f"Received response for unknown/done request: {request_id}")
+                    # Regular (non-streaming) request
+                    if self.registry.complete_request(request_id, data):
+                        logger.debug(f"Request {request_id} completed")
+                    else:
+                        logger.debug(f"Received response for unknown/done request: {request_id}")
             else:
                 logger.warning("Received message without ID")
 
@@ -229,6 +241,74 @@ class WebSocketBridge:
             self.registry.fail_request(request_id, e)
             cmd_ctx = f" [{command.command_type}]" if command else ""
             return {"error": f"EXECUTION_ERROR{cmd_ctx}: {str(e)}"}
+
+    async def execute_script_streaming(
+        self, 
+        script: str, 
+        timeout: float = 300.0,
+        command: Optional[CommandMetadata] = None,
+        trace_id: Optional[str] = None
+    ):
+        """
+        Execute a script with streaming progress updates.
+        
+        Use this for long-running operations that emit progress events.
+        The script must send progress messages via the CEP panel.
+        
+        Args:
+            script: JavaScript code to execute
+            timeout: Timeout for each update (total execution can be longer)
+            command: Optional CommandMetadata for context
+            trace_id: Optional trace ID for request correlation
+            
+        Yields:
+            Progress updates and final result as dictionaries.
+            Each update has a "type" field: "progress" or "complete".
+        """
+        if not self.is_connected():
+            yield create_connection_error(self.port)
+            return
+
+        # Build command info for message
+        command_info = command.to_dict() if command else None
+        if command:
+            logger.info(f"[{trace_id or 'no-trace'}] Streaming execution: {command.command_type}")
+
+        # Create streaming request (uses queue instead of future)
+        request_id, queue = self.registry.create_streaming_request(
+            self.loop, 
+            script, 
+            command_info,
+            trace_id
+        )
+
+        # Build message with streaming flag
+        message_data: Dict[str, Any] = {
+            "id": request_id, 
+            "script": script,
+            "streaming": True  # Signal CEP to send progress updates
+        }
+        if command_info:
+            message_data["command"] = command_info
+        if trace_id:
+            message_data["trace_id"] = trace_id
+        
+        message = json.dumps(message_data)
+
+        try:
+            # Send script to CEP panel
+            await self.server.send(message)
+            logger.debug(f"Sent streaming request {request_id} (trace: {trace_id}) to Illustrator")
+
+            # Yield updates from the queue
+            async for update in self.registry.stream_updates(request_id, timeout):
+                yield update
+                if update.get("type") == "complete":
+                    break
+
+        except Exception as e:
+            cmd_ctx = f" [{command.command_type}]" if command else ""
+            yield {"error": f"STREAMING_ERROR{cmd_ctx}: {str(e)}", "type": "error"}
 
 
 def get_bridge() -> WebSocketBridge:

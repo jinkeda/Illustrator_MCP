@@ -94,6 +94,16 @@ function validateOp(op, strict) {
         ));
     }
 
+    // Schema-based param validation (if op_schemas loaded)
+    if (typeof validateOpParams === "function") {
+        var paramValidation = validateOpParams(op.task, op.params);
+        if (!paramValidation.ok) {
+            for (var e = 0; e < paramValidation.errors.length; e++) {
+                errors.push(paramValidation.errors[e]);
+            }
+        }
+    }
+
     // Targets validation
     if (op.targets) {
         var targetType = op.targets.type;
@@ -136,17 +146,50 @@ function validateOp(op, strict) {
 
 // ==================== ID-Based Target Resolution ====================
 
+// Initialize global ID index cache (persists across batch calls)
+if (!$.global.mcpIdIndex) {
+    $.global.mcpIdIndex = { docName: null, index: {} };
+}
+
 /**
- * Build ID index for O(1) lookups
+ * Invalidate the global ID index cache.
+ * Call this after deleting elements or when the index is known to be stale.
+ */
+function invalidateIdIndex() {
+    $.global.mcpIdIndex = { docName: null, index: {} };
+}
+
+/**
+ * Register a new ID in the global index (for newly created elements).
+ * @param {string} id - Element ID
+ * @param {PageItem} item - The element
+ */
+function registerIdInIndex(id, item) {
+    if ($.global.mcpIdIndex && $.global.mcpIdIndex.index) {
+        $.global.mcpIdIndex.index[id] = item;
+    }
+}
+
+/**
+ * Build ID index for O(1) lookups.
+ * Uses $.global for persistence across batches within the same session.
+ * Automatically invalidates if document changes.
  * @param {Document} doc - Active document
- * @param {Object} ctx - Batch context (stores index)
+ * @param {Object} ctx - Batch context (for diagnostics)
  * @returns {Object} ID index {id: item}
  */
 function buildIDIndex(doc, ctx) {
-    if (ctx.idIndex) return ctx.idIndex;
+    // Check if we already have a valid global index for this document
+    var docName = doc.name;
+    if ($.global.mcpIdIndex.docName === docName && $.global.mcpIdIndex.index) {
+        ctx.diagnostics.idIndexCacheHit = true;
+        // Also store in ctx for backward compatibility
+        ctx.idIndex = $.global.mcpIdIndex.index;
+        return ctx.idIndex;
+    }
 
+    // Need to rebuild index
     var index = {};
-    var scanDepth = 0;
     var maxDepth = 100; // Prevent infinite recursion
 
     function scan(container, depth) {
@@ -173,8 +216,11 @@ function buildIDIndex(doc, ctx) {
         scan(doc.layers[i], 0);
     }
 
+    // Store in global cache
+    $.global.mcpIdIndex = { docName: docName, index: index };
     ctx.idIndex = index;
     ctx.diagnostics.idScans++;
+    ctx.diagnostics.idIndexCacheHit = false;
     return index;
 }
 
@@ -244,13 +290,25 @@ function resolveTargets(doc, targets, ctx) {
  * @param {string} options.space.yAxis - Y-axis direction ("down", "up")
  * @param {boolean} options.strict - Stop on first error
  * @param {boolean} options.stopOnError - Alias for strict
+ * @param {boolean} options.rollback - Undo all completed ops on failure (requires strict)
+ * @param {boolean} options.snapshot - Capture state before execution for snapshot-based rollback (preferred over undo)
+ * @param {number} options.chunkSize - Emit progress every N ops (0 = disabled)
+ * @param {Function} options.onProgress - Progress callback (receives chunk report)
  * @param {boolean} options.trace - Include execution trace
+ * @param {boolean} options.summaryOnly - Omit per-op details, return only stats+createdIds (reduces token usage)
  * @returns {Object} Batch report
  */
 function executeOpBatch(ops, options) {
     options = options || {};
     var strict = options.strict || options.stopOnError || false;
+    var rollback = options.rollback === true;
+    var useSnapshot = options.snapshot === true;
+    var chunkSize = options.chunkSize || 0;
+    var onProgress = options.onProgress || null;
     var trace = options.trace ? [] : null;
+    var summaryOnly = options.summaryOnly === true;
+    var createdIds = [];  // Track created element IDs for summaryOnly mode
+    var preSnapshot = null;  // Pre-execution snapshot for rollback
 
     // Check for active document
     var doc = null;
@@ -303,9 +361,37 @@ function executeOpBatch(ops, options) {
     // === EXECUTION PHASE ===
     if (trace) trace.push("[EXECUTE] Running " + ops.length + " ops");
 
+    // Capture snapshot before execution if enabled (for snapshot-based rollback)
+    if (useSnapshot && rollback && typeof captureSnapshot === "function") {
+        try {
+            preSnapshot = captureSnapshot(doc, { mcpOnly: true });
+            if (trace) trace.push("[SNAPSHOT] Captured " + preSnapshot.items.length + " items");
+        } catch (snapErr) {
+            if (trace) trace.push("[SNAPSHOT ERROR] " + snapErr.message);
+        }
+    }
+
     var results = [];
     var passed = 0;
     var failed = 0;
+
+    // Rollback tracking: count mutating ops that complete successfully
+    var undoCount = 0;
+    var MUTATING_OPS = {
+        "element_create": true, "element_modify": true, "element_delete": true,
+        "style_set_fill": true, "style_set_stroke": true, "style_set_opacity": true,
+        "style_remove_fill": true, "style_remove_stroke": true,
+        "layer_create": true, "layer_delete": true, "layer_lock": true, "layer_visible": true,
+        "group_create": true, "group_ungroup": true,
+        "zorder_front": true, "zorder_back": true, "zorder_forward": true, "zorder_backward": true,
+        "text_create": true, "text_set_content": true, "text_set_style": true,
+        "align_horizontal": true, "align_vertical": true,
+        "distribute_horizontal": true, "distribute_vertical": true
+    };
+
+    // Progress tracking
+    var chunkIndex = 0;
+    var rolledBackCount = 0;
 
     for (var i = 0; i < ops.length; i++) {
         var op = ops[i];
@@ -342,8 +428,19 @@ function executeOpBatch(ops, options) {
                 opResult.data = handlerResult;
             }
 
-            if (opResult.ok) passed++;
-            else failed++;
+            if (opResult.ok) {
+                passed++;
+                // Track created element IDs for summaryOnly mode
+                if (opResult.id) {
+                    createdIds.push(opResult.id);
+                }
+                // Track successful mutating ops for rollback
+                if (MUTATING_OPS[op.task]) {
+                    undoCount++;
+                }
+            } else {
+                failed++;
+            }
 
         } catch (e) {
             opResult.ok = false;
@@ -359,20 +456,133 @@ function executeOpBatch(ops, options) {
             if (strict) {
                 opResult.duration_ms = new Date().getTime() - t0;
                 results.push(opResult);
+
+                // Rollback on failure if enabled
+                if (rollback) {
+                    // Prefer snapshot-based restore if captured
+                    if (useSnapshot && preSnapshot && typeof restoreSnapshot === "function") {
+                        if (trace) trace.push("[ROLLBACK] Restoring from snapshot");
+
+                        // First, delete any items created during this batch (they weren't in the snapshot)
+                        var createdDeleted = 0;
+                        if (createdIds.length > 0) {
+                            if (trace) trace.push("[ROLLBACK] Deleting " + createdIds.length + " created items");
+                            var idIndex = typeof $.global.mcpIdIndex === "object" ? $.global.mcpIdIndex.index : {};
+                            for (var ci = 0; ci < createdIds.length; ci++) {
+                                try {
+                                    var createdItem = idIndex[createdIds[ci]];
+                                    if (createdItem && createdItem.remove) {
+                                        createdItem.remove();
+                                        createdDeleted++;
+                                    }
+                                } catch (delErr) {
+                                    if (trace) trace.push("[ROLLBACK] Failed to delete " + createdIds[ci] + ": " + delErr.message);
+                                }
+                            }
+                            // Invalidate ID index after deleting created items
+                            if (typeof invalidateIdIndex === "function") {
+                                invalidateIdIndex();
+                            }
+                        }
+
+                        // Then restore the snapshot state for pre-existing items
+                        try {
+                            var restoreResult = restoreSnapshot(doc, preSnapshot, { geometry: true, style: true });
+                            rolledBackCount = restoreResult.restored + createdDeleted;
+                            if (trace) trace.push("[ROLLBACK] Restored " + restoreResult.restored + " items, deleted " + createdDeleted + " created items");
+                        } catch (restoreErr) {
+                            if (trace) trace.push("[ROLLBACK ERROR] " + restoreErr.message);
+                        }
+                    } else if (undoCount > 0) {
+                        // Fallback to undo-based rollback
+                        if (trace) trace.push("[ROLLBACK] Undoing " + undoCount + " mutating ops (undo fallback)");
+                        for (var u = 0; u < undoCount; u++) {
+                            try {
+                                app.executeMenuCommand('undo');
+                                rolledBackCount++;
+                            } catch (undoErr) {
+                                if (trace) trace.push("[ROLLBACK ERROR] " + undoErr.message);
+                            }
+                        }
+                    }
+                }
                 break;
             }
         }
 
         opResult.duration_ms = new Date().getTime() - t0;
         results.push(opResult);
+
+        // Progress callback
+        if (chunkSize > 0 && onProgress && results.length % chunkSize === 0) {
+            var chunkReport = {
+                chunkIndex: chunkIndex++,
+                opsCompleted: results.length,
+                opsTotal: ops.length,
+                passed: passed,
+                failed: failed,
+                lastOp: op.task,
+                percentComplete: Math.round((results.length / ops.length) * 100)
+            };
+            try {
+                onProgress(chunkReport);
+            } catch (cbErr) {
+                if (trace) trace.push("[PROGRESS ERROR] " + cbErr.message);
+            }
+            if (trace) trace.push("[CHUNK " + (chunkIndex - 1) + "] " + results.length + "/" + ops.length);
+        }
+    }
+
+    // Final chunk if not aligned
+    if (chunkSize > 0 && onProgress && results.length % chunkSize !== 0) {
+        try {
+            onProgress({
+                chunkIndex: chunkIndex,
+                opsCompleted: results.length,
+                opsTotal: ops.length,
+                passed: passed,
+                failed: failed,
+                final: true,
+                percentComplete: 100
+            });
+        } catch (cbErr) {
+            if (trace) trace.push("[PROGRESS ERROR] " + cbErr.message);
+        }
     }
 
     // === BUILD REPORT ===
     var allOk = failed === 0;
+    var totalMs = results.reduce(function (sum, r) { return sum + r.duration_ms; }, 0);
+
+    // summaryOnly mode: omit per-op details to reduce token usage
+    if (summaryOnly) {
+        return {
+            ok: allOk,
+            schemaVersion: OP_SCHEMA_VERSION,
+            summaryOnly: true,
+            rolledBack: rolledBackCount,
+            createdIds: createdIds,
+            stats: {
+                total: ops.length,
+                executed: results.length,
+                passed: passed,
+                failed: failed
+            },
+            timing: { total_ms: totalMs },
+            diagnostics: ctx.diagnostics,
+            // Only include errors, not successful op details
+            errors: results.filter(function (r) { return !r.ok; }).map(function (r) {
+                return { index: r.index, task: r.task, error: r.error };
+            }),
+            trace: trace
+        };
+    }
 
     return {
         ok: allOk,
         schemaVersion: OP_SCHEMA_VERSION,
+        rolledBack: rolledBackCount,
+        createdIds: createdIds,
         ops: results,
         stats: {
             total: ops.length,
@@ -380,9 +590,7 @@ function executeOpBatch(ops, options) {
             passed: passed,
             failed: failed
         },
-        timing: {
-            total_ms: results.reduce(function (sum, r) { return sum + r.duration_ms; }, 0)
-        },
+        timing: { total_ms: totalMs },
         diagnostics: ctx.diagnostics,
         trace: trace
     };
