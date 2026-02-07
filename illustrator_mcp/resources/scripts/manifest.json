@@ -5,15 +5,22 @@
     "libraries": {
         "geometry": {
             "file": "geometry.jsx",
-            "version": "1.0.0",
+            "version": "2.0.0",
             "dependencies": [],
             "exports": [
+                "getContext",
+                "pointXY",
+                "rectXY",
+                "ellipseXY",
+                "lineXY",
+                "polygonXY",
+                "makeRGBColor",
                 "mmToPoints",
                 "pointsToMm",
                 "getVisibleBounds",
                 "getVisibleInfo"
             ],
-            "description": "Geometry and bounds calculations, unit conversions"
+            "description": "Geometry, bounds calculations, unit conversions, and intuitive XY coordinate helpers"
         },
         "selection": {
             "file": "selection.jsx",
@@ -28,15 +35,21 @@
         },
         "layout": {
             "file": "layout.jsx",
-            "version": "1.0.0",
+            "version": "2.0.0",
             "dependencies": [
                 "geometry"
             ],
             "exports": [
                 "arrangeInGrid",
-                "batchResize"
+                "batchResize",
+                "createGrid",
+                "distributeHorizontal",
+                "distributeVertical",
+                "alignCenter",
+                "alignHorizontal",
+                "alignVertical"
             ],
-            "description": "Grid layout and batch resize operations"
+            "description": "Grid creation, layout arrangement, distribution, and alignment helpers"
         },
         "task_executor": {
             "file": "task_executor.jsx",
@@ -74,6 +87,129 @@
                 "formatTiming"
             ],
             "description": "Task execution framework with error handling, retries, and structured reporting"
+        },
+        "presets": {
+            "file": "presets.jsx",
+            "version": "2.0.0",
+            "dependencies": [
+                "geometry"
+            ],
+            "exports": [
+                "PRESETS",
+                "getPreset",
+                "computeSlotGeometry",
+                "fitToSlot",
+                "applyPreset",
+                "listPresets",
+                "COLOR_PALETTES",
+                "getColor",
+                "getColorDef",
+                "getPalette",
+                "listPalettes",
+                "getPaletteInfo",
+                "applyPaletteToItems"
+            ],
+            "description": "Layout presets (grid configurations) and color palettes for scientific figures"
+        },
+        "validate": {
+            "file": "validate.jsx",
+            "version": "1.2.0",
+            "dependencies": [],
+            "exports": [
+                "isItemCenterOnArtboard",
+                "isLayerHidden",
+                "countItemsOnArtboard"
+            ],
+            "description": "Bounds validation with clipping mask, scope, and layer-visibility support"
+        },
+        "ops_core": {
+            "file": "ops_core.jsx",
+            "version": "1.0.0",
+            "dependencies": [
+                "task_executor"
+            ],
+            "exports": [
+                "OP_SCHEMA_VERSION",
+                "generateUUID",
+                "OP_HANDLERS",
+                "registerOpHandler",
+                "validateOp",
+                "resolveById",
+                "resolveTargets",
+                "executeOpBatch",
+                "profileOp"
+            ],
+            "description": "SOC operation batch executor with ID-based targeting and validation"
+        },
+        "ops_element": {
+            "file": "ops_element.jsx",
+            "version": "1.0.0",
+            "dependencies": [
+                "ops_core",
+                "task_executor"
+            ],
+            "exports": [],
+            "description": "Element CRUD operations (create, modify, delete)"
+        },
+        "ops_group": {
+            "file": "ops_group.jsx",
+            "version": "1.0.0",
+            "dependencies": [
+                "ops_core",
+                "task_executor"
+            ],
+            "exports": [],
+            "description": "Group operations (create, ungroup, z-order)"
+        },
+        "ops_layer": {
+            "file": "ops_layer.jsx",
+            "version": "1.0.0",
+            "dependencies": [
+                "ops_core",
+                "task_executor"
+            ],
+            "exports": [],
+            "description": "Layer operations (create, activate, lock, visible, delete)"
+        },
+        "ops_style": {
+            "file": "ops_style.jsx",
+            "version": "1.0.0",
+            "dependencies": [
+                "ops_core",
+                "task_executor"
+            ],
+            "exports": [],
+            "description": "Style operations (fill, stroke, opacity)"
+        },
+        "ops_text": {
+            "file": "ops_text.jsx",
+            "version": "1.0.0",
+            "dependencies": [
+                "ops_core",
+                "task_executor"
+            ],
+            "exports": [],
+            "description": "Text operations (create, set content, set style)"
+        },
+        "ops_align": {
+            "file": "ops_align.jsx",
+            "version": "1.0.0",
+            "dependencies": [
+                "ops_core",
+                "task_executor"
+            ],
+            "exports": [],
+            "description": "Alignment and distribution operations"
+        },
+        "ops_measure": {
+            "file": "ops_measure.jsx",
+            "version": "1.0.0",
+            "dependencies": [
+                "ops_core",
+                "task_executor"
+            ],
+            "exports": [],
+            "description": "Measurement and assertion operations for verification"
         }
     }
 }
