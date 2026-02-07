@@ -74,16 +74,27 @@ class WebSocketServer:
 
     async def _handle_client(self, websocket: WebSocketServerProtocol):
         """Handle a connected client."""
-        # Clean up existing client if needed
+        # Reject if there is already an active connection
+        if self.client is not None and self.is_connected():
+            logger.warning(
+                "Connection rejected: Another client is already connected."
+            )
+            await websocket.close(
+                4001,
+                "Another MCP client is already connected to Illustrator. "
+                "Please close the existing connection first."
+            )
+            return
+
+        # Clean up zombie connections (disconnected but not yet cleaned)
         if self.client is not None:
-             try:
-                is_closed = getattr(self.client, 'closed', True)
-                if not is_closed:
-                    logger.info("New connection. Closing stale connection.")
-                    asyncio.create_task(self.client.close(1000, "Replaced"))
-             except Exception as e:
-                logger.warning(f"Error closing old connection: {e}")
-        
+            logger.info("Cleaning up stale connection")
+            try:
+                await self.client.close(1000, "Stale connection cleanup")
+            except Exception:
+                pass
+            self.client = None
+
         logger.info("Illustrator CEP panel connected")
         self.client = websocket
 

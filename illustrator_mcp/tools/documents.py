@@ -4,14 +4,19 @@ Document operation tools for Adobe Illustrator.
 These tools use execute_script internally to run JavaScript in Illustrator.
 """
 
-from typing import Optional
+import json
+import os
+from typing import Optional, Union
 from enum import Enum
 
 from pydantic import Field
 
+from mcp.types import ImageContent
 from illustrator_mcp.shared import mcp
 from illustrator_mcp.tools.base import execute_jsx_tool, ToolInputBase
 from illustrator_mcp.utils import escape_path_for_jsx
+from illustrator_mcp.proxy_client import execute_script_with_context, format_envelope
+from illustrator_mcp.libraries import inject_libraries, get_injection_metadata
 from illustrator_mcp import templates
 
 
@@ -47,6 +52,9 @@ class ExportDocumentInput(ToolInputBase):
     file_path: str = Field(..., description="Export path with extension", min_length=1)
     format: ExportFormat = Field(default=ExportFormat.PNG, description="Export format")
     scale: float = Field(default=1.0, description="Scale factor", ge=0.1, le=10.0)
+    artboard_only: bool = Field(default=False, description="Clip export to artboard bounds")
+    artboard_index: Optional[int] = Field(default=None, description="Artboard index (None = active artboard)")
+    return_image: bool = Field(default=False, description="Return image bytes for Claude visualization (PNG/JPG only)")
 
 
 class CloseDocumentInput(ToolInputBase):
@@ -219,12 +227,70 @@ async def illustrator_save_document(params: SaveDocumentInput) -> str:
     name="illustrator_export_document",
     annotations={"title": "Export Document", "readOnlyHint": False, "destructiveHint": False}
 )
-async def illustrator_export_document(params: ExportDocumentInput) -> str:
+async def illustrator_export_document(params: ExportDocumentInput) -> Union[str, list]:
     """Export the document to PNG, JPG, SVG, or PDF."""
     path = escape_path_for_jsx(params.file_path)
     scale = params.scale * 100
     fmt_name = params.format.value.upper()
-    
+
+    warnings = []
+
+    # Ensure parent directory exists
+    parent_dir = os.path.dirname(os.path.abspath(params.file_path))
+    if not os.path.exists(parent_dir):
+        os.makedirs(parent_dir, exist_ok=True)
+        warnings.append(f"Created directory: {parent_dir}")
+
+    # Get canonicalized includes metadata (for precheck)
+    export_meta = get_injection_metadata(["validate"])
+    diagnostics = {
+        "file_path": params.file_path,
+        "format": params.format.value,
+        "scale": params.scale,
+        "artboard_only": params.artboard_only,
+        "artboard_index": params.artboard_index,
+        "precheck_includes": export_meta["includes_canonical"],
+        "precheck_prelude_hash": export_meta["prelude_hash"]
+    }
+
+    # Pre-export bounds check if artboard_only
+    if params.artboard_only:
+        ab_idx = params.artboard_index if params.artboard_index is not None else 'null'
+        check_script = f"""
+        countItemsOnArtboard({{
+            artboardIndex: {ab_idx},
+            boundsType: "visible",
+            ignoreHidden: true,
+            ignoreLocked: true,
+            policy: "intersects",
+            scope: "artboard"
+        }});
+        """
+        try:
+            check_with_lib = inject_libraries(check_script, ["validate"])
+            check_response = await execute_script_with_context(
+                script=check_with_lib,
+                command_type="export_precheck",
+                tool_name="illustrator_export_document"
+            )
+            # CEP returns {"success": bool, "result": "JSON string"}
+            cep_result = check_response.get("result", {})
+            if isinstance(cep_result, str):
+                cep_result = json.loads(cep_result)
+
+            # Extract inner result (the actual validation data)
+            inner_result = cep_result.get("result", "{}")
+            if isinstance(inner_result, str):
+                count = json.loads(inner_result)
+            else:
+                count = inner_result
+
+            if count.get('on_artboard', 0) == 0:
+                warnings.append("Nothing intersects artboard - export will be blank")
+            diagnostics["precheck_result"] = count
+        except Exception as e:
+            warnings.append(f"Pre-export check failed: {e}")
+
     # Config-driven export
     export_configs = {
         ExportFormat.PNG: {"options": "ExportOptionsPNG24", "type": "ExportType.PNG24", "scales": True},
@@ -232,29 +298,98 @@ async def illustrator_export_document(params: ExportDocumentInput) -> str:
         ExportFormat.SVG: {"options": "ExportOptionsSVG", "type": "ExportType.SVG", "scales": False},
         ExportFormat.PDF: {"options": "PDFSaveOptions", "type": None, "scales": False},
     }
-    
+
     config = export_configs[params.format]
-    
+
+    # Build export script with artboard clipping support
     if config["type"]:  # Standard exportFile (PNG, JPG, SVG)
-        scale_opts = f"""
+        ab_index_js = params.artboard_index if params.artboard_index is not None else 'doc.artboards.getActiveArtboardIndex()'
+        artboard_clip = "true" if params.artboard_only else "false"
+
+        scale_opts = ""
+        if config["scales"]:
+            scale_opts = f"""
             opts.horizontalScale = {scale};
-            opts.verticalScale = {scale};""" if config["scales"] else ""
-        script = templates.EXPORT_FILE.substitute(
-            path=path,
-            options_class=config["options"],
-            scale_opts=scale_opts,
-            export_type=config["type"],
-            format_name=fmt_name
-        )
+            opts.verticalScale = {scale};"""
+
+        # For PNG, add artBoardClipping option
+        clip_opt = ""
+        if params.format == ExportFormat.PNG:
+            clip_opt = f"opts.artBoardClipping = {artboard_clip};"
+
+        script = f"""
+(function() {{
+    var doc = app.activeDocument;
+    var abIdx = {ab_index_js};
+    doc.artboards.setActiveArtboardIndex(abIdx);
+
+    var opts = new {config["options"]}();{scale_opts}
+    {clip_opt}
+
+    var file = new File("{path}");
+    doc.exportFile(file, {config["type"]}, opts);
+
+    var abRect = doc.artboards[abIdx].artboardRect;
+    var exportWidth = Math.round((abRect[2] - abRect[0]) * {scale} / 100);
+    var exportHeight = Math.round(Math.abs(abRect[3] - abRect[1]) * {scale} / 100);
+
+    return JSON.stringify({{
+        success: true,
+        path: file.fsName,
+        format: "{fmt_name}",
+        artboard_index: abIdx,
+        artboard_clipping: {artboard_clip},
+        width: exportWidth,
+        height: exportHeight
+    }});
+}})();
+"""
     else:  # PDF uses saveAs
         script = templates.EXPORT_PDF.substitute(path=path)
 
-    return await execute_jsx_tool(
+    # Execute export (PDF gets longer timeout due to complexity)
+    response = await execute_script_with_context(
         script=script,
         command_type="export_document",
         tool_name="illustrator_export_document",
-        params={"file_path": params.file_path, "format": params.format.value, "scale": params.scale}
+        params={"file_path": params.file_path, "format": params.format.value, "scale": params.scale},
+        timeout=60.0 if params.format == ExportFormat.PDF else None
     )
+
+    envelope = format_envelope(
+        response=response,
+        context="export_document",
+        warnings=warnings,
+        diagnostics=diagnostics
+    )
+
+    # Return image bytes for visual feedback if requested
+    if params.return_image and params.format in [ExportFormat.PNG, ExportFormat.JPG]:
+        try:
+            import base64
+            with open(params.file_path, 'rb') as f:
+                img_bytes = f.read()
+            mime_type = "image/png" if params.format == ExportFormat.PNG else "image/jpeg"
+            # Return both envelope JSON and image content
+            return [
+                {"type": "text", "text": envelope},
+                ImageContent(
+                    type="image",
+                    data=base64.b64encode(img_bytes).decode('utf-8'),
+                    mimeType=mime_type
+                )
+            ]
+        except Exception as e:
+            # Fall back to envelope if image read fails
+            warnings.append(f"Failed to read image for return: {e}")
+            return format_envelope(
+                response=response,
+                context="export_document",
+                warnings=warnings,
+                diagnostics=diagnostics
+            )
+
+    return envelope
 
 
 @mcp.tool(

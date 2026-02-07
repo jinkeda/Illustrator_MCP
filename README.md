@@ -23,8 +23,9 @@ An MCP (Model Context Protocol) server that enables AI assistants like Claude to
 
 ## Features
 
-- **Scripting First Architecture** - Minimal toolset 
-- **~15 Core Tools** - Essential operations; everything else via `illustrator_execute_script`
+- **Scripting First Architecture** - Minimal toolset
+- **~16 Core Tools** - Essential operations; everything else via `illustrator_execute_script`
+- **Standardized Response Envelope** - All tools return `{ok, warnings, error, diagnostics, result}`
 - **Task Protocol v2.3** - Structured execution with:
   - Standardized error codes (V/R/S categories)
   - Compound target selectors with deterministic ordering
@@ -143,12 +144,45 @@ For complex operations, use reusable ExtendScript libraries:
 
 ```
 resources/scripts/
-├── geometry.jsx    # getVisibleBounds(), mmToPoints()
+├── geometry.jsx    # XY coords, bounds, colors: rectXY(), ellipseXY(), makeRGBColor()
 ├── selection.jsx   # getOrderedSelection()
-└── layout.jsx      # arrangeImages(), distributeSpacing()
+├── layout.jsx      # createGrid(), distributeHorizontal(), alignCenter()
+├── presets.jsx     # COLOR_PALETTES, getColor(), applyPreset()
+└── task_executor.jsx # Task Protocol execution framework
 ```
 
-Scripts can request libraries via `inject_libraries(script, includes=["geometry"])`.
+Scripts can request libraries via `includes` parameter:
+
+```javascript
+// Single library
+illustrator_execute_script({
+    script: "var rect = rectXY(50, 100, 200, 150);",
+    includes: ["geometry"]
+});
+
+// Multiple libraries (dependencies auto-resolved)
+illustrator_execute_script({
+    script: "var items = createGrid({rows: 2, cols: 2, ...});",
+    includes: ["geometry", "layout"]
+});
+```
+
+| Library | Key Exports | Use Case |
+|---------|-------------|----------|
+| `geometry` | `rectXY`, `ellipseXY`, `lineXY`, `makeRGBColor`, `getContext` | Shape creation with intuitive coords |
+| `layout` | `createGrid`, `distributeHorizontal`, `alignCenter` | Layout and alignment |
+| `presets` | `COLOR_PALETTES`, `getColor`, `applyPreset` | Color palettes and grid presets |
+| `selection` | `getOrderedSelection` | Spatial sorting of selection |
+| `task_executor` | `executeTask`, `collectTargets` | Structured task execution |
+| `validate` | `countItemsOnArtboard` | Bounds validation and preflight checks |
+| `ops_core` | `executeOpBatch`, `registerOpHandler` | SOC batch executor and validation |
+| `ops_element` | — | Create, modify, delete shapes |
+| `ops_group` | — | Group/ungroup, z-order |
+| `ops_layer` | — | Layer CRUD |
+| `ops_style` | — | Fill, stroke, opacity |
+| `ops_text` | — | Text frame operations |
+| `ops_align` | — | Alignment, distribution |
+| `ops_measure` | — | Assertions, snapshots |
 
 ### 5. Task Protocol Architecture (v2.2)
 
@@ -175,6 +209,29 @@ var report = executeTask(payload, collectTargets, compute, apply);
 | **Trace Mode** | Step-by-step execution logging |
 | **Retry Mechanism** | `executeTaskWithRetry()` for fault tolerance |
 
+### 5.1 SOC Framework (State-Ops-Checks)
+
+For high-complexity tasks (≥50 elements, multi-step layouts), use the SOC Framework:
+
+```javascript
+var ops = [
+    {task: 'element_create', params: {id: 'A1', type: 'rect', x: 100, y: 100, width: 50, height: 50}},
+    {task: 'style_set_fill', targets: {type: 'id', ids: ['A1']}, params: {r: 255, g: 0, b: 0}},
+    {task: 'assert_exists', params: {ids: ['A1']}}
+];
+var report = executeOpBatch(ops, {strict: true, trace: true});
+// Returns: {ok, schemaVersion, ops: [{index, task, ok, id}], stats, timing, trace}
+```
+
+| Feature | Description |
+|---------|-------------|
+| **Stable ID Targeting** | `@mcp:id=UUID` in item.note for deterministic refs |
+| **Batch Validation** | All ops validated before execution |
+| **Strict/Continue Modes** | Stop on error or collect all errors |
+| **Per-Op Reporting** | Index, task, duration, warnings per operation |
+
+> See `.agent/skills/state-ops-checks/SKILL.md` for full documentation.
+
 ### 6. Context Before Creation
 
 AI should always inspect document state before writing modification scripts:
@@ -187,12 +244,28 @@ AI should always inspect document state before writing modification scripts:
 
 ### 7. Fail Fast with Clear Errors
 
-| Error Type | Handling |
-|------------|----------|
-| CEP not connected | `ILLUSTRATOR_DISCONNECTED` with connection steps |
-| No document open | Clear message before script runs |
-| Script syntax error | ExtendScript error message returned in full |
-| Library not found | `ValueError: Library not found: {name}.jsx` |
+Errors now include structured codes and actionable suggestions:
+
+| Error Code | Category | Example Message |
+|------------|----------|-----------------|
+| `C001` | Connection | Illustrator not connected |
+| `V001` | Validation | No document open |
+| `V002` | Validation | No selection |
+| `R005` | Runtime | Layer not found |
+| `R006` | Runtime | Element not found |
+| `S001` | Script | Syntax error |
+| `S002` | Script | Undefined variable |
+
+**Example error response:**
+```
+Error [R006]: Element not found
+Context: execute_script: get layer
+
+Suggestions:
+  - The item may have been deleted or renamed
+  - Use illustrator_get_document_structure to verify item exists
+  - Check item name spelling (case-sensitive)
+```
 
 ### When to Add New Tools
 
@@ -200,8 +273,7 @@ Add a dedicated MCP tool **only** when:
 1. The operation cannot be done via ExtendScript (e.g., file I/O, image import)
 2. The operation is used in >80% of workflows (e.g., `create_document`)
 3. The script would be >50 lines and identical every time
-
-Otherwise, use `execute_script` with library injection.
+4. The operation must produce a standardized, canonical output schema that other agents/tools depend on (contract enforcement). Otherwise, use `execute_script` with library injection.
 
 ---
 
@@ -359,7 +431,7 @@ The panel should automatically connect and show "✅ Connected"
 
 ---
 
-## Available Tools (~15 total)
+## Available Tools (~16 total)
 
 This MCP follows a **Scripting First Architecture**. Most Illustrator operations should be done via the `illustrator_execute_script` tool rather than specialized atomic tools.
 
@@ -382,13 +454,14 @@ This MCP follows a **Scripting First Architecture**. Most Illustrator operations
 | `illustrator_undo` | Undo last action |
 | `illustrator_redo` | Redo last undone action |
 
-### Context & State Inspection (4)
+### Context & State Inspection (5)
 | Tool | Description |
 |------|-------------|
 | `illustrator_get_document_structure` | Get complete document tree (layers, items) |
 | `illustrator_get_selection_info` | Get detailed info about selected objects |
 | `illustrator_get_app_info` | Get Illustrator application info |
 | `illustrator_get_scripting_reference` | Quick ExtendScript syntax reference |
+| `illustrator_preflight_check` | Validate document (bounds, zero-size, empty text, locked items) |
 
 ### Why Scripting First?
 
@@ -614,7 +687,14 @@ Illustrator_MCP/
 │   │   ├── server.py          # WebSocket server transport
 │   │   └── request_registry.py # Async request management
 │   ├── resources/             # Static resources
-│   │   └── scripts/           # ExtendScript libraries & Task Executor
+│   │   └── scripts/           # ExtendScript libraries
+│   │       ├── manifest.json  # Library metadata & exports
+│   │       ├── geometry.jsx   # XY coords, bounds, colors (v2.0)
+│   │       ├── layout.jsx     # Grid, distribution, alignment (v2.0)
+│   │       ├── presets.jsx    # Layout presets & color palettes (v2.0)
+│   │       ├── selection.jsx  # Selection utilities
+│   │       ├── task_executor.jsx # Task Protocol framework
+│   │       └── validate.jsx   # Bounds validation & preflight
 │   ├── schemas/               # Generated JSON schemas
 │   └── tools/                 # ~15 tools (Scripting First)
 │       ├── __init__.py        # Tool registration
@@ -699,6 +779,199 @@ The Node.js `proxy-server` folder is kept for reference but is no longer used.
 ---
 
 ## Changelog
+
+### v2.10.0 (2026-02-07) - VISUAL FEEDBACK & ROBUSTNESS
+
+Production-ready patterns integrated from blender-mcp for better debugging and reliability.
+
+**Visual Feedback**
+- **New:** `return_image` parameter in `export_document` (PNG/JPG only)
+- When `true`, returns MCP `ImageContent` so Claude can see the export inline
+- Enables visual verification loops: export → Claude sees → corrects → re-exports
+
+**Connection Robustness**
+- **New:** Health-check in `check_connection_or_error()` with auto-reconnect
+- Detects stale connections and resets bridge for fresh connection
+- Automatic recovery from CEP panel restarts
+
+**3-Tier Error Handling**
+- **Tier 1 (Connection):** C001-C003 codes for WebSocket/CEP issues
+- **Tier 2 (Timeout):** `[TIMEOUT]` with actionable suggestions
+- **Tier 3 (Runtime):** R000, V001 codes for script/protocol errors
+- All errors include clear suggestions for recovery
+
+**SOC Workflow Strategy**
+- **New:** Decision tree in `state-ops-checks/SKILL.md`
+- When to use SOC vs raw script
+- Visual verification loop pattern
+
+**Usage:**
+```python
+# Export with visual feedback
+export_document({
+    "file_path": "output.png",
+    "format": "png",
+    "return_image": true  # Claude sees the image
+})
+```
+
+### v2.9.0 (2026-02-06) - SOC FRAMEWORK
+
+New **State-Ops-Checks Framework** for deterministic batch operations on complex layouts.
+
+**8 New JSX Libraries**
+- `ops_core` - Batch executor with validation, ID-based targeting, caching
+- `ops_element` - Create/modify/delete shapes (rect, ellipse, line, polygon, star)
+- `ops_group` - Group/ungroup, z-order manipulation
+- `ops_layer` - Layer CRUD (create, activate, lock, visible, delete)
+- `ops_style` - Fill, stroke, opacity operations
+- `ops_text` - Text frame creation and styling
+- `ops_align` - Horizontal/vertical alignment and distribution
+- `ops_measure` - Assertions (count, bounds, exists) and snapshots
+
+**Key Features**
+- **Stable ID Targeting**: `@mcp:id=UUID` in item.note for deterministic references
+- **Batch Validation**: All ops validated before execution
+- **Strict/Continue Modes**: Stop on first error or collect all errors
+- **Per-Op Reporting**: Index, task, duration, warnings per operation
+
+**Usage**
+```javascript
+var ops = [
+    {task: 'element_create', params: {id: 'A1', type: 'rect', x: 100, y: 100, width: 50, height: 50}},
+    {task: 'style_set_fill', targets: {type: 'id', ids: ['A1']}, params: {r: 255, g: 0, b: 0}},
+    {task: 'assert_exists', params: {ids: ['A1']}}
+];
+executeOpBatch(ops, {strict: true, trace: true});
+```
+
+> See `.agent/skills/state-ops-checks/SKILL.md` for full documentation.
+
+### v2.8.0 (2026-01-29) - BOUNDS VALIDATION & PREFLIGHT CHECK
+
+Major improvements to prevent off-artboard placement errors with standardized response envelope.
+
+**Standardized Response Envelope**
+- **New:** `format_envelope()` function in `proxy_client.py` - ALL tools now return consistent JSON structure
+- **Contract:** `{ok, warnings, error, diagnostics, result}` - stable API for integration
+- **Updated:** `base.py`, `execute.py`, `documents.py`, `query.py` all use envelope pattern
+
+**New Validation Library** (`validate.jsx`)
+- **New:** `countItemsOnArtboard(opts)` - Count items on/off artboard with configurable policies
+- **Policies:**
+  - `"fully-contained"` - item must be entirely within artboard (for validation)
+  - `"intersects"` - item must have any overlap (for blank export detection)
+- **Options:** `artboardIndex`, `boundsType` (visible/geometric), `ignoreHidden`, `ignoreLocked`
+- **Returns:** `{on_artboard, off_artboard, skipped, items_total, off_items_sample}`
+
+**New Preflight Check Tool**
+- **New:** `illustrator_preflight_check` - READ-ONLY observational validation tool
+- **Checks:** Off-artboard items, zero-size items, empty text frames, locked layers/items
+- **Returns:** Envelope with `ok: false` when issues detected, warnings populated
+- **Usage:** Run before export to catch placement errors early
+
+**Enhanced Execute Script**
+- **New:** `validate_bounds` parameter - Optional post-execution bounds check
+- **New:** `bounds_type` parameter - "visible" (includes strokes) or "geometric" (path only)
+- **New:** `artboard_index` parameter - Target specific artboard for validation
+- **Behavior:** Adds warnings to envelope if items are off-artboard after script runs
+
+**Enhanced Export Document**
+- **New:** `artboard_only` parameter - Clip export to artboard bounds (PNG artBoardClipping)
+- **New:** Pre-export bounds check with "intersects" policy
+- **Warning:** "Nothing intersects artboard - export will be blank" when no content visible
+
+**Usage Examples:**
+```python
+# Preflight check before export
+illustrator_preflight_check({})
+# Returns: {"ok": false, "warnings": ["2 items outside artboard bounds"], ...}
+
+# Execute with bounds validation
+illustrator_execute_script({
+    "script": "...",
+    "validate_bounds": true
+})
+# Returns: {"ok": true, "warnings": ["3 items outside artboard..."], ...}
+
+# Export clipped to artboard
+illustrator_export_document({
+    "file_path": "output.png",
+    "artboard_only": true
+})
+```
+
+### v2.7.0 (2026-01-28) - DEVELOPER EXPERIENCE IMPROVEMENTS
+
+Major improvements to reduce cognitive load and improve error feedback based on practical usage testing.
+
+**Phase 1: Intuitive XY Coordinate System** (`geometry.jsx` v2.0)
+- **New:** `getContext()` - Get artboard-relative coordinate context
+- **New:** `rectXY(x, y, w, h, options)` - Rectangle with intuitive (x, y) coords (x=right, y=down)
+- **New:** `ellipseXY(x, y, w, h)` - Ellipse with intuitive coords
+- **New:** `lineXY(x1, y1, x2, y2)` - Line with intuitive coords
+- **New:** `polygonXY(points, closed)` - Polygon from [x, y] point array
+- **New:** `pointXY(x, y)` - Convert intuitive coords to Illustrator position
+- **New:** `makeRGBColor(r, g, b)` - Helper for creating RGB colors
+- **Benefit:** Eliminates Y-inversion confusion and (top, left, w, h) parameter order issues
+
+**Phase 2: Layout Helpers** (`layout.jsx` v2.0)
+- **New:** `createGrid(params)` - Create centered grid of shapes with colors, corner radius
+- **New:** `distributeHorizontal(items, gap)` - Distribute items with even/fixed spacing
+- **New:** `distributeVertical(items, gap)` - Vertical distribution
+- **New:** `alignCenter(items)` - Center items on artboard
+- **New:** `alignHorizontal(items, 'left'|'center'|'right')` - Horizontal alignment
+- **New:** `alignVertical(items, 'top'|'center'|'bottom')` - Vertical alignment
+- **Benefit:** Microsoft-style logo grid in 5 lines instead of 40
+
+**Phase 3: Structured Error Handling** (`errors.py` expanded)
+- **New:** `ErrorCode` enum with 20+ codes (C001-C003, V001-V009, R001-R008, S001-S004)
+- **New:** `ERROR_SUGGESTIONS` database mapping codes to recovery suggestions
+- **New:** `StructuredError` dataclass for rich error responses
+- **New:** `classify_error()` - Auto-detect error type from message
+- **New:** `format_error_response()` - Format errors with actionable suggestions
+- **Updated:** `proxy_client.py` uses structured error formatting
+- **Updated:** `tools/base.py` passes context to format_response
+- **Benefit:** "Error: No such element" → "Error [R006]: Element not found" + suggestions
+
+**Phase 4: Color Palettes** (`presets.jsx` v2.0)
+- **New:** `COLOR_PALETTES` object with 9 palettes:
+  - `okabe_ito` (8 colors) - Colorblind-safe, recommended for publications
+  - `nature` (6 colors) - Nature journal style
+  - `tol_muted` (7 colors) - Paul Tol's muted palette
+  - `science_minimal` (3 colors) - Black/blue/gray
+  - `microsoft` (4 colors) - Microsoft brand
+  - `google` (4 colors) - Google brand
+  - `grayscale` (4 colors) - Black to white
+  - `viridis` (6 colors) - Perceptually uniform
+  - `category10` (10 colors) - D3.js categorical
+- **New:** `getColor(palette, index)` - Get RGBColor from palette
+- **New:** `getPalette(name)` - Get all colors as array
+- **New:** `applyPaletteToItems(items, palette)` - Apply palette to selection
+- **New:** `listPalettes()` - List available palette names
+
+**Usage Examples:**
+```javascript
+// Intuitive coordinates (includes: ["geometry"])
+var rect = rectXY(50, 100, 200, 150);  // 50pt from left, 100pt from top
+
+// Create Microsoft logo (includes: ["geometry", "layout"])
+var items = createGrid({
+    rows: 2, cols: 2,
+    itemWidth: 110, itemHeight: 110,
+    gapX: 12, cornerRadius: 8,
+    colors: [{r:243,g:83,b:37}, {r:129,g:188,b:6}, {r:5,g:166,b:240}, {r:255,g:186,b:8}]
+});
+
+// Color palettes (includes: ["geometry", "presets"])
+rect.fillColor = getColor('okabe_ito', 0);  // First colorblind-safe color
+```
+
+### v2.6.1 (2026-01-25) - MULTI-CLIENT FIX
+- **Security:** Reject duplicate WebSocket connections with error 4001 (fixes multi-client conflict)
+- **New:** `illustrator_get_connection_info` tool for debugging connection state
+- **New:** `get_connection_info()` method on `WebSocketBridge`
+- **Improved:** Standardized error messages for duplicate connections in `shared.py`
 
 ### v2.6.0 (2026-01-24) - TEMPLATE CONSOLIDATION
 - **Refactor:** Moved 5 more inline scripts to templates:

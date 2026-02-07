@@ -16,7 +16,7 @@ import json
 import logging
 import time
 import uuid
-from typing import Any, Optional
+from typing import Any, Dict, List, Optional
 
 from illustrator_mcp.config import config
 from illustrator_mcp.shared import (
@@ -92,11 +92,16 @@ async def _execute_via_bridge(
     """
     Centralized helper to execute scripts via the WebSocket bridge.
     
+    Uses 3-tier error handling:
+    - Tier 1 (Connection): C001-C003 codes - Check CEP panel connection
+    - Tier 2 (Timeout): Operation took too long - May need to simplify script
+    - Tier 3 (Runtime): R001-R008 codes - Script execution errors
+    
     Handles:
     - Connection checking (via shared helper)
     - Thread-safe bridging (run_coroutine_threadsafe)
     - Timeout management
-    - Error handling
+    - Error tier separation
     
     Args:
         script: JavaScript code to execute
@@ -109,9 +114,15 @@ async def _execute_via_bridge(
     """
     context = command.command_type if command else "execute_script"
     
-    # Use centralized connection check
-    is_connected, error_response = check_connection_or_error(config.ws_port, context)
+    # ===== TIER 1: Connection Check =====
+    # Uses health-check to detect stale connections
+    is_connected, error_response = check_connection_or_error(
+        config.ws_port, 
+        context,
+        health_check=False  # Skip health-check here, done at higher level
+    )
     if not is_connected:
+        # Connection errors: C001 (disconnected), C002 (refused), C003 (timeout on connect)
         return error_response
 
     bridge = _get_bridge()
@@ -130,13 +141,33 @@ async def _execute_via_bridge(
         return await asyncio.wrap_future(conc_future)
         
     except TimeoutError:
-        return {"error": f"TIMEOUT: Script execution timed out after {timeout}s"}
+        # ===== TIER 2: Timeout =====
+        # Script took too long - may need to simplify or increase timeout
+        return {
+            "error": f"[TIMEOUT] Script execution timed out after {timeout}s. "
+                     "Consider breaking into smaller operations or increasing timeout."
+        }
     except ConnectionError as e:
-        logger.warning(f"CONNECTION_ERROR [{context}]: {e}")
-        return {"error": f"CONNECTION_ERROR: {str(e)}"}
+        # ===== TIER 1: Connection Lost During Execution =====
+        logger.warning(f"[C002] Connection lost [{context}]: {e}")
+        return {
+            "error": f"[C002] Connection lost during execution: {str(e)}. "
+                     "The CEP panel may have disconnected. Try reconnecting."
+        }
+    except json.JSONDecodeError as e:
+        # ===== TIER 3: Protocol Error =====
+        logger.error(f"[V001] Invalid JSON from Illustrator [{context}]: {e}")
+        return {
+            "error": f"[V001] Invalid response from Illustrator: {str(e)}. "
+                     "Check CEP panel logs at http://localhost:8088"
+        }
     except Exception as e:
-        logger.exception(f"PROXY_ERROR [{context}]: Unexpected error")
-        return {"error": f"PROXY_ERROR: {str(e)}"}
+        # ===== TIER 3: Unexpected Runtime Error =====
+        logger.exception(f"[R000] Unexpected error [{context}]")
+        return {
+            "error": f"[R000] Unexpected error: {str(e)}. "
+                     "See server logs for details."
+        }
 
 
 async def execute_script(script: str) -> ExecutionResponse:
@@ -159,7 +190,8 @@ async def execute_script_with_context(
     command_type: str,
     tool_name: Optional[str] = None,
     params: Optional[dict] = None,
-    trace_id: Optional[str] = None
+    trace_id: Optional[str] = None,
+    timeout: Optional[float] = None
 ) -> ExecutionResponse:
     """
     Execute a JavaScript script with command context for hybrid protocol.
@@ -197,7 +229,7 @@ async def execute_script_with_context(
     # Execute via centralized helper
     response = await _execute_via_bridge(
         script=script,
-        timeout=config.timeout,
+        timeout=timeout or config.timeout,
         command=command,
         trace_id=tid
     )
@@ -217,8 +249,10 @@ async def execute_script_with_context(
     return response
 
 
-def _try_parse_json(value: str) -> Any:
+def _try_parse_json(value: Any) -> Any:
     """Attempt JSON parse, return original on failure."""
+    if not isinstance(value, str):
+        return value
     try:
         return json.loads(value)
     except json.JSONDecodeError:
@@ -228,66 +262,208 @@ def _try_parse_json(value: str) -> Any:
 def _unwrap_result(result: Any) -> Any:
     """
     Recursively unwrap nested success/result envelopes.
-    
+
     Handles double-wrapped results like:
     {success: true, result: "{\"success\": true, \"result\": ...}"}
     """
     if not isinstance(result, dict):
         return result
-    
+
     # Check for error in current level
     if result.get("error"):
         return result
     if result.get("success") is False:
         return result
-    
+
     # Unwrap success envelope
     if result.get("success") and "result" in result:
         inner = result["result"]
         # Parse if string, then recurse
         parsed = _try_parse_json(inner) if isinstance(inner, str) else inner
         return _unwrap_result(parsed)
-    
+
     return result
 
 
-def format_response(response: dict[str, Any]) -> str:
+def format_response(response: dict[str, Any], context: str = "") -> str:
     """
     Format the response from Illustrator for MCP output.
 
+    Uses structured error handling with suggestions for better developer experience.
+
     Args:
         response: Response dictionary from execute_script
+        context: Optional context about the operation for better error messages
 
     Returns:
         Formatted string for MCP tool response
     """
-    # Handle top-level errors
+    from illustrator_mcp.errors import (
+        format_error_response,
+        is_connection_error,
+        classify_error,
+    )
+
+    # Handle top-level errors with structured formatting
     if response.get("error"):
         error = response['error']
+
         # Make connection errors very prominent
-        if "DISCONNECTED" in error or "not connected" in error.lower():
-            return f"⚠️ {error}\n\n[STOP: Do not retry until connection is restored]"
-        return f"Error: {error}"
+        if is_connection_error(error):
+            formatted = format_error_response(error, context)
+            return f"⚠️ {formatted}\n\n[STOP: Do not retry until connection is restored]"
+
+        # Format other errors with suggestions
+        return format_error_response(error, context)
 
     # Get and unwrap result
     result = response.get("result", response)
-    
+
     # Parse string results
     if isinstance(result, str):
         result = _try_parse_json(result)
-    
+
     # Unwrap nested envelopes
     result = _unwrap_result(result)
-    
+
     # Check for errors in unwrapped result
     if isinstance(result, dict):
         if result.get("error"):
-            return f"Error: {result['error']}"
+            return format_error_response(result['error'], context)
         if result.get("success") is False:
-            return f"Error: {result.get('error', 'Operation failed')}"
+            error_msg = result.get('error', 'Operation failed')
+            return format_error_response(error_msg, context)
+
+    # Check for error patterns in string results
+    if isinstance(result, str):
+        # Detect common error patterns in result strings
+        error_prefixes = ("Error:", "error:", "ERROR:", "ReferenceError:", "TypeError:", "SyntaxError:")
+        if result.startswith(error_prefixes) or classify_error(result) is not None:
+            return format_error_response(result, context)
 
     # Format output
     if isinstance(result, (dict, list)):
         return json.dumps(result, indent=2)
     return str(result)
+
+
+def format_envelope(
+    response: Dict[str, Any],
+    context: str = "",
+    warnings: Optional[List[str]] = None,
+    diagnostics: Optional[Dict[str, Any]] = None
+) -> str:
+    """
+    Format response as standardized JSON envelope. ALL tools should use this.
+
+    Returns a JSON string with consistent structure:
+    {
+        "ok": true/false,
+        "warnings": [...],
+        "error": null or {code, message, suggestions},
+        "diagnostics": {...},
+        "result": ...
+    }
+
+    Args:
+        response: Response dictionary from execute_script_with_context
+        context: Optional context for error messages
+        warnings: List of warning messages
+        diagnostics: Dictionary of diagnostic info (includes, bounds_type, etc.)
+
+    Returns:
+        JSON string with standardized envelope
+    """
+    from illustrator_mcp.errors import create_structured_error, classify_error
+
+    warnings = warnings or []
+    diagnostics = diagnostics or {}
+
+    # Add trace info to diagnostics if present in response
+    if response.get("trace_id"):
+        diagnostics["trace_id"] = response["trace_id"]
+    if response.get("elapsed_ms"):
+        diagnostics["elapsed_ms"] = response["elapsed_ms"]
+
+    # Handle errors
+    if response.get("error"):
+        error_msg = response["error"]
+        structured = create_structured_error(error_msg, context)
+        return json.dumps({
+            "ok": False,
+            "warnings": warnings,
+            "error": {
+                "code": structured.code,
+                "message": structured.message,
+                "suggestions": structured.suggestions
+            },
+            "diagnostics": diagnostics,
+            "result": None
+        })
+
+    # Get and unwrap result
+    result = response.get("result", response)
+
+    # Parse string results
+    if isinstance(result, str):
+        result = _try_parse_json(result)
+
+    # Unwrap nested envelopes
+    result = _unwrap_result(result)
+
+    # Check for errors in unwrapped result
+    if isinstance(result, dict):
+        if result.get("error"):
+            structured = create_structured_error(str(result["error"]), context)
+            return json.dumps({
+                "ok": False,
+                "warnings": warnings,
+                "error": {
+                    "code": structured.code,
+                    "message": structured.message,
+                    "suggestions": structured.suggestions
+                },
+                "diagnostics": diagnostics,
+                "result": None
+            })
+        if result.get("success") is False:
+            error_msg = result.get("error", "Operation failed")
+            structured = create_structured_error(str(error_msg), context)
+            return json.dumps({
+                "ok": False,
+                "warnings": warnings,
+                "error": {
+                    "code": structured.code,
+                    "message": structured.message,
+                    "suggestions": structured.suggestions
+                },
+                "diagnostics": diagnostics,
+                "result": None
+            })
+
+    # Check for error patterns in string results
+    if isinstance(result, str):
+        error_prefixes = ("Error:", "error:", "ERROR:", "ReferenceError:", "TypeError:", "SyntaxError:")
+        if result.startswith(error_prefixes) or classify_error(result) is not None:
+            structured = create_structured_error(result, context)
+            return json.dumps({
+                "ok": False,
+                "warnings": warnings,
+                "error": {
+                    "code": structured.code,
+                    "message": structured.message,
+                    "suggestions": structured.suggestions
+                },
+                "diagnostics": diagnostics,
+                "result": None
+            })
+
+    # Success case
+    return json.dumps({
+        "ok": True,
+        "warnings": warnings,
+        "error": None,
+        "diagnostics": diagnostics,
+        "result": result
+    })
 

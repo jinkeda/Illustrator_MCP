@@ -10,7 +10,7 @@ from pydantic import BaseModel, ConfigDict
 
 from illustrator_mcp.proxy_client import (
     execute_script_with_context,
-    format_response,
+    format_envelope,
 )
 from illustrator_mcp.libraries import inject_libraries
 
@@ -66,7 +66,7 @@ async def execute_jsx_tool(
     # Inject libraries if requested
     if includes:
         script = inject_libraries(script, includes)
-    
+
     # Execute with context
     response = await execute_script_with_context(
         script=script,
@@ -74,6 +74,11 @@ async def execute_jsx_tool(
         tool_name=tool_name,
         params=params or {}
     )
-    
-    # Format and return
-    return format_response(response)
+
+    # Return standardized envelope for consistent API contract
+    diagnostics = {
+        "tool": tool_name,
+        "command": command_type,
+        "includes": includes or []
+    }
+    return format_envelope(response, context=command_type, diagnostics=diagnostics)

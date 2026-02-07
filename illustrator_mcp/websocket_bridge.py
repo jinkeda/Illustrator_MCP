@@ -148,6 +148,27 @@ class WebSocketBridge:
         """Check if Illustrator CEP panel is connected."""
         return self.server.is_connected()
 
+    def get_connection_info(self) -> dict:
+        """Get information about the current connection state.
+        
+        Returns:
+            Dictionary with connection status, port, state, and client info.
+        """
+        client_info = None
+        if self.is_connected() and self.server.client:
+            client = self.server.client
+            client_info = {
+                "remote_address": str(getattr(client, 'remote_address', 'unknown')),
+            }
+        
+        return {
+            "is_connected": self.is_connected(),
+            "port": self.port,
+            "state": self.state.value if hasattr(self.state, 'value') else str(self.state),
+            "is_running": self.is_running(),
+            "client_info": client_info
+        }
+
     async def execute_script_async(
         self, 
         script: str, 

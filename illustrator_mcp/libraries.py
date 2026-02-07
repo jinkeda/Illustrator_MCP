@@ -8,11 +8,12 @@ This module handles resolution of ExtendScript libraries with:
 - Thread-safe caching
 """
 
+import hashlib
 import json
 import logging
 import threading
 from pathlib import Path
-from typing import Dict, List, Optional
+from typing import Any, Dict, List, Optional
 
 logger = logging.getLogger(__name__)
 
@@ -158,6 +159,29 @@ class LibraryResolver:
         with self._file_lock:
             self._file_cache.clear()
 
+    def get_resolution_metadata(self, includes: List[str]) -> Dict[str, Any]:
+        """Get metadata for diagnostics including canonicalized includes and prelude hash.
+
+        Args:
+            includes: List of library names to resolve.
+
+        Returns:
+            Dict with:
+            - includes_canonical: Sorted list of library names
+            - prelude_hash: MD5 hash prefix (8 chars) of resolved code
+        """
+        if not includes:
+            return {"includes_canonical": [], "prelude_hash": None}
+
+        canonical = sorted(includes)
+        code = self.resolve(includes)
+        prelude_hash = hashlib.md5(code.encode('utf-8')).hexdigest()[:8]
+
+        return {
+            "includes_canonical": canonical,
+            "prelude_hash": prelude_hash
+        }
+
 
 # Default resources directory
 _RESOURCES_DIR = Path(__file__).parent / "resources" / "scripts"
@@ -175,6 +199,18 @@ def get_resolver() -> LibraryResolver:
             if _resolver is None:
                 _resolver = LibraryResolver(_RESOURCES_DIR)
     return _resolver
+
+
+def get_injection_metadata(includes: List[str]) -> Dict[str, Any]:
+    """Get metadata for library injection diagnostics.
+
+    Args:
+        includes: List of library names.
+
+    Returns:
+        Dict with includes_canonical (sorted) and prelude_hash.
+    """
+    return get_resolver().get_resolution_metadata(includes)
 
 
 def inject_libraries(script: str, includes: List[str]) -> str:

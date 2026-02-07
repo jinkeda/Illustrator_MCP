@@ -287,3 +287,252 @@ function listPresets() {
     }
     return list;
 }
+
+// ============================================================================
+// COLOR PALETTES
+// ============================================================================
+
+/**
+ * Color palettes for scientific figures and design.
+ *
+ * Usage:
+ *   var color = getColor('okabe_ito', 0);  // First Okabe-Ito color
+ *   shape.fillColor = color;
+ *
+ * Palettes:
+ *   - okabe_ito: Colorblind-safe palette (8 colors) - RECOMMENDED for publications
+ *   - nature: Nature journal style (6 colors)
+ *   - tol_muted: Paul Tol's muted palette (7 colors)
+ *   - science_minimal: Minimal black/blue/gray (3 colors)
+ *   - microsoft: Microsoft logo colors (4 colors)
+ *   - google: Google brand colors (4 colors)
+ *   - grayscale: Black to white gradient (4 colors)
+ *   - viridis: Perceptually uniform colormap (6 colors)
+ */
+var COLOR_PALETTES = {
+    // Okabe-Ito colorblind-safe palette
+    // Reference: https://jfly.uni-koeln.de/color/
+    okabe_ito: [
+        { r: 0,   g: 114, b: 178, name: "blue" },
+        { r: 230, g: 159, b: 0,   name: "orange" },
+        { r: 0,   g: 158, b: 115, name: "bluish_green" },
+        { r: 240, g: 228, b: 66,  name: "yellow" },
+        { r: 86,  g: 180, b: 233, name: "sky_blue" },
+        { r: 213, g: 94,  b: 0,   name: "vermillion" },
+        { r: 204, g: 121, b: 167, name: "reddish_purple" },
+        { r: 0,   g: 0,   b: 0,   name: "black" }
+    ],
+
+    // Nature journal style
+    nature: [
+        { r: 31,  g: 119, b: 180, name: "blue" },
+        { r: 255, g: 127, b: 14,  name: "orange" },
+        { r: 44,  g: 160, b: 44,  name: "green" },
+        { r: 214, g: 39,  b: 40,  name: "red" },
+        { r: 148, g: 103, b: 189, name: "purple" },
+        { r: 127, g: 127, b: 127, name: "gray" }
+    ],
+
+    // Paul Tol's muted palette
+    // Reference: https://personal.sron.nl/~pault/
+    tol_muted: [
+        { r: 68,  g: 119, b: 170, name: "blue" },
+        { r: 221, g: 204, b: 119, name: "sand" },
+        { r: 34,  g: 136, b: 51,  name: "green" },
+        { r: 204, g: 102, b: 119, name: "rose" },
+        { r: 136, g: 34,  b: 85,  name: "purple" },
+        { r: 170, g: 68,  b: 153, name: "violet" },
+        { r: 68,  g: 170, b: 153, name: "teal" }
+    ],
+
+    // Minimal scientific palette
+    science_minimal: [
+        { r: 0,   g: 0,   b: 0,   name: "black" },
+        { r: 0,   g: 90,  b: 160, name: "dark_blue" },
+        { r: 150, g: 150, b: 150, name: "gray" }
+    ],
+
+    // Microsoft brand colors
+    microsoft: [
+        { r: 243, g: 83,  b: 37,  name: "red" },
+        { r: 129, g: 188, b: 6,   name: "green" },
+        { r: 5,   g: 166, b: 240, name: "blue" },
+        { r: 255, g: 186, b: 8,   name: "yellow" }
+    ],
+
+    // Google brand colors
+    google: [
+        { r: 66,  g: 133, b: 244, name: "blue" },
+        { r: 234, g: 67,  b: 53,  name: "red" },
+        { r: 251, g: 188, b: 5,   name: "yellow" },
+        { r: 52,  g: 168, b: 83,  name: "green" }
+    ],
+
+    // Grayscale
+    grayscale: [
+        { r: 0,   g: 0,   b: 0,   name: "black" },
+        { r: 85,  g: 85,  b: 85,  name: "dark_gray" },
+        { r: 170, g: 170, b: 170, name: "light_gray" },
+        { r: 255, g: 255, b: 255, name: "white" }
+    ],
+
+    // Viridis colormap (perceptually uniform)
+    viridis: [
+        { r: 68,  g: 1,   b: 84,  name: "dark_purple" },
+        { r: 59,  g: 82,  b: 139, name: "blue_purple" },
+        { r: 33,  g: 145, b: 140, name: "teal" },
+        { r: 94,  g: 201, b: 98,  name: "green" },
+        { r: 189, g: 223, b: 38,  name: "yellow_green" },
+        { r: 253, g: 231, b: 37,  name: "yellow" }
+    ],
+
+    // Categorical palette for many categories
+    category10: [
+        { r: 31,  g: 119, b: 180, name: "blue" },
+        { r: 255, g: 127, b: 14,  name: "orange" },
+        { r: 44,  g: 160, b: 44,  name: "green" },
+        { r: 214, g: 39,  b: 40,  name: "red" },
+        { r: 148, g: 103, b: 189, name: "purple" },
+        { r: 140, g: 86,  b: 75,  name: "brown" },
+        { r: 227, g: 119, b: 194, name: "pink" },
+        { r: 127, g: 127, b: 127, name: "gray" },
+        { r: 188, g: 189, b: 34,  name: "olive" },
+        { r: 23,  g: 190, b: 207, name: "cyan" }
+    ]
+};
+
+/**
+ * Get a color from a palette as an RGBColor object.
+ *
+ * @param {string} paletteName - Name of the palette (e.g., 'okabe_ito')
+ * @param {number} index - Color index (wraps around if > palette length)
+ * @returns {RGBColor} Illustrator RGBColor object
+ *
+ * @example
+ * var color = getColor('okabe_ito', 0);
+ * rect.fillColor = color;
+ */
+function getColor(paletteName, index) {
+    var palette = COLOR_PALETTES[paletteName];
+    if (!palette) {
+        throw new Error("Unknown palette: " + paletteName +
+            ". Available: " + listPalettes().join(", "));
+    }
+
+    // Wrap index if out of bounds
+    var idx = index % palette.length;
+    var c = palette[idx];
+
+    var color = new RGBColor();
+    color.red = c.r;
+    color.green = c.g;
+    color.blue = c.b;
+    return color;
+}
+
+/**
+ * Get color definition (r, g, b, name) from a palette.
+ *
+ * @param {string} paletteName - Name of the palette
+ * @param {number} index - Color index
+ * @returns {Object} Color definition {r, g, b, name}
+ */
+function getColorDef(paletteName, index) {
+    var palette = COLOR_PALETTES[paletteName];
+    if (!palette) {
+        throw new Error("Unknown palette: " + paletteName);
+    }
+    return palette[index % palette.length];
+}
+
+/**
+ * Get all colors from a palette as RGBColor objects.
+ *
+ * @param {string} paletteName - Name of the palette
+ * @returns {Array<RGBColor>} Array of RGBColor objects
+ */
+function getPalette(paletteName) {
+    var palette = COLOR_PALETTES[paletteName];
+    if (!palette) {
+        throw new Error("Unknown palette: " + paletteName);
+    }
+
+    var colors = [];
+    for (var i = 0; i < palette.length; i++) {
+        colors.push(getColor(paletteName, i));
+    }
+    return colors;
+}
+
+/**
+ * List all available palette names.
+ *
+ * @returns {Array<string>} Array of palette names
+ */
+function listPalettes() {
+    var names = [];
+    for (var key in COLOR_PALETTES) {
+        if (COLOR_PALETTES.hasOwnProperty(key)) {
+            names.push(key);
+        }
+    }
+    return names;
+}
+
+/**
+ * Get palette info including all colors.
+ *
+ * @param {string} paletteName - Name of the palette
+ * @returns {Object} Palette info with colors array
+ */
+function getPaletteInfo(paletteName) {
+    var palette = COLOR_PALETTES[paletteName];
+    if (!palette) {
+        throw new Error("Unknown palette: " + paletteName);
+    }
+
+    return {
+        name: paletteName,
+        count: palette.length,
+        colors: palette
+    };
+}
+
+/**
+ * Apply colors from a palette to an array of items.
+ *
+ * @param {Array<PageItem>} items - Items to color
+ * @param {string} paletteName - Name of the palette
+ * @param {Object} [options] - Options
+ * @param {boolean} [options.fill=true] - Apply to fill
+ * @param {boolean} [options.stroke=false] - Apply to stroke
+ * @returns {number} Number of items colored
+ *
+ * @example
+ * applyPaletteToItems(doc.selection, 'okabe_ito');
+ */
+function applyPaletteToItems(items, paletteName, options) {
+    options = options || {};
+    var applyFill = options.fill !== false;  // default true
+    var applyStroke = options.stroke === true;  // default false
+
+    var palette = COLOR_PALETTES[paletteName];
+    if (!palette) {
+        throw new Error("Unknown palette: " + paletteName);
+    }
+
+    var count = 0;
+    for (var i = 0; i < items.length; i++) {
+        var item = items[i];
+        var color = getColor(paletteName, i);
+
+        if (applyFill && item.fillColor !== undefined) {
+            item.fillColor = color;
+        }
+        if (applyStroke && item.strokeColor !== undefined) {
+            item.strokeColor = color;
+        }
+        count++;
+    }
+    return count;
+}

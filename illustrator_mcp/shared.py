@@ -72,9 +72,31 @@ def create_connection_error(port: int, context: str = "") -> ExecutionResponse:
     }
 
 
+def create_duplicate_connection_error(port: int) -> ExecutionResponse:
+    """
+    Create a standardized error for duplicate connection attempts.
+    
+    Args:
+        port: The WebSocket port number.
+        
+    Returns:
+        ExecutionResponse with error message and quick fixes.
+    """
+    return {
+        "error": (
+            f"DUPLICATE_CONNECTION: Another MCP client is already connected on port {port}.\n\n"
+            "Quick Fixes:\n"
+            "1. Close other Claude Code instances using Illustrator MCP\n"
+            "2. Restart Illustrator if the connection seems stuck\n"
+            "3. Use 'illustrator_get_connection_info' tool to check connection status"
+        )
+    }
+
+
 def check_connection_or_error(
     port: int,
-    context: str = ""
+    context: str = "",
+    health_check: bool = True
 ) -> Tuple[bool, Optional[ExecutionResponse]]:
     """
     Check bridge connection and return error response if disconnected.
@@ -82,9 +104,13 @@ def check_connection_or_error(
     Centralizes the connection check logic used by both proxy_client
     and websocket_bridge to avoid duplicate code.
     
+    If health_check is True and the connection appears stale (connected but 
+    unresponsive), the bridge will be reset for auto-reconnect on next call.
+    
     Args:
         port: The WebSocket port number.
         context: Optional context string for error message.
+        health_check: If True, verify connection is responsive (default: True).
         
     Returns:
         Tuple of (is_connected, error_response_or_none).
@@ -93,10 +119,32 @@ def check_connection_or_error(
     """
     from illustrator_mcp.runtime import get_runtime
     
-    bridge = get_runtime().get_bridge()
-    if bridge.is_connected():
-        return True, None
-    return False, create_connection_error(port, context)
+    runtime = get_runtime()
+    bridge = runtime.get_bridge()
+    
+    if not bridge.is_connected():
+        return False, create_connection_error(port, context)
+    
+    # Optional health-check for stale connections
+    if health_check:
+        try:
+            # Quick ping - get_app_info is lightweight
+            result = bridge.execute({
+                "type": "script",
+                "script": "app.version",
+                "timeout": 2.0
+            })
+            if result is None or result.get("error"):
+                logger.warning("Connection appears stale, will auto-reconnect on next call")
+                # Reset bridge to trigger fresh connection next time
+                runtime.bridge = None
+                return False, create_connection_error(port, f"{context} (stale connection)")
+        except Exception as e:
+            logger.warning(f"Health check failed: {e}, will auto-reconnect on next call")
+            runtime.bridge = None
+            return False, create_connection_error(port, f"{context} (health check failed)")
+    
+    return True, None
 
 
 # ==================== Server Lifespan ====================

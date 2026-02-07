@@ -27,11 +27,23 @@ CREATE_DOCUMENT = Template("""
 
         var doc = app.documents.addDocument(DocumentColorSpace.${color_space}, preset);
 
+        // FIX: Reposition artboard so top is at Y=0 (standard scripting convention)
+        // By default, Illustrator places artboard at [0, height, width, 0]
+        // We reposition to [0, 0, width, -height] so:
+        //   - Artboard top is at Y=0
+        //   - Artboard bottom is at Y=-height
+        //   - Items placed with position [x, -y] appear correctly
+        var ab = doc.artboards[0];
+        var w = ${width};
+        var h = ${height};
+        ab.artboardRect = [0, 0, w, -h];
+
         return JSON.stringify({
             success: true,
             name: doc.name,
             width: doc.width,
-            height: doc.height
+            height: doc.height,
+            artboardRect: ab.artboardRect
         });
     } catch (e) {
         return JSON.stringify({
@@ -102,7 +114,15 @@ EXPORT_PDF = Template("""
     var file = new File("${path}");
     var opts = new PDFSaveOptions();
     doc.saveAs(file, opts);
-    return JSON.stringify({success: true, path: "${path}", format: "PDF"});
+    var abIdx = doc.artboards.getActiveArtboardIndex();
+    var abRect = doc.artboards[abIdx].artboardRect;
+    return JSON.stringify({
+        success: true,
+        path: "${path}",
+        format: "PDF",
+        width_pt: abRect[2] - abRect[0],
+        height_pt: Math.abs(abRect[3] - abRect[1])
+    });
 })()
 """)
 
