@@ -37,6 +37,21 @@ if not exist "%SOURCE_DIR%" (
     exit /b 1
 )
 
+REM Check if dist folder exists (requires npm run build)
+if not exist "%SOURCE_DIR%\dist" (
+    echo ERROR: dist folder not found. You must build the extension first!
+    echo.
+    echo Run these commands:
+    echo   cd cep-extension
+    echo   npm install
+    echo   npm run build
+    echo   cd ..
+    echo.
+    echo Then run this script again.
+    pause
+    exit /b 1
+)
+
 REM Create CEP extensions directory if it doesn't exist
 if not exist "%APPDATA%\Adobe\CEP\extensions" (
     echo Creating CEP extensions directory...

@@ -329,7 +329,15 @@ pip install -e .
 illustrator-mcp --help
 ```
 
-### Step 3: Install CEP Extension
+### Step 3: Build and Install CEP Extension
+
+**Build the extension first:**
+```bash
+cd cep-extension
+npm install
+npm run build
+cd ..
+```
 
 **Windows (Run as Administrator):**
 ```bash
@@ -341,12 +349,13 @@ This script will:
 2. Enable debug mode in the Windows registry
 
 **Manual Installation (if script fails):**
-1. Copy `cep-extension` folder to:
+1. Build the extension first: `cd cep-extension && npm install && npm run build`
+2. Copy `cep-extension` folder to:
    - Windows: `%APPDATA%\Adobe\CEP\extensions\com.illustrator.mcp.panel`
    - macOS: `~/Library/Application Support/Adobe/CEP/extensions/com.illustrator.mcp.panel`
-2. Enable debug mode for **both** CSXS versions (required for Illustrator 2024+):
+3. Enable debug mode for **both** CSXS versions (required for Illustrator 2024+):
    ```powershell
-   # Windows (run in PowerShell)
+   # Windows (run in PowerShell as Admin)
    reg add "HKEY_CURRENT_USER\Software\Adobe\CSXS.11" /v PlayerDebugMode /t REG_SZ /d 1 /f
    reg add "HKEY_CURRENT_USER\Software\Adobe\CSXS.12" /v PlayerDebugMode /t REG_SZ /d 1 /f
    ```
@@ -355,7 +364,7 @@ This script will:
    defaults write com.adobe.CSXS.11 PlayerDebugMode 1
    defaults write com.adobe.CSXS.12 PlayerDebugMode 1
    ```
-3. Restart Illustrator
+4. Restart Illustrator
 
 The panel will appear in Illustrator under **Window → Extensions → MCP Control**
 
