@@ -344,9 +344,15 @@ cd ..
 install-cep.bat
 ```
 
-This script will:
+**macOS:**
+```bash
+chmod +x install-cep.sh
+./install-cep.sh
+```
+
+These scripts will:
 1. Create a symbolic link to the CEP extensions folder
-2. Enable debug mode in the Windows registry
+2. Enable debug mode (registry on Windows, defaults on macOS)
 
 **Manual Installation (if script fails):**
 1. Build the extension first: `cd cep-extension && npm install && npm run build`
