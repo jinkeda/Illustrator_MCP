@@ -1,0 +1,32 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <title>MCP Control</title>
+    <link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+    <div class="container">
+        <h2>MCP Control</h2>
+        
+        <div class="status-section">
+            <div id="status" class="status disconnected">
+                <span class="status-icon">●</span>
+                <span class="status-text">Disconnected</span>
+            </div>
+        </div>
+        
+        <div class="button-section">
+            <button id="connectBtn" class="btn btn-primary">Connect</button>
+        </div>
+        
+        <div class="log-section">
+            <div class="log-header">Log</div>
+            <div id="logArea" class="log-area"></div>
+        </div>
+    </div>
+    
+    <script src="js/CSInterface.js"></script>
+    <script src="js/main.js"></script>
+</body>
+</html>

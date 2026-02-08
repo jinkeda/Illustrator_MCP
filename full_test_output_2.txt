@@ -1,0 +1,65 @@
+﻿============================= test session starts =============================
+platform win32 -- Python 3.12.8, pytest-9.0.1, pluggy-1.6.0 -- C:\Users\k.jin\AppData\Local\Programs\Python\Python312\python.exe
+cachedir: .pytest_cache
+rootdir: C:\Users\k.jin\OneDrive\PhD\claude\scientific_plot_agent_antigravity\Illustrator_MCP
+configfile: pyproject.toml
+plugins: anyio-4.12.0, asyncio-1.3.0, cov-7.0.0
+asyncio: mode=Mode.AUTO, debug=False, asyncio_default_fixture_loop_scope=None, asyncio_default_test_loop_scope=function
+collecting ... collected 10 items
+
+tests/test_websocket_bridge.py::TestRequestRegistry::test_create_request_returns_unique_ids PASSED [ 10%]
+tests/test_websocket_bridge.py::TestRequestRegistry::test_create_request_with_trace_id PASSED [ 20%]
+tests/test_websocket_bridge.py::TestRequestRegistry::test_complete_request_resolves_future PASSED [ 30%]
+tests/test_websocket_bridge.py::TestRequestRegistry::test_complete_request_unknown_id PASSED [ 40%]
+tests/test_websocket_bridge.py::TestRequestRegistry::test_fail_request_sets_exception PASSED [ 50%]
+tests/test_websocket_bridge.py::TestRequestRegistry::test_cancel_all_pending PASSED [ 60%]
+tests/test_websocket_bridge.py::TestWebSocketBridge::test_is_connected_initially_false PASSED [ 70%]
+tests/test_websocket_bridge.py::TestWebSocketBridge::test_bridge_has_registry PASSED [ 80%]
+tests/test_websocket_bridge.py::TestDuplicateConnectionRejection::test_duplicate_connection_rejected PASSED [ 90%]
+tests/test_websocket_bridge.py::TestDuplicateConnectionRejection::test_stale_connection_replaced PASSED [100%]
+
+============================== warnings summary ===============================
+tests/test_websocket_bridge.py::TestWebSocketBridge::test_is_connected_initially_false
+  C:\Users\k.jin\OneDrive\PhD\claude\scientific_plot_agent_antigravity\Illustrator_MCP\illustrator_mcp\bridge\server.py:9: DeprecationWarning: websockets.server.WebSocketServerProtocol is deprecated
+    from websockets.server import WebSocketServerProtocol
+
+tests/test_websocket_bridge.py::TestWebSocketBridge::test_is_connected_initially_false
+  C:\Users\k.jin\AppData\Local\Programs\Python\Python312\Lib\site-packages\websockets\legacy\__init__.py:6: DeprecationWarning: websockets.legacy is deprecated; see https://websockets.readthedocs.io/en/stable/howto/upgrade.html for upgrade instructions
+    warnings.warn(  # deprecated in 14.0 - 2024-11-09
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+=============================== tests coverage ================================
+_______________ coverage: platform win32, python 3.12.8-final-0 _______________
+
+Name                                          Stmts   Miss  Cover
+-----------------------------------------------------------------
+illustrator_mcp\__init__.py                       2      0   100%
+illustrator_mcp\__version__.py                    1      0   100%
+illustrator_mcp\bridge\request_registry.py       49      3    94%
+illustrator_mcp\bridge\server.py                 81     42    48%
+illustrator_mcp\config.py                        14      1    93%
+illustrator_mcp\errors.py                        10     10     0%
+illustrator_mcp\libraries.py                     99     99     0%
+illustrator_mcp\log_config.py                    24     24     0%
+illustrator_mcp\protocol.py                     177    177     0%
+illustrator_mcp\proxy_client.py                  93     93     0%
+illustrator_mcp\response_models.py               48     48     0%
+illustrator_mcp\runtime.py                       28     28     0%
+illustrator_mcp\schemas\__init__.py              42     42     0%
+illustrator_mcp\schemas\schema_generator.py      22     22     0%
+illustrator_mcp\server.py                        14     14     0%
+illustrator_mcp\shared.py                        66     41    38%
+illustrator_mcp\templates.py                     19     19     0%
+illustrator_mcp\tools\__init__.py                 7      7     0%
+illustrator_mcp\tools\base.py                    11     11     0%
+illustrator_mcp\tools\context.py                 27     27     0%
+illustrator_mcp\tools\documents.py              100    100     0%
+illustrator_mcp\tools\execute.py                 67     67     0%
+illustrator_mcp\tools\query.py                   59     59     0%
+illustrator_mcp\tools\templates.py                9      9     0%
+illustrator_mcp\utils.py                         14     14     0%
+illustrator_mcp\websocket_bridge.py             115     78    32%
+-----------------------------------------------------------------
+TOTAL                                          1198   1035    14%
+Coverage HTML written to dir htmlcov
+======================= 10 passed, 2 warnings in 8.20s ========================

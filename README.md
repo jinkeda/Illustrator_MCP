@@ -728,11 +728,18 @@ Illustrator_MCP/
 ├── proxy-server/              # [DEPRECATED] Node.js proxy (no longer needed)
 │   ├── package.json
 │   └── index.js
-├── cep-extension/             # Adobe CEP panel
+├── cep-extension/             # Adobe CEP panel (React/Vite)
 │   ├── CSXS/manifest.xml      # CEP manifest
-│   ├── index.html             # Panel UI
-│   ├── js/main.js             # WebSocket client
-│   ├── jsx/host.jsx           # ExtendScript bridge (with JSON polyfill)
+│   ├── dist/                  # Built output (npm run build)
+│   ├── public/                # Static assets (CSInterface.js)
+│   ├── src/                   # React source
+│   │   ├── components/        # UI components
+│   │   │   └── MCPControlPanel.tsx  # Main panel UI
+│   │   └── hooks/             # Custom hooks
+│   │       └── useMCP.ts      # WebSocket connection hook
+│   ├── jsx/host.jsx           # ExtendScript bridge
+│   ├── package.json           # Node dependencies
+│   ├── vite.config.ts         # Vite build config
 │   └── .debug                 # Debug configuration
 ├── tests/                     # Unit tests
 │   ├── conftest.py            # Shared fixtures

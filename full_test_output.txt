@@ -1,0 +1,223 @@
+﻿============================= test session starts =============================
+platform win32 -- Python 3.12.8, pytest-9.0.1, pluggy-1.6.0 -- C:\Users\k.jin\AppData\Local\Programs\Python\Python312\python.exe
+cachedir: .pytest_cache
+rootdir: C:\Users\k.jin\OneDrive\PhD\claude\scientific_plot_agent_antigravity\Illustrator_MCP
+configfile: pyproject.toml
+plugins: anyio-4.12.0, asyncio-1.3.0, cov-7.0.0
+asyncio: mode=Mode.AUTO, debug=False, asyncio_default_fixture_loop_scope=None, asyncio_default_test_loop_scope=function
+collecting ... collected 10 items
+
+tests/test_websocket_bridge.py::TestRequestRegistry::test_create_request_returns_unique_ids FAILED [ 10%]
+tests/test_websocket_bridge.py::TestRequestRegistry::test_create_request_with_trace_id FAILED [ 20%]
+tests/test_websocket_bridge.py::TestRequestRegistry::test_complete_request_resolves_future FAILED [ 30%]
+tests/test_websocket_bridge.py::TestRequestRegistry::test_complete_request_unknown_id PASSED [ 40%]
+tests/test_websocket_bridge.py::TestRequestRegistry::test_fail_request_sets_exception FAILED [ 50%]
+tests/test_websocket_bridge.py::TestRequestRegistry::test_cancel_all_pending FAILED [ 60%]
+tests/test_websocket_bridge.py::TestWebSocketBridge::test_is_connected_initially_false FAILED [ 70%]
+tests/test_websocket_bridge.py::TestWebSocketBridge::test_bridge_has_registry FAILED [ 80%]
+tests/test_websocket_bridge.py::TestDuplicateConnectionRejection::test_duplicate_connection_rejected PASSED [ 90%]
+tests/test_websocket_bridge.py::TestDuplicateConnectionRejection::test_stale_connection_replaced PASSED [100%]
+
+================================== FAILURES ===================================
+_________ TestRequestRegistry.test_create_request_returns_unique_ids __________
+
+self = <tests.test_websocket_bridge.TestRequestRegistry object at 0x000001C7571E1730>
+
+    def test_create_request_returns_unique_ids(self):
+        """Test that create_request generates unique IDs."""
+        registry = RequestRegistry()
+    
+>       id1 = registry.create_request()
+              ^^^^^^^^^^^^^^^^^^^^^^^^^
+E       TypeError: RequestRegistry.create_request() missing 2 required positional arguments: 'loop' and 'script'
+
+tests\test_websocket_bridge.py:21: TypeError
+____________ TestRequestRegistry.test_create_request_with_trace_id ____________
+
+self = <tests.test_websocket_bridge.TestRequestRegistry object at 0x000001C7572267E0>
+
+    def test_create_request_with_trace_id(self):
+        """Test that trace_id is preserved in pending request."""
+        registry = RequestRegistry()
+    
+>       request_id = registry.create_request(trace_id="test_trace_123")
+                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E       TypeError: RequestRegistry.create_request() missing 2 required positional arguments: 'loop' and 'script'
+
+tests\test_websocket_bridge.py:34: TypeError
+__________ TestRequestRegistry.test_complete_request_resolves_future __________
+
+self = <tests.test_websocket_bridge.TestRequestRegistry object at 0x000001C757226A80>
+
+    def test_complete_request_resolves_future(self):
+        """Test that complete_request sets the result on the future."""
+        registry = RequestRegistry()
+    
+>       request_id = registry.create_request()
+                     ^^^^^^^^^^^^^^^^^^^^^^^^^
+E       TypeError: RequestRegistry.create_request() missing 2 required positional arguments: 'loop' and 'script'
+
+tests\test_websocket_bridge.py:44: TypeError
+____________ TestRequestRegistry.test_fail_request_sets_exception _____________
+
+self = <tests.test_websocket_bridge.TestRequestRegistry object at 0x000001C757226FC0>
+
+    def test_fail_request_sets_exception(self):
+        """Test that fail_request sets an exception on the future."""
+        registry = RequestRegistry()
+    
+>       request_id = registry.create_request()
+                     ^^^^^^^^^^^^^^^^^^^^^^^^^
+E       TypeError: RequestRegistry.create_request() missing 2 required positional arguments: 'loop' and 'script'
+
+tests\test_websocket_bridge.py:64: TypeError
+_________________ TestRequestRegistry.test_cancel_all_pending _________________
+
+self = <tests.test_websocket_bridge.TestRequestRegistry object at 0x000001C757227260>
+
+    def test_cancel_all_pending(self):
+        """Test that cancel_all_pending cancels all futures."""
+        registry = RequestRegistry()
+    
+>       id1 = registry.create_request()
+              ^^^^^^^^^^^^^^^^^^^^^^^^^
+E       TypeError: RequestRegistry.create_request() missing 2 required positional arguments: 'loop' and 'script'
+
+tests\test_websocket_bridge.py:77: TypeError
+____________ TestWebSocketBridge.test_is_connected_initially_false ____________
+
+self = <tests.test_websocket_bridge.TestWebSocketBridge object at 0x000001C757227140>
+
+    def test_is_connected_initially_false(self):
+        """Test that is_connected returns False initially."""
+>       with patch('illustrator_mcp.websocket_bridge.WebSocketBridge._start_bridge_thread'):
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+tests\test_websocket_bridge.py:102: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+C:\Users\k.jin\AppData\Local\Programs\Python\Python312\Lib\unittest\mock.py:1467: in __enter__
+    original, local = self.get_original()
+                      ^^^^^^^^^^^^^^^^^^^
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+self = <unittest.mock._patch object at 0x000001C75727A2D0>
+
+    def get_original(self):
+        target = self.getter()
+        name = self.attribute
+    
+        original = DEFAULT
+        local = False
+    
+        try:
+            original = target.__dict__[name]
+        except (AttributeError, KeyError):
+            original = getattr(target, name, DEFAULT)
+        else:
+            local = True
+    
+        if name in _builtins and isinstance(target, ModuleType):
+            self.create = True
+    
+        if not self.create and original is DEFAULT:
+>           raise AttributeError(
+                "%s does not have the attribute %r" % (target, name)
+            )
+E           AttributeError: <class 'illustrator_mcp.websocket_bridge.WebSocketBridge'> does not have the attribute '_start_bridge_thread'
+
+C:\Users\k.jin\AppData\Local\Programs\Python\Python312\Lib\unittest\mock.py:1437: AttributeError
+________________ TestWebSocketBridge.test_bridge_has_registry _________________
+
+self = <tests.test_websocket_bridge.TestWebSocketBridge object at 0x000001C757226D50>
+
+    def test_bridge_has_registry(self):
+        """Test that bridge has a RequestRegistry instance."""
+>       with patch('illustrator_mcp.websocket_bridge.WebSocketBridge._start_bridge_thread'):
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+tests\test_websocket_bridge.py:110: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+C:\Users\k.jin\AppData\Local\Programs\Python\Python312\Lib\unittest\mock.py:1467: in __enter__
+    original, local = self.get_original()
+                      ^^^^^^^^^^^^^^^^^^^
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+self = <unittest.mock._patch object at 0x000001C75936BF80>
+
+    def get_original(self):
+        target = self.getter()
+        name = self.attribute
+    
+        original = DEFAULT
+        local = False
+    
+        try:
+            original = target.__dict__[name]
+        except (AttributeError, KeyError):
+            original = getattr(target, name, DEFAULT)
+        else:
+            local = True
+    
+        if name in _builtins and isinstance(target, ModuleType):
+            self.create = True
+    
+        if not self.create and original is DEFAULT:
+>           raise AttributeError(
+                "%s does not have the attribute %r" % (target, name)
+            )
+E           AttributeError: <class 'illustrator_mcp.websocket_bridge.WebSocketBridge'> does not have the attribute '_start_bridge_thread'
+
+C:\Users\k.jin\AppData\Local\Programs\Python\Python312\Lib\unittest\mock.py:1437: AttributeError
+============================== warnings summary ===============================
+tests/test_websocket_bridge.py::TestWebSocketBridge::test_is_connected_initially_false
+  C:\Users\k.jin\OneDrive\PhD\claude\scientific_plot_agent_antigravity\Illustrator_MCP\illustrator_mcp\bridge\server.py:9: DeprecationWarning: websockets.server.WebSocketServerProtocol is deprecated
+    from websockets.server import WebSocketServerProtocol
+
+tests/test_websocket_bridge.py::TestWebSocketBridge::test_is_connected_initially_false
+  C:\Users\k.jin\AppData\Local\Programs\Python\Python312\Lib\site-packages\websockets\legacy\__init__.py:6: DeprecationWarning: websockets.legacy is deprecated; see https://websockets.readthedocs.io/en/stable/howto/upgrade.html for upgrade instructions
+    warnings.warn(  # deprecated in 14.0 - 2024-11-09
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+=============================== tests coverage ================================
+_______________ coverage: platform win32, python 3.12.8-final-0 _______________
+
+Name                                          Stmts   Miss  Cover
+-----------------------------------------------------------------
+illustrator_mcp\__init__.py                       2      0   100%
+illustrator_mcp\__version__.py                    1      0   100%
+illustrator_mcp\bridge\request_registry.py       49     23    53%
+illustrator_mcp\bridge\server.py                 81     43    47%
+illustrator_mcp\config.py                        14      1    93%
+illustrator_mcp\errors.py                        10     10     0%
+illustrator_mcp\libraries.py                     99     99     0%
+illustrator_mcp\log_config.py                    24     24     0%
+illustrator_mcp\protocol.py                     177    177     0%
+illustrator_mcp\proxy_client.py                  93     93     0%
+illustrator_mcp\response_models.py               48     48     0%
+illustrator_mcp\runtime.py                       28     28     0%
+illustrator_mcp\schemas\__init__.py              42     42     0%
+illustrator_mcp\schemas\schema_generator.py      22     22     0%
+illustrator_mcp\server.py                        14     14     0%
+illustrator_mcp\shared.py                        66     41    38%
+illustrator_mcp\templates.py                     19     19     0%
+illustrator_mcp\tools\__init__.py                 7      7     0%
+illustrator_mcp\tools\base.py                    11     11     0%
+illustrator_mcp\tools\context.py                 27     27     0%
+illustrator_mcp\tools\documents.py              100    100     0%
+illustrator_mcp\tools\execute.py                 67     67     0%
+illustrator_mcp\tools\query.py                   59     59     0%
+illustrator_mcp\tools\templates.py                9      9     0%
+illustrator_mcp\utils.py                         14     14     0%
+illustrator_mcp\websocket_bridge.py             115     87    24%
+-----------------------------------------------------------------
+TOTAL                                          1198   1065    11%
+Coverage HTML written to dir htmlcov
+=========================== short test summary info ===========================
+FAILED tests/test_websocket_bridge.py::TestRequestRegistry::test_create_request_returns_unique_ids
+FAILED tests/test_websocket_bridge.py::TestRequestRegistry::test_create_request_with_trace_id
+FAILED tests/test_websocket_bridge.py::TestRequestRegistry::test_complete_request_resolves_future
+FAILED tests/test_websocket_bridge.py::TestRequestRegistry::test_fail_request_sets_exception
+FAILED tests/test_websocket_bridge.py::TestRequestRegistry::test_cancel_all_pending
+FAILED tests/test_websocket_bridge.py::TestWebSocketBridge::test_is_connected_initially_false
+FAILED tests/test_websocket_bridge.py::TestWebSocketBridge::test_bridge_has_registry
+================== 7 failed, 3 passed, 2 warnings in 15.55s ===================

@@ -8,7 +8,7 @@
 // JSON polyfill for ExtendScript (which lacks native JSON support)
 if (typeof JSON === 'undefined') {
     JSON = {
-        stringify: function (obj) {
+        stringify: function(obj) {
             var t = typeof obj;
             if (t !== 'object' || obj === null) {
                 if (t === 'string') return '"' + obj.replace(/"/g, '\\"').replace(/\n/g, '\\n').replace(/\r/g, '\\r') + '"';
@@ -30,7 +30,7 @@ if (typeof JSON === 'undefined') {
             }
             return (arr ? '[' : '{') + json.join(',') + (arr ? ']' : '}');
         },
-        parse: function (str) {
+        parse: function(str) {
             return eval('(' + str + ')');
         }
     };
@@ -65,56 +65,6 @@ function executeScript(scriptStr) {
             line: e.line
         });
     }
-}
-
-/**
- * Safe dispatcher for MCP commands (No text concatenation)
- * @param {string} command - The command name
- * @param {object} payload - The arguments object
- * @returns {string} - JSON string of the result
- */
-function mcp_dispatch(command, payload) {
-    try {
-        // Dispatch logic here. For now, we only have simple commands,
-        // but this extensibility point allows for mapping string commands
-        // to specific functions without 'eval'
-
-        switch (command) {
-            case 'ping':
-                return ping();
-            case 'execute_script':
-                // For 'execute_script', we sadly still need eval for arbitrary code,
-                // but at least the envelope was safely unpacked
-                return executeScript(payload.script);
-            default:
-                return JSON.stringify({ error: "Unknown command: " + command });
-        }
-    } catch (e) {
-        return JSON.stringify({ error: e.message });
-    }
-}
-
-/**
- * Handle a full MCP request envelope
- * @param {object} request - The full request object {id, script, command...}
- * @returns {string} - JSON result
- */
-function mcp_handle_request(request) {
-    // If it's a raw script request (classic mode)
-    if (request.script) {
-        return executeScript(request.script);
-    }
-    // Future: handle structured commands safely
-    return JSON.stringify({ error: "No script provided" });
-}
-
-function ping() {
-    return JSON.stringify({
-        pong: true,
-        app: app.name,
-        version: app.version,
-        libs: ["host.jsx"]
-    });
 }
 
 /**

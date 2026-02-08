@@ -1,32 +1,35 @@
 <!DOCTYPE html>
-<html>
+<html lang="en">
+
 <head>
-    <meta charset="UTF-8">
-    <title>MCP Control</title>
-    <link rel="stylesheet" href="css/style.css">
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Illustrator MCP</title>
+  <script src="./CSInterface.js"></script>
 </head>
+
 <body>
-    <div class="container">
-        <h2>MCP Control</h2>
-        
-        <div class="status-section">
-            <div id="status" class="status disconnected">
-                <span class="status-icon">●</span>
-                <span class="status-text">Disconnected</span>
-            </div>
-        </div>
-        
-        <div class="button-section">
-            <button id="connectBtn" class="btn btn-primary">Connect</button>
-        </div>
-        
-        <div class="log-section">
-            <div class="log-header">Log</div>
-            <div id="logArea" class="log-area"></div>
-        </div>
-    </div>
-    
-    <script src="js/CSInterface.js"></script>
-    <script src="js/main.js"></script>
+  <div id="debug-error-overlay"
+    style="position:fixed; top:0; left:0; width:100%; height:100%; background:white; color:red; z-index:9999; display:none; padding:20px; box-sizing:border-box; overflow:auto; font-family:monospace; white-space:pre-wrap;">
+  </div>
+  <script>
+    window.onerror = function (msg, url, line, col, error) {
+      var overlay = document.getElementById('debug-error-overlay');
+      if (overlay) {
+        overlay.style.display = 'block';
+        overlay.innerText += 'Error: ' + msg + '\n' + (error ? error.stack : '') + '\n\n';
+      }
+    };
+    window.onunhandledrejection = function (e) {
+      var overlay = document.getElementById('debug-error-overlay');
+      if (overlay) {
+        overlay.style.display = 'block';
+        overlay.innerText += 'Unhandled Rejection: ' + (e.reason ? (e.reason.stack || e.reason) : e.reason) + '\n\n';
+      }
+    };
+  </script>
+  <div id="root"></div>
+  <script type="module" src="/src/main.tsx"></script>
 </body>
+
 </html>
