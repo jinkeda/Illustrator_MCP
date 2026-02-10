@@ -34,15 +34,27 @@ OP_SCHEMAS: Dict[str, OpSchema] = {
     "element_create": OpSchema(
         required=["type"],
         optional=["id", "x", "y", "width", "height", "layer", "name", "fill", "stroke",
-                  "points", "sides", "radius", "outerRadius", "innerRadius", "cornerRadius", "closed", "x2", "y2"],
+                  "points", "geometry", "sides", "radius", "outerRadius", "innerRadius",
+                  "cornerRadius", "closed", "x2", "y2", "contents", "text", "fontSize", "fontName"],
         types={
             "type": "string", "id": "string", "x": "number", "y": "number",
             "x2": "number", "y2": "number", "width": "number", "height": "number",
             "layer": "string", "name": "string", "fill": "object", "stroke": "object",
-            "points": "array", "sides": "number", "radius": "number",
-            "outerRadius": "number", "innerRadius": "number", "cornerRadius": "number", "closed": "boolean"
+            "points": "array", "geometry": "object", "sides": "number", "radius": "number",
+            "outerRadius": "number", "innerRadius": "number", "cornerRadius": "number",
+            "closed": "boolean", "contents": "string", "text": "string",
+            "fontSize": "number", "fontName": "string"
         },
-        enum_values={"type": ["rect", "ellipse", "line", "path", "polygon", "star", "roundedRect"]}
+        enum_values={"type": ["rect", "ellipse", "line", "path", "polyline", "polygon", "star", "roundedRect", "text"]}
+    ),
+
+    "element_create_multi": OpSchema(
+        required=["geometry"],
+        optional=["layer", "name", "fill", "stroke"],
+        types={
+            "geometry": "object", "layer": "string", "name": "string",
+            "fill": "object", "stroke": "object"
+        }
     ),
     
     "element_modify": OpSchema(
@@ -190,10 +202,11 @@ OP_SCHEMAS: Dict[str, OpSchema] = {
     
     "assert_style": OpSchema(
         required=[],
-        optional=["fill", "stroke", "strokeWidth", "opacity", "tolerance"],
+        optional=["fill", "stroke", "strokeWidth", "opacity", "tolerance", "repair"],
         types={
             "fill": "object", "stroke": "object",
-            "strokeWidth": "number", "opacity": "number", "tolerance": "number"
+            "strokeWidth": "number", "opacity": "number", "tolerance": "number",
+            "repair": "boolean"
         }
     ),
     
@@ -205,7 +218,21 @@ OP_SCHEMAS: Dict[str, OpSchema] = {
         types={"includeItems": "boolean"}
     ),
     
-    "hash_structure": OpSchema(required=[], optional=[], types={})
+    "hash_structure": OpSchema(required=[], optional=[], types={}),
+
+    "assert_text": OpSchema(
+        required=["contents"],
+        optional=["matchMode", "caseSensitive"],
+        types={"contents": "string", "matchMode": "string", "caseSensitive": "boolean"},
+        enum_values={"matchMode": ["exact", "contains", "regex"]}
+    ),
+
+    "assert_alignment": OpSchema(
+        required=["mode"],
+        optional=["tolerance", "spacing", "repair"],
+        types={"mode": "string", "tolerance": "number", "spacing": "number", "repair": "boolean"},
+        enum_values={"mode": ["left", "centerX", "right", "top", "centerY", "bottom"]}
+    ),
 }
 
 
@@ -367,7 +394,7 @@ def main():
     parser.add_argument(
         "--output", "-o",
         type=Path,
-        default=Path(__file__).parent.parent / "illustrator_mcp" / "resources" / "scripts" / "op_schemas_generated.jsx",
+        default=Path(__file__).parent.parent / "illustrator_mcp" / "resources" / "scripts" / "op_schemas.jsx",
         help="Output file path"
     )
     parser.add_argument(

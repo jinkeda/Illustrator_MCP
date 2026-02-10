@@ -1,4 +1,4 @@
-# Adobe Illustrator MCP Server
+# Adobe Illustrator MCP Server v3.0
 
 [![MCP](https://img.shields.io/badge/MCP-Compatible-blue)](https://modelcontextprotocol.io)
 [![Python](https://img.shields.io/badge/Python-3.10+-green)](https://python.org)
@@ -26,6 +26,7 @@ An MCP (Model Context Protocol) server that enables AI assistants like Claude to
 - **Scripting First Architecture** - Minimal toolset
 - **~16 Core Tools** - Essential operations; everything else via `illustrator_execute_script`
 - **Standardized Response Envelope** - All tools return `{ok, warnings, error, diagnostics, result}`
+- **Result Contracts** - Canonical `{ok, error:{code,message,stage}}` shape enforced across all layers
 - **Task Protocol v2.3** - Structured execution with:
   - Standardized error codes (V/R/S categories)
   - Compound target selectors with deterministic ordering
@@ -173,39 +174,58 @@ illustrator_execute_script({
 | `layout` | `createGrid`, `distributeHorizontal`, `alignCenter` | Layout and alignment |
 | `presets` | `COLOR_PALETTES`, `getColor`, `applyPreset` | Color palettes and grid presets |
 | `selection` | `getOrderedSelection` | Spatial sorting of selection |
-| `task_executor` | `executeTask`, `collectTargets` | Structured task execution |
+| `task_executor` | `executeTask`, `collectTargets`, `makeError` | Structured task execution |
 | `validate` | `countItemsOnArtboard` | Bounds validation and preflight checks |
 | `op_schemas` | `validateOpParams`, `getOpSchema` | Auto-generated parameter schemas for SOC ops |
 | `snapshot` | `captureSnapshot`, `restoreSnapshot` | Document state snapshot/restore for rollback |
+| `ops_journal` | `journalAppend`, `journalReplay`, `journalSummary` | Op journal for batch replay and recomputability |
+| `field_eval` | `resolveFields`, `registerFieldEvaluator` | Dynamic param preprocessing (4 built-in evaluators) |
 | `ops_core` | `executeOpBatch`, `registerOpHandler`, `invalidateIdIndex` | SOC batch executor with ID index caching |
-| `ops_element` | — | Create, modify, delete shapes |
+| `ops_element` | — | Create, modify, delete, chunked multi-create, by-ref stash create |
 | `ops_group` | — | Group/ungroup, z-order |
 | `ops_layer` | — | Layer CRUD |
 | `ops_style` | — | Fill, stroke, opacity |
 | `ops_text` | — | Text frame operations |
 | `ops_align` | — | Alignment, distribution |
-| `ops_measure` | — | Assertions (count, bounds, exists, style), snapshots |
+| `ops_measure` | — | Assertions (count, bounds, exists, style, text, alignment), snapshots |
+| `geo_ir` | `irValidate`, `isIR`, `irWrapMulti` | Geometry IR validation and construction |
+| `generative` | `seededRandom`, `marching`, `fBm`, `integrateField` | Procedural generation utilities |
+| `session` | `stashPut`, `stashGet`, `stashPutIR`, `stashClear` | Multi-call IR handoff via session stash |
+| `test_soc` | `runSOCTests` | Integration test harness (26 assertions) |
 
-### 5. Task Protocol Architecture (v2.2)
+### 5. Task Protocol Architecture (v2.3)
 
 For complex, multi-item operations, use the **Task Protocol** for structured execution:
 
 ```javascript
-// Task execution with collect → compute → apply stages
+// Selection task: collect → compute → apply
 var payload = {
     task: 'apply_fill',
-    targets: {type: 'selection'},  // Declarative targeting
+    targets: {type: 'selection'},
     params: {color: [255, 0, 0]},
     options: {trace: true}
 };
-
 var report = executeTask(payload, collectTargets, compute, apply);
-// Returns: {ok: true, stats: {...}, timing: {...}, errors: [], warnings: []}
+
+// Creation task: skip collect, apply creates items
+var payload = {
+    task: 'create_grid',
+    params: {rows: 5, cols: 5},
+    options: {kind: 'creation', minCreated: 25, trace: true}
+};
+```
+
+The `execute_task` tool also supports an `includes` parameter to inject SOC libraries:
+```python
+execute_task(payload=..., includes=["ops_core", "ops_element", "ops_style"], ...)
 ```
 
 | Feature | Description |
 |---------|-------------|
 | **Declarative Targets** | `{type: 'selection'}`, `{type: 'layer', layer: 'Layer 1'}`, `{type: 'all'}` |
+| **Task Kind** | `kind: 'selection'` (default) or `kind: 'creation'` (skip collect, apply creates items) |
+| **Creation Safety** | `minCreated: N` warns if apply creates fewer than N items |
+| **Library Includes** | `includes: ["ops_style"]` injects SOC libs into task scripts (deduped, stable order) |
 | **Structured Reports** | Timing breakdown, item stats, error localization |
 | **Stable References** | `ItemRef` with layerPath, indexPath, itemId |
 | **Trace Mode** | Step-by-step execution logging |
@@ -218,6 +238,8 @@ For high-complexity tasks (≥50 elements, multi-step layouts), use the SOC Fram
 ```javascript
 var ops = [
     {task: 'element_create', params: {id: 'A1', type: 'rect', x: 100, y: 100, width: 50, height: 50}},
+    {task: 'element_create', params: {id: 'T1', type: 'text', x: 100, y: 160, contents: 'Hello', fontSize: 18}},
+    {task: 'element_create', params: {id: 'T2', type: 'text', x: 200, y: 100, width: 120, height: 40, contents: 'Area text'}},
     {task: 'style_set_fill', targets: {type: 'id', ids: ['A1']}, params: {r: 255, g: 0, b: 0}},
     {task: 'assert_exists', params: {ids: ['A1']}}
 ];
@@ -237,8 +259,16 @@ var report = executeOpBatch(ops, {strict: true, trace: true});
 | **Python Chunking** | `execute_op_batch_chunked()` auto-splits large batches |
 | **assert_style** | Verify fill/stroke/opacity with RGB + CMYK support |
 | **WebSocket Streaming** | Progress updates via `execute_script_streaming()` |
+| **Repair Mode** | `{repair: true}` on `assert_style`/`assert_alignment` snaps violations + returns before/after |
+| **Field Evaluators** | `{$field: "index_ratio"}` — per-target dynamic params (4 built-ins: index_ratio, position, noise, lookup) |
+| **Op Journal** | `{journal: true}` records batches with `generatorMeta` for replay fidelity |
+| **Selection Deprecation** | `type: "selection"` emits warning; removal at v2.0 — use `type: "id"` |
+| **Multi-Call Stash** | `stashPutIR()` → `element_create_multi_by_ref()` for inter-call IR transport |
+| **Chunked Creation** | `offset`/`limit` on `element_create_multi` for paginated large datasets |
+| **Result Contracts** | Canonical error shape: `{ok:false, error:{code,message,stage}}` enforced everywhere |
+| **Integration Tests** | `runSOCTests()` — 26 assertions covering contracts, stash, chunking, journal |
 
-> See `.agent/skills/state-ops-checks/SKILL.md` for full documentation.
+> See `.agent/skills/state-ops-checks/SKILL.md` and `SOC_CONTRACTS.md` for full documentation.
 
 ### 6. Context Before Creation
 
@@ -454,7 +484,7 @@ The panel should automatically connect and show "✅ Connected"
 
 ---
 
-## Available Tools (~16 total)
+## Available Tools (~14 total)
 
 This MCP follows a **Scripting First Architecture**. Most Illustrator operations should be done via the `illustrator_execute_script` tool rather than specialized atomic tools.
 
@@ -463,24 +493,22 @@ This MCP follows a **Scripting First Architecture**. Most Illustrator operations
 |------|-------------|
 | `illustrator_execute_script` | **PRIMARY TOOL** - Execute any ExtendScript code in Illustrator |
 
-### Document Operations (10)
+### Document Operations (8)
 | Tool | Description |
 |------|-------------|
 | `illustrator_create_document` | Create a new document |
 | `illustrator_open_document` | Open an existing file |
 | `illustrator_save_document` | Save the current document |
 | `illustrator_export_document` | Export to PNG, JPG, SVG, PDF |
-| `illustrator_get_document_info` | Get document properties |
 | `illustrator_close_document` | Close the document |
 | `illustrator_import_image` | Import PNG/JPG image into document |
 | `illustrator_place_file` | Place linked/embedded file |
-| `illustrator_undo` | Undo last action |
-| `illustrator_redo` | Redo last undone action |
+| `illustrator_history` | Undo/redo with action flag and count |
 
 ### Context & State Inspection (5)
 | Tool | Description |
 |------|-------------|
-| `illustrator_get_document_structure` | Get complete document tree (layers, items) |
+| `illustrator_get_document` | Get complete document info and structure (layers, items, artboards, saved status) |
 | `illustrator_get_selection_info` | Get detailed info about selected objects |
 | `illustrator_get_app_info` | Get Illustrator application info |
 | `illustrator_get_scripting_reference` | Quick ExtendScript syntax reference |
@@ -724,14 +752,20 @@ Illustrator_MCP/
 │   │       ├── validate.jsx   # Bounds validation & preflight
 │   │       ├── op_schemas.jsx # Auto-generated param schemas (from gen_schemas.py)
 │   │       ├── snapshot.jsx   # Document state snapshot/restore
-│   │       ├── ops_core.jsx   # SOC batch executor + ID index
+│   │       ├── ops_journal.jsx # Op journal for replay and recomputability
+│   │       ├── field_eval.jsx # Field evaluator preprocessing (4 built-ins)
+│   │       ├── ops_core.jsx   # SOC batch executor + ID index + journal integration
 │   │       ├── ops_element.jsx # Element create/modify/delete
 │   │       ├── ops_group.jsx  # Group/ungroup, z-order
 │   │       ├── ops_layer.jsx  # Layer CRUD
 │   │       ├── ops_style.jsx  # Fill, stroke, opacity
 │   │       ├── ops_text.jsx   # Text frame operations
 │   │       ├── ops_align.jsx  # Alignment, distribution
-│   │       └── ops_measure.jsx # Assertions + measurement
+│   │       ├── ops_measure.jsx # Assertions + measurement + repair mode
+│   │       ├── geo_ir.jsx     # Geometry IR validation and construction
+│   │       ├── generative.jsx # Procedural generation utilities (noise, fBm, marching squares)
+│   │       ├── session.jsx    # Multi-call IR handoff via session stash
+│   │       └── test_soc.jsx   # Integration test harness (26 assertions)
 │   ├── schemas/               # Generated JSON schemas
 │   └── tools/                 # ~15 tools (Scripting First)
 │       ├── __init__.py        # Tool registration
@@ -768,7 +802,8 @@ Illustrator_MCP/
 │   └── gen_schemas.py         # Schema codegen (python -m scripts.gen_schemas)
 ├── install-cep.bat            # Windows CEP installer
 ├── pyproject.toml             # Python package config
-└── README.md
+├── SOC_CONTRACTS.md           # Result contract schemas (v3.0)
+├── README.md
 ```
 
 ---
@@ -825,6 +860,29 @@ The Node.js `proxy-server` folder is kept for reference but is no longer used.
 ---
 
 ## Changelog
+
+### v3.0.0 (2026-02-10) - CONTRACT HARDENING & MULTI-CALL
+
+Major release: enforced result contracts, multi-call IR handoff, and integration test harness.
+
+**Result Contracts**
+- **`makeError` canonical shape:** Returns `{ok: false, error: {code, message, stage, itemRef, details}}` — all consumers updated
+- **`SOC_CONTRACTS.md`:** Single source of truth for HandlerResult, BatchReport, JournalEntry, and SessionStash schemas
+- **Band-aid removal:** Removed shape-sniffing heuristic in `ops_core.jsx`; clean `if (!opResult.ok)` branch
+- **Consumer fixes:** Updated `isRetryable`, `safeExecuteTask`, and batch executor error aggregation
+
+**Multi-Call Architecture**
+- **Session stash** (`session.jsx`): `stashPut`/`stashGet`/`stashPutIR`/`stashClear` for inter-call IR transport via `$.global`
+- **`element_create_multi_by_ref`**: Resolves IR from stash and delegates to `element_create_multi`
+- **Chunked creation**: `offset`/`limit` params on `element_create_multi` for paginated large datasets
+- **`generatorMeta`**: Journal entries record generator name, version, seed, params for replay fidelity
+
+**Reliability**
+- **Includes auto-retry** (`libraries.py`): Force-reloads manifest once on cache miss before failing
+- **Timeout safety cap** (`execute.py`): Hard cap at 300s to prevent bridge hangs
+- **Integration test harness** (`test_soc.jsx`): 26 assertions across 8 groups — all pass
+
+---
 
 ### v2.12.0 (2026-02-07) - SOC HARDENING & INTEGRATION
 
@@ -1287,6 +1345,27 @@ var result = applyPreset("2x2", doc.selection, "contain");
 - **Cleanup:** Archived 15 disabled legacy tool modules to `tools/archive/`
 - **Improved:** Dynamic tool counting in startup log (replaces hardcoded "94 tools")
 
+### v2.14.0 (2026-02-09) — GEOMETRY IR
+- **Added:** `geo_ir.jsx` standard library — versioned Geometry IR schema (v1) with factories (`irPath`, `irMulti`, `irPoints`), strict validation (`irValidate`), and `irMapPoints` for consolidated coordinate transforms
+- **Added:** `element_create_multi` SOC op — creates all sub-paths from a multi IR with per-path decimation, returns `{created, skipped, ids, totalPoints, warnings}`
+- **Added:** `chainSegmentsIR` wrapper in `generative.jsx` — returns Geometry IR multi-path with merged meta
+- **Improved:** `element_create` path/polyline now accepts `geometry` (IR) param with clear precedence (`geometry` > `points` > error)
+- **Improved:** Multi IR explicitly rejected in `element_create` with actionable error pointing to `element_create_multi`
+- **Improved:** Monotonic decimation guard — enforces strictly increasing indices to prevent duplicate points
+- **Improved:** Warnings returned in-band in op results instead of only via `ctx.warn`
+- **Improved:** IR validation runs before consuming geometry in `element_create`
+- **Improved:** Y-flip consolidated via `irMapPoints` in `element_create_multi` (single source of truth)
+- **Doc:** Precise coordinate convention (artboard origin, units in points), reserved meta keys (`seed`, `threshold`, `dx`, `dy`, `algo`, `ts`)
+
+### v2.13.0 (2026-02-09)
+- **Added:** `file_path` param to `execute_script` — run `.jsx` files directly instead of inline script
+- **Added:** `timeout` param to `execute_script` — configurable timeout for long-running generative scripts (default 30s)
+- **Added:** `polyline` element type in `element_create` SOC op — alias for open `path` with `closed=false`
+- **Added:** `generative.jsx` standard library — seeded PRNG, value noise, fBm, ridged noise, marching squares, segment chaining, Chaikin smoothing, point decimation
+- **Added:** `setEntirePath` point guard — auto-decimates to 8000 points with warning instead of crash
+- **Added:** Custom paths/polylines section and standard libraries table to scripting reference
+- **Improved:** Export tool `file_path` description with example path format
+
 ### v2.1.0 (2026-01-17) - THICK SCRIPTS
 - **Added:** Standard Library Injection support in `illustrator_execute_script`
 - **Added:** `resources/scripts/` directory with core libraries:
@@ -1326,6 +1405,19 @@ var result = applyPreset("2x2", doc.selection, "contain");
 ### v1.0.0
 - Initial release with integrated WebSocket bridge (no Node.js proxy required)
 - 94 tools across 15 categories
+
+---
+
+## Examples
+
+Working examples live in the [`example/`](../example/) directory:
+
+| Example | Description |
+|---------|-------------|
+| **[Moiré Pattern](../example/moire-pattern/)** | Parametric vector moiré interference pattern from two rotated line lattices. 956 curves, circular crop, SVG export, θ animation. Demonstrates generative geometry via ExtendScript. |
+| **[Reaction–Diffusion](../example/reaction-diffusion/)** | Organic iso-contour curves from a seeded ridged noise field. Marching squares + Chaikin smoothing produce 2170 biological/cellular vector curves. Fully deterministic. |
+
+Each example includes a standalone `.jsx` script, exported assets, and its own README.
 
 ---
 

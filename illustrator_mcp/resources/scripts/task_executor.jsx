@@ -172,11 +172,14 @@ var RETRYABLE_CODES = [
  */
 function makeError(code, message, stage, itemRef, details) {
     return {
-        code: code,
-        message: message,
-        stage: stage,
-        itemRef: itemRef || null,
-        details: details || null
+        ok: false,
+        error: {
+            code: code,
+            message: message,
+            stage: stage,
+            itemRef: itemRef || null,
+            details: details || null
+        }
     };
 }
 
@@ -861,80 +864,90 @@ function executeTask(payload, collectFn, computeFn, applyFn) {
 
     var t0 = new Date().getTime();
 
+    // Resolve skipCollect from kind or explicit flag
+    var skipCollect = options.skipCollect || (options.kind === "creation");
+
     // === COLLECT stage ===
     var items = [];
-    try {
-        if (trace) trace.push("[COLLECT] Starting target collection");
+    if (skipCollect) {
+        // Creation-first: skip collect, items stays []
+        if (trace) trace.push("[COLLECT] Skipped (kind=" + (options.kind || "n/a") + ", skipCollect=true); items=[]");
+        report.timing.collect_ms = 0;
+    } else {
+        try {
+            if (trace) trace.push("[COLLECT] Starting target collection");
 
-        // Handle both v2.3 TargetSelector and legacy formats
-        var targets = payload.targets;
-        var targetObj = targets;
-        var orderBy = "zOrder";
-        var globalExclude = null;
+            // Handle both v2.3 TargetSelector and legacy formats
+            var targets = payload.targets;
+            var targetObj = targets;
+            var orderBy = "zOrder";
+            var globalExclude = null;
 
-        if (targets && targets.target) {
-            // V2.3 TargetSelector format
-            targetObj = targets.target;
-            orderBy = targets.orderBy || "zOrder";
-            globalExclude = targets.exclude;
-        } else {
-            // Legacy format support - some might pass exclude/orderBy directly
-            if (targets && targets.exclude) globalExclude = targets.exclude;
-            if (targets && targets.orderBy) orderBy = targets.orderBy;
-        }
-
-        items = collectFn(doc, targetObj);
-
-        // Apply global exclusion
-        if (globalExclude) {
-            items = filterItems(items, globalExclude);
-        }
-
-        // Apply ordering
-        items = sortItems(items, orderBy);
-
-        report.stats.itemsProcessed = items.length;
-        if (trace) trace.push("[COLLECT] Found " + items.length + " items");
-
-        if (items.length === 0) {
-            report.warnings.push({
-                stage: "collect",
-                message: "No items matched the target selector",
-                suggestion: "Check targets parameter or document content"
-            });
-        }
-
-        // === ASSIGN IDs (opt-in) ===
-        if (options.idPolicy && options.idPolicy !== "none") {
-            if (trace) trace.push("[COLLECT] Assigning IDs to " + items.length + " items");
-            for (var idx = 0; idx < items.length; idx++) {
-                assignItemIdV2(items[idx], options.idPolicy);
+            if (targets && targets.target) {
+                // V2.3 TargetSelector format
+                targetObj = targets.target;
+                orderBy = targets.orderBy || "zOrder";
+                globalExclude = targets.exclude;
+            } else {
+                // Legacy format support - some might pass exclude/orderBy directly
+                if (targets && targets.exclude) globalExclude = targets.exclude;
+                if (targets && targets.orderBy) orderBy = targets.orderBy;
             }
-        }
-        // Legacy fallback (remove in v3.0)
-        else if (options.assignIds && items.length > 0) {
-            for (var idx = 0; idx < items.length; idx++) {
-                assignItemId(items[idx]);
-            }
-        }
 
-    } catch (e) {
-        report.ok = false;
-        report.errors.push(makeError(
-            ErrorCodes.R_COLLECT_FAILED,
-            e.message,
-            "collect",
-            null,
-            { line: e.line || null }
-        ));
-        var t1_err = new Date().getTime();
-        report.timing = { collect_ms: t1_err - t0, compute_ms: 0, apply_ms: 0, total_ms: t1_err - t0 };
-        return report;
+            items = collectFn(doc, targetObj);
+
+            // Apply global exclusion
+            if (globalExclude) {
+                items = filterItems(items, globalExclude);
+            }
+
+            // Apply ordering
+            items = sortItems(items, orderBy);
+
+            report.stats.itemsProcessed = items.length;
+            if (trace) trace.push("[COLLECT] Found " + items.length + " items");
+
+            if (items.length === 0) {
+                report.warnings.push({
+                    stage: "collect",
+                    message: "No items matched the target selector",
+                    suggestion: "Check targets parameter or document content"
+                });
+            }
+
+            // === ASSIGN IDs (opt-in) ===
+            if (options.idPolicy && options.idPolicy !== "none") {
+                if (trace) trace.push("[COLLECT] Assigning IDs to " + items.length + " items");
+                for (var idx = 0; idx < items.length; idx++) {
+                    assignItemIdV2(items[idx], options.idPolicy);
+                }
+            }
+            // Legacy fallback (remove in v3.0)
+            else if (options.assignIds && items.length > 0) {
+                for (var idx = 0; idx < items.length; idx++) {
+                    assignItemId(items[idx]);
+                }
+            }
+
+        } catch (e) {
+            report.ok = false;
+            report.errors.push(makeError(
+                ErrorCodes.R_COLLECT_FAILED,
+                e.message,
+                "collect",
+                null,
+                { line: e.line || null }
+            ));
+            var t1_err = new Date().getTime();
+            report.timing = { collect_ms: t1_err - t0, compute_ms: 0, apply_ms: 0, total_ms: t1_err - t0 };
+            return report;
+        }
     }
     var t1 = new Date().getTime();
-    report.timing.collect_ms = t1 - t0;
+    if (!skipCollect) report.timing.collect_ms = t1 - t0;
 
-    if (items.length === 0) {
+    // Early-return on empty items ONLY for selection tasks
+    if (items.length === 0 && !skipCollect) {
         report.timing.compute_ms = 0;
         report.timing.apply_ms = 0;
         report.timing.total_ms = t1 - t0;
@@ -995,6 +1008,15 @@ function executeTask(payload, collectFn, computeFn, applyFn) {
     var t3 = new Date().getTime();
     report.timing.apply_ms = t3 - t2;
     report.timing.total_ms = t3 - t0;
+
+    // Creation safety rail: check minCreated
+    if (options.minCreated != null && report.stats.itemsModified < options.minCreated) {
+        report.warnings.push({
+            stage: "apply",
+            message: "Created " + report.stats.itemsModified + " items, expected at least " + options.minCreated
+        });
+    }
+    if (trace) trace.push("[APPLY] created=" + report.stats.itemsModified);
 
     return report;
 }
@@ -1101,19 +1123,21 @@ function validatePayload(payload) {
  */
 function isRetryable(error, retryableStages) {
     retryableStages = retryableStages || ["collect"];
+    // Unwrap nested makeError shape: {ok:false, error:{code,stage,...}}
+    var e = (error && error.error) ? error.error : error;
 
     // Never retry apply stage unless explicitly in the list
-    if (error.stage === "apply" && retryableStages.indexOf("apply") < 0) {
+    if (e.stage === "apply" && retryableStages.indexOf("apply") < 0) {
         return false;
     }
 
     // Check if stage is in allowed list
-    if (retryableStages.indexOf(error.stage) < 0) {
+    if (retryableStages.indexOf(e.stage) < 0) {
         return false;
     }
 
     // Check if error code is retryable
-    return RETRYABLE_CODES.indexOf(error.code) >= 0;
+    return RETRYABLE_CODES.indexOf(e.code) >= 0;
 }
 
 /**
@@ -1154,8 +1178,9 @@ function executeTaskWithRetrySafe(payload, collectFn, computeFn, applyFn) {
             var err = lastReport.errors[i];
             if (isRetryable(err, retryableStages)) {
                 canRetry = true;
-                if (retriedStages.indexOf(err.stage) < 0) {
-                    retriedStages.push(err.stage);
+                var eInner = (err && err.error) ? err.error : err;
+                if (retriedStages.indexOf(eInner.stage) < 0) {
+                    retriedStages.push(eInner.stage);
                 }
             }
         }

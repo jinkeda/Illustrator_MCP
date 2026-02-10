@@ -3,7 +3,7 @@
  * Part of Illustrator MCP SOC Framework
  * 
  * AUTO-GENERATED - DO NOT EDIT MANUALLY
- * Generated: 2026-02-09T11:28:10.207489
+ * Generated: 2026-02-09T10:36:59.813072
  * Source: scripts/gen_schemas.py
  * 
  * To regenerate: python -m scripts.gen_schemas
@@ -382,16 +382,14 @@ var OP_PARAM_SCHEMAS = {
             "stroke",
             "strokeWidth",
             "opacity",
-            "tolerance",
-            "repair"
+            "tolerance"
         ],
         "types": {
             "fill": "object",
             "stroke": "object",
             "strokeWidth": "number",
             "opacity": "number",
-            "tolerance": "number",
-            "repair": "boolean"
+            "tolerance": "number"
         }
     },
     "measure_bounds": {
@@ -440,14 +438,12 @@ var OP_PARAM_SCHEMAS = {
         ],
         "optional": [
             "tolerance",
-            "spacing",
-            "repair"
+            "spacing"
         ],
         "types": {
             "mode": "string",
             "tolerance": "number",
-            "spacing": "number",
-            "repair": "boolean"
+            "spacing": "number"
         },
         "enumValues": {
             "mode": [
@@ -506,9 +502,6 @@ function validateOpParams(task, params) {
     if (schema.types) {
         for (var key in params) {
             if (params.hasOwnProperty(key) && schema.types[key]) {
-                // Skip type check for $field descriptors — they'll be resolved
-                // to the correct type by field_eval.jsx before handlers see them
-                if (typeof isField === "function" && isField(params[key])) continue;
                 var expected = schema.types[key];
                 var actual = getValueType(params[key]);
                 if (actual !== "null" && actual !== expected) {

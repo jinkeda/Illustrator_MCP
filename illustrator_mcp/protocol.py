@@ -306,10 +306,34 @@ class TaskError(BaseModel):
     details: Optional[Dict[str, Any]] = Field(None, description="Additional error context")
 
 
+# ==================== Task Kind ====================
+
+class TaskKind(str, Enum):
+    """Task kind determines collect behavior.
+    
+    - SELECTION: Normal collect; empty selection → early-return (default)
+    - CREATION: Skip collect; items=[]; compute/apply must handle empty input
+    """
+    SELECTION = "selection"
+    CREATION = "creation"
+
+
 # ==================== Task Options ====================
 
 class TaskOptions(BaseModel):
     """Task execution options."""
+    kind: TaskKind = Field(
+        default=TaskKind.SELECTION,
+        description="Task kind: 'selection' (collect items) or 'creation' (skip collect, apply creates)"
+    )
+    skipCollect: bool = Field(
+        default=False,
+        description="Low-level: skip collect stage explicitly (kind='creation' implies this)"
+    )
+    minCreated: Optional[int] = Field(
+        default=None, ge=0,
+        description="Safety rail: minimum items apply must create (warns if not met)"
+    )
     dryRun: bool = Field(default=False, description="Preview changes without applying")
     trace: bool = Field(default=False, description="Include execution trace")
     idPolicy: IdPolicy = Field(default=IdPolicy.NONE, description="ID assignment policy")
