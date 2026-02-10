@@ -342,7 +342,7 @@ Lines 5-10 say "Y positive down" (screen coords) while lines 271-287 say "Y is p
 | `proxy-server/` reference | Old README | Directory already deleted. Reference removed in README rewrite. |
 | `IllustratorProxy` class | `proxy_client.py` | Thin wrapper around `_execute_via_bridge`. Only used via `get_proxy()` in `execute_script()`. Could be inlined. |
 | `format_response()` | `proxy_client.py` | Older response formatter. Superseded by `format_envelope()` but still imported by `base.py`. |
-| `mcp_dispatch()` | `cep-extension/jsx/host.jsx` | Defined but never called. The extension uses `mcp_handle_request()` directly. |
+| `mcp_dispatch()` | `cep-extension/jsx/host.jsx` | Called via `useMCP.ts::mcpDispatch()` (L77-84) which is exported for UI actions. Not dead code -- it's a separate dispatch channel from the main `mcp_handle_request()` message path. Only handles `ping` and `execute_script` commands currently. |
 | `create_selection_check()` | `tools/templates.py` | Only used if archived tools were re-enabled. |
 | `wrap_script_no_document_check()` | `tools/templates.py` | Not called anywhere in active code. |
 | `REVIEW_SOC_IMPROVEMENTS.md` | Root + `docs/` | Duplicate file. |
