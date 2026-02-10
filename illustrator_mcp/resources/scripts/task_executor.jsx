@@ -146,6 +146,9 @@ var ErrorCodes = {
     R_APPLY_FAILED: "R003",
     R_ITEM_OPERATION_FAILED: "R004",
     R_TIMEOUT: "R005",
+
+    // === EXECUTION (E) - infrastructure/dependency issues ===
+    E_EXECUTION: "E001",
     R_OUT_OF_BOUNDS: "R006",
 
     // === SYSTEM (S) - Illustrator/environment issues ===

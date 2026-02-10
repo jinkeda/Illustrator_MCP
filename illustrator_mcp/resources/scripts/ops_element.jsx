@@ -21,6 +21,12 @@
 if (typeof registerOpHandler !== "function") {
     throw new Error("ops_element.jsx requires ops_core.jsx (registerOpHandler=" + typeof registerOpHandler + ")");
 }
+if (typeof findLayer !== "function") {
+    throw new Error("ops_element.jsx requires task_executor.jsx (findLayer=" + typeof findLayer + ")");
+}
+if (typeof isIR !== "function") {
+    throw new Error("ops_element.jsx requires geo_ir.jsx (isIR=" + typeof isIR + ")");
+}
 
 // ==================== Element Create ====================
 

@@ -217,10 +217,15 @@ if (typeof executeTask !== "function" || typeof validatePayload !== "function") 
                 warnings.append(str(w))
 
         # Check for errors in report
+        # makeError() returns {ok:false, error:{code, message, ...}} — unwrap nested shape
         errors = report.get("errors", [])
         if errors:
-            error_msg = errors[0].get("message", "Unknown error") if errors else "Query failed"
-            error_code = errors[0].get("code", "QUERY_ERROR") if errors else "QUERY_ERROR"
+            err = errors[0]
+            # Handle both flat {code, message} and nested {ok, error:{code, message}} shapes
+            if isinstance(err, dict) and "error" in err and isinstance(err["error"], dict):
+                err = err["error"]
+            error_msg = err.get("message", "Unknown error") if err else "Query failed"
+            error_code = err.get("code", "QUERY_ERROR") if err else "QUERY_ERROR"
             return json.dumps({
                 "ok": False,
                 "warnings": warnings,

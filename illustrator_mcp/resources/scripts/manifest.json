@@ -208,7 +208,8 @@
             "version": "1.0.0",
             "dependencies": [
                 "ops_core",
-                "task_executor"
+                "task_executor",
+                "geo_ir"
             ],
             "exports": [],
             "description": "Element CRUD operations (create, modify, delete)"

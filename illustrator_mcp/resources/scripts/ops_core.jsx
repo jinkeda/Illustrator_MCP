@@ -539,11 +539,16 @@ function executeOpBatch(ops, options) {
                 var fanData = [];
                 var fanWarnings = [];
                 var fanId = null;
+                var fanError = null;  // Capture first error for propagation
                 for (var t = 0; t < targets.length; t++) {
                     var perTargetParams = resolveFields(resolvedParams, targets[t], t, targets.length, ctx);
                     var singleResult = handler(perTargetParams, [targets[t]], ctx);
                     if (singleResult && typeof singleResult === "object") {
-                        if (singleResult.ok === false) fanOk = false;
+                        if (singleResult.ok === false) {
+                            fanOk = false;
+                            // Capture nested error from makeError shape
+                            if (!fanError && singleResult.error) fanError = singleResult.error;
+                        }
                         fanData.push(singleResult.data || singleResult);
                         if (singleResult.warnings) fanWarnings = fanWarnings.concat(singleResult.warnings);
                         if (singleResult.id && !fanId) fanId = singleResult.id;
@@ -551,7 +556,7 @@ function executeOpBatch(ops, options) {
                         fanData.push(singleResult);
                     }
                 }
-                handlerResult = { ok: fanOk, data: { perTarget: fanData, count: targets.length }, warnings: fanWarnings, id: fanId };
+                handlerResult = { ok: fanOk, data: { perTarget: fanData, count: targets.length }, warnings: fanWarnings, id: fanId, error: fanError };
             } else {
                 if (typeof resolveFields === "function") {
                     resolvedParams = resolveFields(resolvedParams, targets[0] || null, 0, targets.length || 1, ctx);
