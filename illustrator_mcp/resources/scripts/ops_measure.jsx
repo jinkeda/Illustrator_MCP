@@ -34,7 +34,7 @@ registerOpHandler("assert_count", function (params, targets, ctx) {
             }
         }
         if (!targetLayer) {
-            return makeError("R005", "Layer not found: " + params.layer, "apply");
+            return makeError(ErrorCodes.R_APPLY_FAILED, "Layer not found: " + params.layer, "apply");
         }
         actual = targetLayer.pageItems.length;
     } else {
@@ -79,7 +79,7 @@ registerOpHandler("assert_z_order", function (params, targets, ctx) {
     }
 
     if (pairs.length === 0) {
-        return makeError("V006", "assert_z_order requires 'above'+'below' or 'pairs' array", "validate");
+        return makeError(ErrorCodes.V_MISSING_REQUIRED_PARAM, "assert_z_order requires 'above'+'below' or 'pairs' array", "validate");
     }
 
     // Build a lookup: mcpId -> { layerIndex, itemIndex }
@@ -630,7 +630,7 @@ registerOpHandler("assert_text", function (params, targets, ctx) {
 
     // Guard against missing required param
     if (expected === undefined || expected === null) {
-        return { ok: false, data: { error: "missing required param: contents" } };
+        return makeError(ErrorCodes.V_MISSING_REQUIRED_PARAM, "missing required param: contents", "apply");
     }
 
     var matchMode = params.matchMode || "exact";
@@ -746,7 +746,7 @@ registerOpHandler("assert_alignment", function (params, targets, ctx) {
         if (validModes[m] === mode) { modeValid = true; break; }
     }
     if (!modeValid) {
-        return { ok: false, data: { error: "unknown mode: " + mode + ", expected one of: " + validModes.join(", ") } };
+        return makeError(ErrorCodes.V_INVALID_PARAM_TYPE, "unknown mode: " + mode + ", expected one of: " + validModes.join(", "), "apply");
     }
 
     function getValue(item) {

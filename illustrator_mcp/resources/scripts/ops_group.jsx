@@ -22,10 +22,7 @@ registerOpHandler("group_create", function (params, targets, ctx) {
     var name = params.name || null;
 
     if (targets.length === 0) {
-        return {
-            ok: false,
-            error: makeError(ErrorCodes.V_NO_SELECTION, "No items to group", "apply")
-        };
+        return makeError(ErrorCodes.V_NO_SELECTION, "No items to group", "apply");
     }
 
     // Create group on the layer of the first item

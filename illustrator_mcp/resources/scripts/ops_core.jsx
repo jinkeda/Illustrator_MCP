@@ -438,7 +438,7 @@ function executeOpBatch(ops, options) {
         // Replay journal
         var replayResult = (typeof journalReplay === "function")
             ? journalReplay(doc, journal, { onError: "strict", clock: (options.clock || function () { return new Date().getTime(); }) })
-            : { ok: false, data: { error: "journalReplay not available" } };
+            : makeError(ErrorCodes.E_EXECUTION, "journalReplay not available", "apply");
 
         if (!replayResult.ok && recomputeSnapshot && typeof restoreSnapshot === "function") {
             // Replay failed â€” restore from pre-recompute snapshot
@@ -570,6 +570,14 @@ function executeOpBatch(ops, options) {
                 if (!opResult.ok) {
                     // Extract nested error (makeError returns {ok:false, error:{...}})
                     opResult.error = handlerResult.error || handlerResult;
+                    // Defensive: unwrap double-nested makeError (Pattern B regression guard)
+                    if (opResult.error && opResult.error.ok === false && opResult.error.error) {
+                        opResult.error = opResult.error.error;
+                    }
+                    // Defensive: synthesize error from ad-hoc message (Pattern C regression guard)
+                    if (!opResult.error && handlerResult.message) {
+                        opResult.error = { code: "R_UNSTRUCTURED", message: handlerResult.message, stage: "apply" };
+                    }
                     opResult.data = null;
                 } else {
                     opResult.data = handlerResult.data || handlerResult;

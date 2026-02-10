@@ -38,7 +38,7 @@ registerOpHandler("style_set_fill", function (params, targets, ctx) {
     }
 
     if (!color) {
-        return { ok: false, error: makeError(ErrorCodes.V_MISSING_REQUIRED_PARAM, "Missing color params (r, g, b)", "apply") };
+        return makeError(ErrorCodes.V_MISSING_REQUIRED_PARAM, "Missing color params (r, g, b)", "apply");
     }
 
     for (var i = 0; i < targets.length; i++) {

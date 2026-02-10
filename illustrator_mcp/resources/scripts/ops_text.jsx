@@ -84,7 +84,7 @@ registerOpHandler("text_create", function (params, targets, ctx) {
 
 registerOpHandler("text_set_content", function (params, targets, ctx) {
     if (targets.length === 0) {
-        return { ok: false, error: makeError(ErrorCodes.V_NO_SELECTION, "No text frames to modify", "apply") };
+        return makeError(ErrorCodes.V_NO_SELECTION, "No text frames to modify", "apply");
     }
 
     var contents = params.contents || params.text || "";

@@ -809,10 +809,7 @@ registerOpHandler("element_create_batch", function (params, targets, ctx) {
 
 registerOpHandler("element_modify", function (params, targets, ctx) {
     if (targets.length === 0) {
-        return {
-            ok: false,
-            error: makeError(ErrorCodes.V_NO_SELECTION, "No targets to modify", "apply")
-        };
+        return makeError(ErrorCodes.V_NO_SELECTION, "No targets to modify", "apply");
     }
 
     var modified = 0;
