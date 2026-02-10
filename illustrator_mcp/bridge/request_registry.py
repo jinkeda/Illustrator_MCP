@@ -209,10 +209,9 @@ class RequestRegistry:
         """
         with self._lock:
             pending = self._pending.pop(request_id, None)
-            
-        if pending and not pending.future.done():
-            pending.future.set_result(result)
-            return True
+            if pending and not pending.future.done():
+                pending.future.set_result(result)
+                return True
         return False
         
     def fail_request(self, request_id: int, error: Exception) -> bool:
@@ -224,10 +223,9 @@ class RequestRegistry:
         """
         with self._lock:
             pending = self._pending.pop(request_id, None)
-            
-        if pending and not pending.future.done():
-            pending.future.set_exception(error)
-            return True
+            if pending and not pending.future.done():
+                pending.future.set_exception(error)
+                return True
         return False
         
     def cancel_all(self, reason: str = "Cancelled"):

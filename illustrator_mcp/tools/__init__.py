@@ -11,7 +11,7 @@ Core tools:
 - Context: get_document_info, get_document_structure, get_selection_info
 - Utilities: undo, redo
 
-Task Protocol tools (v2.1):
+Task Protocol tools (v2.3):
 - query: Declarative item queries with structured reports
 """
 

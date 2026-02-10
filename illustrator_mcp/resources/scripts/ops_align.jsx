@@ -20,7 +20,7 @@ registerOpHandler("align_horizontal", function (params, targets, ctx) {
     }
 
     var mode = params.mode || "center"; // left, center, right
-    var reference = params.reference || "selection"; // selection, artboard
+    var reference = params.reference || "targets"; // targets, artboard
 
     // Calculate reference point
     var refX = 0;
@@ -31,7 +31,7 @@ registerOpHandler("align_horizontal", function (params, targets, ctx) {
         else if (mode === "right") refX = abBounds[2];
         else refX = (abBounds[0] + abBounds[2]) / 2;
     } else {
-        // Calculate from selection bounds
+        // Calculate from resolved targets bounds
         var minX = Infinity, maxX = -Infinity;
         for (var i = 0; i < targets.length; i++) {
             minX = Math.min(minX, targets[i].left);
@@ -69,7 +69,7 @@ registerOpHandler("align_vertical", function (params, targets, ctx) {
     }
 
     var mode = params.mode || "middle"; // top, middle, bottom
-    var reference = params.reference || "selection";
+    var reference = params.reference || "targets";
 
     var refY = 0;
     if (reference === "artboard") {

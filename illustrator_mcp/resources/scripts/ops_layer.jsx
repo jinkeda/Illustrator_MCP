@@ -17,9 +17,19 @@
 
 registerOpHandler("layer_create", function (params, targets, ctx) {
     var doc = ctx.doc;
-    var name = params.name || "Layer " + (doc.layers.length + 1);
+    var name = params.name;
     var above = params.above || null;
     var below = params.below || null;
+
+    // Validate name
+    if (!name || typeof name !== "string" || name.replace(/\s/g, "").length === 0) {
+        return {
+            ok: false,
+            error: makeError(ErrorCodes.V_MISSING_REQUIRED_PARAM,
+                "Missing or empty 'name' param for layer_create", "validate",
+                null, { layerCount: doc.layers.length, docName: doc.name })
+        };
+    }
 
     // Check if layer already exists (idempotent)
     for (var i = 0; i < doc.layers.length; i++) {
@@ -32,8 +42,18 @@ registerOpHandler("layer_create", function (params, targets, ctx) {
         }
     }
 
-    var layer = doc.layers.add();
-    layer.name = name;
+    var layer;
+    try {
+        layer = doc.layers.add();
+        layer.name = name;
+    } catch (e) {
+        return {
+            ok: false,
+            error: makeError(ErrorCodes.R_APPLY_FAILED,
+                "Failed to create layer '" + name + "': " + e.message, "apply",
+                null, { layerCount: doc.layers.length, docName: doc.name })
+        };
+    }
 
     // Position relative to another layer
     if (above) {

@@ -12,25 +12,25 @@ from illustrator_mcp import templates
 
 
 @mcp.tool(
-    name="illustrator_get_document_structure",
+    name="illustrator_get_document",
     annotations={
-        "title": "Get Document Structure",
+        "title": "Get Document",
         "readOnlyHint": True,
         "destructiveHint": False,
         "idempotentHint": True,
         "openWorldHint": False
     }
 )
-async def illustrator_get_document_structure() -> str:
+async def illustrator_get_document() -> str:
     """
-    Get the complete document structure as a JSON tree.
+    Get complete document information and structure as a JSON tree.
     
     Returns layers, sublayers, and items with their names, types, positions, and properties.
     Essential for understanding canvas state before writing modification scripts.
     
     Returns:
         JSON with:
-        - document: name, width, height, artboards
+        - document: name, width, height, colorMode, saved, layerCount, artboards
         - layers: array of layer objects with:
             - name, visible, locked
             - items: array of {name, type, position, bounds}
@@ -39,8 +39,8 @@ async def illustrator_get_document_structure() -> str:
     """
     return await execute_jsx_tool(
         script=templates.GET_DOCUMENT_STRUCTURE,
-        command_type="get_document_structure",
-        tool_name="illustrator_get_document_structure",
+        command_type="get_document",
+        tool_name="illustrator_get_document",
         params={}
     )
 

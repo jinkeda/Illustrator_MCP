@@ -96,7 +96,7 @@ def create_duplicate_connection_error(port: int) -> ExecutionResponse:
 def check_connection_or_error(
     port: int,
     context: str = "",
-    health_check: bool = True
+    health_check: bool = False
 ) -> Tuple[bool, Optional[ExecutionResponse]]:
     """
     Check bridge connection and return error response if disconnected.
@@ -104,13 +104,10 @@ def check_connection_or_error(
     Centralizes the connection check logic used by both proxy_client
     and websocket_bridge to avoid duplicate code.
     
-    If health_check is True and the connection appears stale (connected but 
-    unresponsive), the bridge will be reset for auto-reconnect on next call.
-    
     Args:
         port: The WebSocket port number.
         context: Optional context string for error message.
-        health_check: If True, verify connection is responsive (default: True).
+        health_check: Reserved for future use. Currently does nothing.
         
     Returns:
         Tuple of (is_connected, error_response_or_none).
@@ -125,24 +122,8 @@ def check_connection_or_error(
     if not bridge.is_connected():
         return False, create_connection_error(port, context)
     
-    # Optional health-check for stale connections
-    if health_check:
-        try:
-            # Quick ping - get_app_info is lightweight
-            result = bridge.execute({
-                "type": "script",
-                "script": "app.version",
-                "timeout": 2.0
-            })
-            if result is None or result.get("error"):
-                logger.warning("Connection appears stale, will auto-reconnect on next call")
-                # Reset bridge to trigger fresh connection next time
-                runtime.bridge = None
-                return False, create_connection_error(port, f"{context} (stale connection)")
-        except Exception as e:
-            logger.warning(f"Health check failed: {e}, will auto-reconnect on next call")
-            runtime.bridge = None
-            return False, create_connection_error(port, f"{context} (health check failed)")
+    # TODO: Implement proper async health_check using bridge.execute_script_async()
+    # when needed for stale connection detection.
     
     return True, None
 

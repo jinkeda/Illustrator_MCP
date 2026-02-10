@@ -1,3 +1,3 @@
 """Version information for Illustrator MCP."""
 
-__version__ = "2.3.6"
+__version__ = "3.0.0"

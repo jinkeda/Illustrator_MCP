@@ -32,46 +32,78 @@ class LibraryResolver:
     def __init__(self, resources_dir: Path):
         self.resources_dir = resources_dir
         self._manifest_cache: Optional[dict] = None
+        self._manifest_stamp: Optional[tuple] = None  # (mtime_ns, size)
         self._manifest_lock = threading.Lock()
         self._file_cache: Dict[Path, str] = {}
         self._file_lock = threading.Lock()
 
     def _load_manifest(self) -> dict:
-        """Load manifest lazily with thread safety."""
-        if self._manifest_cache is not None:
-            return self._manifest_cache
-            
+        """Load manifest with mtime+size invalidation, thread-safe.
+        
+        Uses (st_mtime_ns, st_size) tuple to detect changes, including
+        rapid edits within the same second. On stat failure, keeps
+        last-known-good cache and logs a warning.
+        """
+        manifest_path = self.resources_dir / "manifest.json"
+        
         with self._manifest_lock:
-            if self._manifest_cache is not None:
+            # Get current file stamp
+            try:
+                st = manifest_path.stat()
+                current_stamp = (
+                    getattr(st, 'st_mtime_ns', int(st.st_mtime * 1e9)),
+                    st.st_size
+                )
+            except OSError:
+                if self._manifest_cache is not None:
+                    logger.warning("manifest.json stat failed; keeping last-known-good cache")
+                    return self._manifest_cache
+                logger.error("manifest.json not found and no cached version available")
+                return {"libraries": {}}
+            
+            # Return cached if stamp unchanged
+            if self._manifest_cache is not None and self._manifest_stamp == current_stamp:
+                logger.debug(f"Manifest cache hit (stamp={current_stamp}, path={manifest_path})")
                 return self._manifest_cache
-                
-            manifest_path = self.resources_dir / "manifest.json"
-            if manifest_path.exists():
-                try:
-                    with open(manifest_path, encoding="utf-8") as f:
-                        self._manifest_cache = json.load(f)
-                except Exception as e:
-                    logger.error(f"Failed to load manifest: {e}")
-                    self._manifest_cache = {"libraries": {}}
-            else:
+            
+            # Load fresh
+            try:
+                with open(manifest_path, encoding="utf-8") as f:
+                    loaded = json.load(f)
+                self._manifest_cache = loaded
+                self._manifest_stamp = current_stamp
+                lib_keys = list(loaded.get("libraries", {}).keys())
+                logger.info(f"Manifest loaded from {manifest_path} (mtime_ns={current_stamp[0]}, size={current_stamp[1]}): {len(lib_keys)} libs: {lib_keys}")
+                if self._manifest_stamp is not None:
+                    logger.debug("Manifest reloaded (stamp changed)")
+            except Exception as e:
+                if self._manifest_cache is not None:
+                    logger.warning(f"Failed to reload manifest: {e}; keeping last-known-good")
+                    return self._manifest_cache
+                logger.error(f"Failed to load manifest: {e}")
                 self._manifest_cache = {"libraries": {}}
+                self._manifest_stamp = current_stamp
                 
             return self._manifest_cache
 
     def _read_library_file(self, path: Path) -> str:
-        """Read library file with caching."""
+        """Read library file with mtime-based cache invalidation."""
+        try:
+            current_mtime = path.stat().st_mtime
+        except OSError:
+            raise ValueError(f"Library file not found: {path.name}")
+
         with self._file_lock:
             if path in self._file_cache:
-                return self._file_cache[path]
-        
-        if not path.exists():
-            raise ValueError(f"Library file not found: {path.name}")
-            
+                cached_content, cached_mtime = self._file_cache[path]
+                if cached_mtime == current_mtime:
+                    return cached_content
+
         content = path.read_text(encoding="utf-8")
-        
+
         with self._file_lock:
-            self._file_cache[path] = content
-            
+            self._file_cache[path] = (content, current_mtime)
+
         return content
 
     def resolve(self, includes: List[str]) -> str:
@@ -100,11 +132,18 @@ class LibraryResolver:
         all_exports: Dict[str, str] = {}  # symbol -> library name
         
         def resolve_one(lib_name: str) -> None:
+            nonlocal manifest
             if lib_name in seen:
                 return
             
             if lib_name not in manifest["libraries"]:
-                raise ValueError(f"Unknown library: {lib_name}")
+                # Auto-retry: force reload once before failing (stale cache guard)
+                logger.warning(f"Library '{lib_name}' not found, forcing manifest reload")
+                self._manifest_cache = None
+                manifest = self._load_manifest()
+                if lib_name not in manifest["libraries"]:
+                    available = list(manifest["libraries"].keys())
+                    raise ValueError(f"Unknown library: {lib_name}. Available: {available}. Manifest: {self.resources_dir / 'manifest.json'}")
             
             lib = manifest["libraries"][lib_name]
             

@@ -1,6 +1,6 @@
 {
     "$schema": "https://json-schema.org/draft/2020-12/schema",
-    "version": "1.0.0",
+    "version": "3.0.0",
     "description": "Library manifest for Illustrator MCP ExtendScript libraries. Enables automatic dependency resolution and symbol collision detection.",
     "libraries": {
         "geometry": {
@@ -148,12 +148,45 @@
             ],
             "description": "Document state snapshot/restore for safer rollback"
         },
+        "ops_journal": {
+            "file": "ops_journal.jsx",
+            "version": "1.0.0",
+            "dependencies": [
+                "snapshot"
+            ],
+            "exports": [
+                "journalAppend",
+                "journalGet",
+                "journalClear",
+                "journalSummary",
+                "journalReplay",
+                "jsonStringify"
+            ],
+            "description": "Operation journal for batch replay and recomputability (P6)"
+        },
+        "field_eval": {
+            "file": "field_eval.jsx",
+            "version": "1.0.0",
+            "dependencies": [],
+            "exports": [
+                "FIELD_EVALUATORS",
+                "registerFieldEvaluator",
+                "isField",
+                "containsFields",
+                "evaluateField",
+                "resolveFields"
+            ],
+            "description": "Field evaluator preprocessing for dynamic params (P3). 4 built-ins: index_ratio, position, noise, lookup"
+        },
         "ops_core": {
             "file": "ops_core.jsx",
             "version": "1.0.0",
             "dependencies": [
                 "task_executor",
-                "op_schemas"
+                "op_schemas",
+                "snapshot",
+                "ops_journal",
+                "field_eval"
             ],
             "exports": [
                 "OP_SCHEMA_VERSION",
@@ -232,13 +265,100 @@
         },
         "ops_measure": {
             "file": "ops_measure.jsx",
-            "version": "1.0.0",
+            "version": "1.2.0",
             "dependencies": [
                 "ops_core",
                 "task_executor"
             ],
             "exports": [],
-            "description": "Measurement and assertion operations for verification"
+            "description": "Measurement and assertion operations (assert_count, assert_bounds, assert_exists, assert_style, assert_text, assert_alignment, assert_z_order)"
+        },
+        "geo_ir": {
+            "file": "geo_ir.jsx",
+            "version": "1.1.0",
+            "dependencies": [],
+            "exports": [
+                "GEO_IR_VERSION",
+                "GEO_IR_TYPES",
+                "GEO_IR_KINDS",
+                "irPath",
+                "irMulti",
+                "irPoints",
+                "isIR",
+                "irType",
+                "irValidate",
+                "irFlatten",
+                "irPointCount",
+                "irMapPoints"
+            ],
+            "description": "Geometry Intermediate Representation: versioned schema, factories, validation, and point mapping utilities"
+        },
+        "generative": {
+            "file": "generative.jsx",
+            "version": "1.5.0",
+            "dependencies": [
+                "geo_ir"
+            ],
+            "exports": [
+                "seededRandom",
+                "buildPermTable",
+                "getArtboardBounds",
+                "addLabel",
+                "smoothstep",
+                "lerp",
+                "valueNoise2D",
+                "fbm",
+                "ridgedNoise",
+                "marchingSquares",
+                "chainSegments",
+                "chaikinSmooth",
+                "decimatePoints",
+                "cleanPolyline",
+                "chainSegmentsIR",
+                "spatialHashBuild",
+                "spatialHashQuery",
+                "pairsWithinRadius",
+                "clusterByRadius",
+                "buildFieldGrid",
+                "integrateField",
+                "buildCurlField"
+            ],
+            "description": "Procedural generation utilities: seeded PRNG, artboard helpers, safe text, value noise, fBm, marching squares, segment chaining, Chaikin smoothing (with point budget), decimation, IR wrappers, spatial hashing, clustering, vector field precomputation, path integration, curl-noise fields"
+        },
+        "session": {
+            "file": "session.jsx",
+            "version": "1.0.0",
+            "dependencies": [],
+            "exports": [
+                "stashPut",
+                "stashGet",
+                "stashPutIR",
+                "stashKeys",
+                "stashClear",
+                "stashInfo"
+            ],
+            "description": "Session-scoped key-value stash for multi-call IR handoff. Keys namespaced by document name. stashPutIR validates IR schema before storing."
+        },
+        "test_soc": {
+            "file": "test_soc.jsx",
+            "version": "1.1.0",
+            "dependencies": [
+                "task_executor",
+                "ops_core",
+                "ops_layer",
+                "ops_element",
+                "ops_measure",
+                "ops_style",
+                "ops_journal",
+                "session",
+                "geo_ir",
+                "generative"
+            ],
+            "exports": [
+                "runSOCTests",
+                "_socAssert"
+            ],
+            "description": "SOC integration test harness. Run runSOCTests() to verify all contracts."
         }
     }
 }

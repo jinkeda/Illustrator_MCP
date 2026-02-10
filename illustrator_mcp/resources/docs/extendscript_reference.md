@@ -215,3 +215,24 @@ app.executeMenuCommand('noCompoundPath');
 - Forgetting to set filled/stroked properties
 - Not using -y in position arrays
 - Forgetting to expand live effects before export
+- **Exceeding ~8000 points in setEntirePath()** — Illustrator crashes with 'Illegal Argument'. Use the `generative` library's `decimatePoints()` to auto-clamp.
+
+## Custom Paths and Polylines
+```javascript
+// Multi-point path (up to ~8000 points safely)
+var path = doc.pathItems.add();
+var pts = [[0, 0], [50, -100], [100, 0], [150, -50]];
+path.setEntirePath(pts);
+path.closed = false;   // Open polyline (default: true for closed)
+path.stroked = true;
+path.filled = false;
+```
+
+## Standard Libraries (use via `includes` parameter)
+| Library | Key Functions |
+|---------|-------------|
+| `geometry` | `rectXY()`, `ellipseXY()`, `lineXY()`, `makeRGBColor()` |
+| `layout` | `arrangeInGrid()`, `distributeHorizontal()`, `alignCenter()` |
+| `validate` | `countItemsOnArtboard()`, `isItemCenterOnArtboard()` |
+| `generative` | `seededRandom()`, `fbm()`, `marchingSquares()`, `chaikinSmooth()` |
+| `selection` | `getOrderedSelection()` |

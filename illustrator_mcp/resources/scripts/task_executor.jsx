@@ -267,8 +267,8 @@ function describeItem(item, layer) {
     // Try reading an ID from note (if previously written)
     var itemId = null;
     try {
-        if (item.note && item.note.indexOf("mcp-id:") >= 0) {
-            var match = item.note.match(/mcp-id:([a-zA-Z0-9_-]+)/);
+        if (item.note && item.note.indexOf("@mcp:id=") >= 0) {
+            var match = item.note.match(/@mcp:id=([^\s@]+)/);
             if (match) itemId = match[1];
         }
     } catch (e) {
@@ -302,10 +302,10 @@ function assignItemId(item) {
     }
 
     // Remove old ID (if any)
-    existingNote = existingNote.replace(/mcp-id:[a-zA-Z0-9_-]+\s*/g, "");
+    existingNote = existingNote.replace(/@mcp:id=[^\s@]+\s*/g, "");
 
     try {
-        item.note = "mcp-id:" + id + " " + existingNote;
+        item.note = "@mcp:id=" + id + " " + existingNote;
     } catch (e) {
         // item.note may not be writable on some item types (e.g., locked items)
     }
@@ -363,8 +363,8 @@ function describeItemV2(item, options) {
 
     if (options.includeIdentity !== false) {
         try {
-            if (item.note && item.note.indexOf("mcp-id:") >= 0) {
-                var match = item.note.match(/mcp-id:([a-zA-Z0-9_-]+)/);
+            if (item.note && item.note.indexOf("@mcp:id=") >= 0) {
+                var match = item.note.match(/@mcp:id=([^\s@]+)/);
                 if (match) {
                     identity.itemId = match[1];
                     identity.idSource = "note";
@@ -410,8 +410,8 @@ function assignItemIdV2(item, policy) {
     // Check for existing ID
     var existingId = null;
     try {
-        if (item.note && item.note.indexOf("mcp-id:") >= 0) {
-            var match = item.note.match(/mcp-id:([a-zA-Z0-9_-]+)/);
+        if (item.note && item.note.indexOf("@mcp:id=") >= 0) {
+            var match = item.note.match(/@mcp:id=([^\s@]+)/);
             if (match) existingId = match[1];
         }
     } catch (e) { }
@@ -434,10 +434,10 @@ function assignItemIdV2(item, policy) {
     // Write ID to note
     var existingNote = "";
     try { existingNote = item.note || ""; } catch (e) { }
-    existingNote = existingNote.replace(/mcp-id:[a-zA-Z0-9_-]+\s*/g, "");
+    existingNote = existingNote.replace(/@mcp:id=[^\s@]+\s*/g, "");
 
     try {
-        item.note = "mcp-id:" + newId + " " + existingNote;
+        item.note = "@mcp:id=" + newId + " " + existingNote;
     } catch (e) {
         return { assigned: false, id: null, conflict: false, error: e.message };
     }

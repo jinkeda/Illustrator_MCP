@@ -6,19 +6,40 @@
  * - assert_count: Assert number of items
  * - assert_bounds: Assert item within bounds
  * - assert_exists: Assert item exists by ID
+ * - assert_style: Assert fill/stroke/opacity styles
+ * - assert_text: Assert text frame content
+ * - assert_alignment: Assert positional alignment with optional spacing
  * - measure_bounds: Get bounds of targets
  * - snapshot_structure: Capture document structure snapshot
  * 
  * @requires ops_core (for registerOpHandler)
- * @version 1.0.0
+ * @version 1.2.0
  */
 
 // ==================== Assert Count ====================
 
 registerOpHandler("assert_count", function (params, targets, ctx) {
     var expected = params.expected;
-    var actual = targets.length;
     var operator = params.operator || "eq"; // eq, gte, lte, gt, lt
+
+    // Per-layer count: if params.layer provided, count items on that layer
+    var actual;
+    if (params.layer) {
+        var doc = ctx.doc;
+        var targetLayer = null;
+        for (var i = 0; i < doc.layers.length; i++) {
+            if (doc.layers[i].name === params.layer) {
+                targetLayer = doc.layers[i];
+                break;
+            }
+        }
+        if (!targetLayer) {
+            return makeError("R005", "Layer not found: " + params.layer, "apply");
+        }
+        actual = targetLayer.pageItems.length;
+    } else {
+        actual = targets.length;
+    }
 
     var ok = false;
     switch (operator) {
@@ -34,7 +55,83 @@ registerOpHandler("assert_count", function (params, targets, ctx) {
         data: {
             expected: expected,
             actual: actual,
-            operator: operator
+            operator: operator,
+            layer: params.layer || null
+        }
+    };
+});
+
+// ==================== Assert Z-Order ====================
+
+/**
+ * Assert that items are in expected z-order.
+ * @param {string} params.above - MCP ID that should be ABOVE (closer to viewer)
+ * @param {string} params.below - MCP ID that should be BELOW
+ * @param {Array} [params.pairs] - Array of [aboveId, belowId] pairs for batch check
+ */
+registerOpHandler("assert_z_order", function (params, targets, ctx) {
+    var doc = ctx.doc;
+
+    // Collect all pairs to check
+    var pairs = params.pairs || [];
+    if (params.above && params.below) {
+        pairs.push([params.above, params.below]);
+    }
+
+    if (pairs.length === 0) {
+        return makeError("V006", "assert_z_order requires 'above'+'below' or 'pairs' array", "validate");
+    }
+
+    // Build a lookup: mcpId -> { layerIndex, itemIndex }
+    // In Illustrator, lower pageItems index = higher z-position (topmost = [0])
+    var idMap = {};
+    for (var li = 0; li < doc.layers.length; li++) {
+        var layer = doc.layers[li];
+        for (var ii = 0; ii < layer.pageItems.length; ii++) {
+            var note = layer.pageItems[ii].note || "";
+            var match = note.match(/@mcp:id=([^\s;]+)/);
+            if (match) {
+                idMap[match[1]] = { layerIndex: li, itemIndex: ii, name: layer.pageItems[ii].name };
+            }
+        }
+    }
+
+    var passed = [];
+    var failed = [];
+
+    for (var p = 0; p < pairs.length; p++) {
+        var aboveId = pairs[p][0];
+        var belowId = pairs[p][1];
+        var a = idMap[aboveId];
+        var b = idMap[belowId];
+
+        if (!a || !b) {
+            failed.push({ above: aboveId, below: belowId, reason: "ID not found: " + (!a ? aboveId : belowId) });
+            continue;
+        }
+
+        // Compare: higher layer (lower index) = above. Within same layer, lower item index = above.
+        var aAbove = false;
+        if (a.layerIndex < b.layerIndex) {
+            aAbove = true; // a is on a higher layer
+        } else if (a.layerIndex === b.layerIndex) {
+            aAbove = (a.itemIndex < b.itemIndex); // lower index = higher in stack
+        }
+
+        if (aAbove) {
+            passed.push({ above: aboveId, below: belowId });
+        } else {
+            failed.push({ above: aboveId, below: belowId, reason: "z-order reversed" });
+        }
+    }
+
+    return {
+        ok: failed.length === 0,
+        data: {
+            total: pairs.length,
+            passed: passed.length,
+            failed: failed.length,
+            details: failed.length > 0 ? failed : undefined
         }
     };
 });
@@ -182,7 +279,7 @@ registerOpHandler("snapshot_structure", function (params, targets, ctx) {
         artboards: doc.artboards.length,
         layers: [],
         selection: doc.selection ? doc.selection.length : 0,
-        timestamp: new Date().getTime()
+        timestamp: ctx.clock()
     };
 
     for (var i = 0; i < doc.layers.length; i++) {
@@ -258,7 +355,10 @@ registerOpHandler("hash_structure", function (params, targets, ctx) {
  * @param {Object} params.stroke - Expected stroke color {r, g, b} or {c, m, y, k} (optional)
  * @param {number} params.strokeWidth - Expected stroke width (optional)
  * @param {number} params.opacity - Expected opacity 0-100 (optional)
- * @param {number} params.tolerance - Color tolerance (default: 1)
+ * @param {number} params.tolerance - Color tolerance per channel (default: 1).
+ *   NOTE: Tolerance is applied per-channel independently (|actual.R - expected.R| <= tol),
+ *   NOT as perceptual ΔE. Two colors may be perceptually different but pass, or
+ *   perceptually identical but fail. For academic figures, per-channel is typically sufficient.
  */
 registerOpHandler("assert_style", function (params, targets, ctx) {
     var tolerance = params.tolerance || 1;
@@ -381,13 +481,440 @@ registerOpHandler("assert_style", function (params, targets, ctx) {
         }
     }
 
+    // P5: Repair mode — apply expected styles to items with violations
+    var repairs = [];
+    var violationsBefore = failed.length;
+
+    if (params.repair === true && failed.length > 0) {
+
+        for (var i = 0; i < failed.length; i++) {
+            var idx = failed[i].index;
+            var item = targets[idx];
+            var repair = {
+                index: idx,
+                name: failed[i].name,
+                id: (typeof extractMcpId === "function" && item.note) ? extractMcpId(item.note) : null,
+                before: {},
+                after: {}
+            };
+            var didRepair = false;
+
+            try {
+                // Repair fill (RGB)
+                if (params.fill && params.fill.r !== undefined) {
+                    if (item.filled && item.fillColor && item.fillColor.typename === "RGBColor") {
+                        repair.before.fill = { r: item.fillColor.red, g: item.fillColor.green, b: item.fillColor.blue };
+                    } else {
+                        repair.before.fill = item.filled ? "non-rgb" : "none";
+                    }
+                    var fc = new RGBColor();
+                    fc.red = params.fill.r;
+                    fc.green = params.fill.g;
+                    fc.blue = params.fill.b;
+                    item.filled = true;
+                    item.fillColor = fc;
+                    repair.after.fill = { r: params.fill.r, g: params.fill.g, b: params.fill.b };
+                    didRepair = true;
+                }
+
+                // Repair fill (CMYK)
+                if (params.fill && params.fill.c !== undefined) {
+                    if (item.filled && item.fillColor && item.fillColor.typename === "CMYKColor") {
+                        repair.before.fill = { c: item.fillColor.cyan, m: item.fillColor.magenta, y: item.fillColor.yellow, k: item.fillColor.black };
+                    } else {
+                        repair.before.fill = item.filled ? "non-cmyk" : "none";
+                    }
+                    var fcc = new CMYKColor();
+                    fcc.cyan = params.fill.c;
+                    fcc.magenta = params.fill.m;
+                    fcc.yellow = params.fill.y;
+                    fcc.black = params.fill.k;
+                    item.filled = true;
+                    item.fillColor = fcc;
+                    repair.after.fill = { c: params.fill.c, m: params.fill.m, y: params.fill.y, k: params.fill.k };
+                    didRepair = true;
+                }
+
+                // Repair stroke (RGB)
+                if (params.stroke && params.stroke.r !== undefined) {
+                    if (item.stroked && item.strokeColor && item.strokeColor.typename === "RGBColor") {
+                        repair.before.stroke = { r: item.strokeColor.red, g: item.strokeColor.green, b: item.strokeColor.blue };
+                    } else {
+                        repair.before.stroke = item.stroked ? "non-rgb" : "none";
+                    }
+                    var sc = new RGBColor();
+                    sc.red = params.stroke.r;
+                    sc.green = params.stroke.g;
+                    sc.blue = params.stroke.b;
+                    item.stroked = true;
+                    item.strokeColor = sc;
+                    repair.after.stroke = { r: params.stroke.r, g: params.stroke.g, b: params.stroke.b };
+                    didRepair = true;
+                }
+
+                // Repair stroke (CMYK)
+                if (params.stroke && params.stroke.c !== undefined) {
+                    if (item.stroked && item.strokeColor && item.strokeColor.typename === "CMYKColor") {
+                        repair.before.stroke = { c: item.strokeColor.cyan, m: item.strokeColor.magenta, y: item.strokeColor.yellow, k: item.strokeColor.black };
+                    } else {
+                        repair.before.stroke = item.stroked ? "non-cmyk" : "none";
+                    }
+                    var scc = new CMYKColor();
+                    scc.cyan = params.stroke.c;
+                    scc.magenta = params.stroke.m;
+                    scc.yellow = params.stroke.y;
+                    scc.black = params.stroke.k;
+                    item.stroked = true;
+                    item.strokeColor = scc;
+                    repair.after.stroke = { c: params.stroke.c, m: params.stroke.m, y: params.stroke.y, k: params.stroke.k };
+                    didRepair = true;
+                }
+
+                // Repair stroke width
+                if (params.strokeWidth !== undefined) {
+                    repair.before.strokeWidth = item.stroked ? item.strokeWidth : null;
+                    item.strokeWidth = params.strokeWidth;
+                    repair.after.strokeWidth = params.strokeWidth;
+                    didRepair = true;
+                }
+
+                // Repair opacity
+                if (params.opacity !== undefined) {
+                    repair.before.opacity = item.opacity;
+                    item.opacity = params.opacity;
+                    repair.after.opacity = params.opacity;
+                    didRepair = true;
+                }
+
+                if (didRepair) {
+                    repairs.push(repair);
+                }
+            } catch (e) {
+                // Item couldn't be repaired (e.g. locked)
+            }
+        }
+    }
+
+    var violationsAfter = violationsBefore - repairs.length;
+
+    var result = {
+        ok: failed.length === 0 || repairs.length === failed.length,
+        data: {
+            passed: passed.length,
+            failed: failed.length,
+            details: failed.slice(0, 10)
+        }
+    };
+
+    if (params.repair === true) {
+        result.data.violations_before = violationsBefore;
+        result.data.repaired = repairs.length;
+        result.data.violations_after = violationsAfter;
+        result.data.repairs = repairs;
+    }
+
+    return result;
+});
+
+// ==================== Assert Text ====================
+
+/**
+ * Assert that target text frames contain expected content.
+ * 
+ * @param {string} params.contents - Expected text content
+ * @param {string} [params.matchMode="exact"] - "exact", "contains", or "regex"
+ * @param {boolean} [params.caseSensitive=true] - Case sensitivity flag
+ */
+registerOpHandler("assert_text", function (params, targets, ctx) {
+    var expected = params.contents;
+
+    // Guard against missing required param
+    if (expected === undefined || expected === null) {
+        return { ok: false, data: { error: "missing required param: contents" } };
+    }
+
+    var matchMode = params.matchMode || "exact";
+    var caseSensitive = params.caseSensitive !== false; // default true
+
+    var passed = [];
+    var failed = [];
+
+    for (var i = 0; i < targets.length; i++) {
+        var item = targets[i];
+
+        // Must be a TextFrame
+        if (item.typename !== "TextFrame") {
+            failed.push({
+                index: i,
+                name: item.name || null,
+                issue: "not a TextFrame (got " + item.typename + ")"
+            });
+            continue;
+        }
+
+        var actual = item.contents;
+        var exp = expected;
+
+        // Apply case sensitivity
+        if (!caseSensitive) {
+            actual = actual.toLowerCase();
+            exp = exp.toLowerCase();
+        }
+
+        var ok = false;
+        switch (matchMode) {
+            case "exact":
+                ok = actual === exp;
+                break;
+            case "contains":
+                ok = actual.indexOf(exp) !== -1;
+                break;
+            case "regex":
+                try {
+                    var flags = caseSensitive ? "" : "i";
+                    var re = new RegExp(expected, flags);
+                    ok = re.test(item.contents);
+                } catch (e) {
+                    failed.push({
+                        index: i,
+                        name: item.name || null,
+                        issue: "invalid regex: " + e.message
+                    });
+                    continue;
+                }
+                break;
+            default:
+                failed.push({
+                    index: i,
+                    name: item.name || null,
+                    issue: "unknown matchMode: " + matchMode
+                });
+                continue;
+        }
+
+        if (ok) {
+            passed.push(i);
+        } else {
+            failed.push({
+                index: i,
+                name: item.name || null,
+                issue: matchMode + " mismatch: expected " + JSON.stringify(expected) + " got " + JSON.stringify(item.contents)
+            });
+        }
+    }
+
     return {
         ok: failed.length === 0,
         data: {
             passed: passed.length,
             failed: failed.length,
-            details: failed.slice(0, 10)  // Limit to first 10 failures
+            details: failed.slice(0, 10)
         }
     };
 });
 
+// ==================== Assert Alignment ====================
+
+/**
+ * Assert that targets are aligned on a specified axis, with optional spacing check.
+ * 
+ * @param {string} params.mode - "left", "centerX", "right", "top", "centerY", "bottom"
+ * @param {number} [params.tolerance=1] - Tolerance in points
+ * @param {number} [params.spacing] - Expected uniform gap between items (optional)
+ */
+registerOpHandler("assert_alignment", function (params, targets, ctx) {
+    var mode = params.mode;
+    var tolerance = (params.tolerance !== undefined) ? params.tolerance : 1;
+
+    if (targets.length < 2) {
+        return {
+            ok: true,
+            data: {
+                mode: mode,
+                message: "need >=2 targets to check alignment",
+                aligned: targets.length,
+                misaligned: 0,
+                details: []
+            }
+        };
+    }
+
+    // Validate mode
+    var validModes = ["left", "centerX", "right", "top", "centerY", "bottom"];
+    var modeValid = false;
+    for (var m = 0; m < validModes.length; m++) {
+        if (validModes[m] === mode) { modeValid = true; break; }
+    }
+    if (!modeValid) {
+        return { ok: false, data: { error: "unknown mode: " + mode + ", expected one of: " + validModes.join(", ") } };
+    }
+
+    function getValue(item) {
+        switch (mode) {
+            case "left": return item.left;
+            case "right": return item.left + item.width;
+            case "centerX": return item.left + item.width / 2;
+            case "top": return item.top;
+            case "bottom": return item.top - item.height;
+            case "centerY": return item.top - item.height / 2;
+            // No default needed as mode is validated above
+        }
+    }
+
+    var values = [];
+    for (var i = 0; i < targets.length; i++) {
+        values.push({
+            index: i,
+            name: targets[i].name || null,
+            value: getValue(targets[i])
+        });
+    }
+
+    // Use the first item's value as reference
+    var refValue = values[0].value;
+    var aligned = [];
+    var misaligned = [];
+
+    for (var i = 0; i < values.length; i++) {
+        if (Math.abs(values[i].value - refValue) <= tolerance) {
+            aligned.push(values[i].index);
+        } else {
+            misaligned.push({
+                index: values[i].index,
+                name: values[i].name,
+                value: values[i].value,
+                delta: Math.round((values[i].value - refValue) * 100) / 100
+            });
+        }
+    }
+
+    // P5: Repair mode — snap misaligned items to reference value
+    var repairs = [];
+    var violationsBefore = misaligned.length;
+
+    if (params.repair === true && misaligned.length > 0) {
+        for (var i = 0; i < misaligned.length; i++) {
+            var idx = misaligned[i].index;
+            var item = targets[idx];
+            var beforeVal = misaligned[i].value;
+
+            try {
+                // Apply correction based on mode
+                switch (mode) {
+                    case "left":
+                        item.left = refValue;
+                        break;
+                    case "right":
+                        item.left = refValue - item.width;
+                        break;
+                    case "centerX":
+                        item.left = refValue - item.width / 2;
+                        break;
+                    case "top":
+                        item.top = refValue;
+                        break;
+                    case "bottom":
+                        item.top = refValue + item.height;
+                        break;
+                    case "centerY":
+                        item.top = refValue + item.height / 2;
+                        break;
+                }
+
+                var afterVal = getValue(item);
+                repairs.push({
+                    index: idx,
+                    name: misaligned[i].name,
+                    id: (typeof extractMcpId === "function" && item.note) ? extractMcpId(item.note) : null,
+                    before: beforeVal,
+                    after: Math.round(afterVal * 100) / 100
+                });
+            } catch (e) {
+                // Item couldn't be repaired (e.g. locked)
+            }
+        }
+    }
+
+    var violationsAfter = violationsBefore - repairs.length;
+
+    var result = {
+        ok: misaligned.length === 0 || repairs.length === misaligned.length,
+        data: {
+            mode: mode,
+            referenceValue: Math.round(refValue * 100) / 100,
+            aligned: aligned.length,
+            misaligned: misaligned.length,
+            details: misaligned.slice(0, 10)
+        }
+    };
+
+    // Include repair report if repair was requested
+    if (params.repair === true) {
+        result.data.violations_before = violationsBefore;
+        result.data.repaired = repairs.length;
+        result.data.violations_after = violationsAfter;
+        result.data.repairs = repairs;
+    }
+
+    // Optional spacing check (measured PERPENDICULAR to alignment axis)
+    if (params.spacing !== undefined && targets.length >= 2) {
+        var expectedSpacing = params.spacing;
+
+        // Spacing is measured PERPENDICULAR to the alignment axis:
+        // - Items aligned horizontally (left/centerX/right) are in a column → measure vertical spacing
+        // - Items aligned vertically (top/centerY/bottom) are in a row → measure horizontal spacing
+        var spacingIsHorizontal = (mode === "top" || mode === "centerY" || mode === "bottom");
+
+        // Build sortable array with position on the spacing axis
+        var sortable = [];
+        for (var i = 0; i < targets.length; i++) {
+            sortable.push({
+                index: i,
+                name: targets[i].name || null,
+                pos: spacingIsHorizontal
+                    ? targets[i].left
+                    : targets[i].top
+            });
+        }
+
+        // Sort ascending for horizontal (left to right), descending for vertical (top to bottom, since top is higher Y)
+        sortable.sort(function (a, b) {
+            return spacingIsHorizontal ? a.pos - b.pos : b.pos - a.pos;
+        });
+
+        var spacingErrors = [];
+        for (var i = 1; i < sortable.length; i++) {
+            var gap;
+            if (spacingIsHorizontal) {
+                // gap = left of next - right of current
+                var currRight = targets[sortable[i - 1].index].left + targets[sortable[i - 1].index].width;
+                gap = targets[sortable[i].index].left - currRight;
+            } else {
+                // gap = bottom of prev - top of next (vertical)
+                var prevBottom = targets[sortable[i - 1].index].top - targets[sortable[i - 1].index].height;
+                gap = prevBottom - targets[sortable[i].index].top;
+            }
+
+            if (Math.abs(gap - expectedSpacing) > tolerance) {
+                spacingErrors.push({
+                    between: [sortable[i - 1].index, sortable[i].index],
+                    names: [sortable[i - 1].name, sortable[i].name],
+                    expected: expectedSpacing,
+                    actual: Math.round(gap * 100) / 100
+                });
+            }
+        }
+
+        result.data.spacingCheck = {
+            expected: expectedSpacing,
+            ok: spacingErrors.length === 0,
+            errors: spacingErrors.slice(0, 10)
+        };
+
+        if (spacingErrors.length > 0) {
+            result.ok = false;
+        }
+    }
+
+    return result;
+});

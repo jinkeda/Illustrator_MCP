@@ -14,6 +14,12 @@
  * @version 1.0.0
  */
 
+// ==================== Dependency Guard ====================
+
+if (typeof makeError !== "function" || typeof ErrorCodes === "undefined") {
+    throw new Error("ops_core.jsx requires task_executor.jsx (makeError=" + typeof makeError + ", ErrorCodes=" + typeof ErrorCodes + ")");
+}
+
 // ==================== Op Schema Version ====================
 
 var OP_SCHEMA_VERSION = "1.0.0";
@@ -153,7 +159,13 @@ if (!$.global.mcpIdIndex) {
 
 /**
  * Invalidate the global ID index cache.
- * Call this after deleting elements or when the index is known to be stale.
+ * Called automatically at the end of every executeOpBatch.
+ *
+ * IMPORTANT: You MUST call this manually after any DOM changes
+ * made outside executeOpBatch (e.g., direct item.remove(),
+ * layer manipulation, or test cleanup). Failure to do so causes
+ * target resolution to use a stale index, silently targeting
+ * wrong or removed items.
  */
 function invalidateIdIndex() {
     $.global.mcpIdIndex = { docName: null, index: {} };
@@ -252,6 +264,16 @@ function resolveById(doc, ids, ctx) {
 function resolveTargets(doc, targets, ctx) {
     if (!targets) return [];
 
+    // P1: Deprecation warning for selection targeting (removal at v2.0)
+    if (targets.type === "selection") {
+        if (!ctx.diagnostics.selectionWarnings) ctx.diagnostics.selectionWarnings = 0;
+        ctx.diagnostics.selectionWarnings++;
+        if (!ctx._selectionWarned) {
+            ctx._selectionWarned = true;
+            // Warning is surfaced in batch report via diagnostics
+        }
+    }
+
     // ID-based targeting (stable) - uses index
     if (targets.type === "id") {
         var ids = targets.ids || [];
@@ -283,6 +305,21 @@ function resolveTargets(doc, targets, ctx) {
 
 /**
  * Execute a batch of operations
+ *
+ * Batch Report Contract:
+ *   report.ok            — true if all ops passed
+ *   report.createdIds    — flat list of ALL created MCP IDs
+ *                          (from opResult.id + opResult.data.ids + opResult.data.createdIds)
+ *   report.ops[i].id     — singular ID (element_create, layer_create)
+ *   report.ops[i].data   — handler-specific data
+ *                          (element_create_multi → {ids[], created, skipped, stylingMode})
+ *   report.stats         — {total, executed, passed, failed, failedAtIndex}
+ *
+ * Journal Entry Schema (written when options.journal === true):
+ *   entry.ops            — serialized op list (task/params/targets only)
+ *   entry.createdIds     — full ID list (for replay cleanup)
+ *   entry.report         — {ok, stats} summary
+ *
  * @param {Array<Object>} ops - Array of operations
  * @param {Object} options - Execution options
  * @param {string} options.space.units - Coordinate units ("pt", "mm")
@@ -296,6 +333,8 @@ function resolveTargets(doc, targets, ctx) {
  * @param {Function} options.onProgress - Progress callback (receives chunk report)
  * @param {boolean} options.trace - Include execution trace
  * @param {boolean} options.summaryOnly - Omit per-op details, return only stats+createdIds (reduces token usage)
+ * @param {boolean} options.journal - Record ops to journal for replay (P6)
+ * @param {Object} options.recompute - Replay journal from scratch: {confirm: true, snapshotFirst: true}
  * @returns {Object} Batch report
  */
 function executeOpBatch(ops, options) {
@@ -307,6 +346,7 @@ function executeOpBatch(ops, options) {
     var onProgress = options.onProgress || null;
     var trace = options.trace ? [] : null;
     var summaryOnly = options.summaryOnly === true;
+    var journalEnabled = options.journal === true;
     var createdIds = [];  // Track created element IDs for summaryOnly mode
     var preSnapshot = null;  // Pre-execution snapshot for rollback
 
@@ -323,9 +363,11 @@ function executeOpBatch(ops, options) {
     }
 
     // Build execution context (injected into handlers)
+    // P2: clock is injectable for testability; isolates Date impurity
     var ctx = {
         doc: doc,
         app: app,
+        clock: options.clock || function () { return new Date().getTime(); },
         cache: {},
         options: options,
         space: options.space || { units: "pt", origin: "document", yAxis: "down" },
@@ -333,9 +375,79 @@ function executeOpBatch(ops, options) {
         diagnostics: {
             cacheHits: 0,
             cacheMisses: 0,
-            idScans: 0
+            idScans: 0,
+            selectionWarnings: 0
         }
     };
+
+    // === RECOMPUTE GATE (P6) ===
+    // Requires explicit confirmation + takes snapshot before clearing
+    if (options.recompute) {
+        if (!options.recompute.confirm || options.recompute.snapshotFirst !== true) {
+            return {
+                ok: false,
+                errors: [makeError(ErrorCodes.V_INVALID_PARAMS,
+                    "recompute requires {confirm: true, snapshotFirst: true}", "validate")],
+                ops: [],
+                stats: { total: 0, passed: 0, failed: 0 }
+            };
+        }
+
+        var docName = doc.name;
+        var journal = (typeof journalGet === "function") ? journalGet(docName, doc) : [];
+        if (journal.length === 0) {
+            return {
+                ok: false,
+                errors: [makeError(ErrorCodes.V_INVALID_PARAMS,
+                    "recompute: no journal entries for '" + docName + "'", "validate")],
+                ops: [],
+                stats: { total: 0, passed: 0, failed: 0 }
+            };
+        }
+
+        // Snapshot before clearing
+        var recomputeSnapshot = null;
+        if (typeof captureSnapshot === "function") {
+            recomputeSnapshot = captureSnapshot(doc, { mcpOnly: true, clock: ctx.clock });
+        }
+
+        // Clear all MCP-created items
+        try {
+            for (var li = 0; li < doc.layers.length; li++) {
+                var layer = doc.layers[li];
+                for (var pi = layer.pageItems.length - 1; pi >= 0; pi--) {
+                    var item = layer.pageItems[pi];
+                    if (item.note && item.note.indexOf("@mcp:id=") >= 0) {
+                        item.remove();
+                    }
+                }
+            }
+        } catch (clearErr) {
+            // Restore on clear failure
+            if (recomputeSnapshot && typeof restoreSnapshot === "function") {
+                restoreSnapshot(doc, recomputeSnapshot, { geometry: true, style: true, restoreSize: true });
+            }
+            return {
+                ok: false,
+                errors: [makeError(ErrorCodes.E_EXECUTION, "recompute: clear failed: " + clearErr.message, "execute")],
+                ops: [],
+                stats: { total: 0, passed: 0, failed: 0, failedAtIndex: null }
+            };
+        }
+
+        // Replay journal
+        var replayResult = (typeof journalReplay === "function")
+            ? journalReplay(doc, journal, { onError: "strict", clock: (options.clock || function () { return new Date().getTime(); }) })
+            : { ok: false, data: { error: "journalReplay not available" } };
+
+        if (!replayResult.ok && recomputeSnapshot && typeof restoreSnapshot === "function") {
+            // Replay failed â€” restore from pre-recompute snapshot
+            restoreSnapshot(doc, recomputeSnapshot, { geometry: true, style: true, restoreSize: true });
+            replayResult.data.rolledBack = true;
+        }
+
+        return replayResult;
+    }
 
     // === VALIDATION PHASE ===
     if (trace) trace.push("[VALIDATE] Checking " + ops.length + " ops");
@@ -354,7 +466,7 @@ function executeOpBatch(ops, options) {
             ok: false,
             errors: validationErrors,
             ops: [],
-            stats: { total: ops.length, passed: 0, failed: validationErrors.length }
+            stats: { total: ops.length, passed: 0, failed: validationErrors.length, failedAtIndex: 0 }
         };
     }
 
@@ -364,7 +476,7 @@ function executeOpBatch(ops, options) {
     // Capture snapshot before execution if enabled (for snapshot-based rollback)
     if (useSnapshot && rollback && typeof captureSnapshot === "function") {
         try {
-            preSnapshot = captureSnapshot(doc, { mcpOnly: true });
+            preSnapshot = captureSnapshot(doc, { mcpOnly: true, clock: ctx.clock });
             if (trace) trace.push("[SNAPSHOT] Captured " + preSnapshot.items.length + " items");
         } catch (snapErr) {
             if (trace) trace.push("[SNAPSHOT ERROR] " + snapErr.message);
@@ -395,7 +507,7 @@ function executeOpBatch(ops, options) {
 
     for (var i = 0; i < ops.length; i++) {
         var op = ops[i];
-        var t0 = new Date().getTime();
+        var t0 = ctx.clock();
 
         if (trace) trace.push("[OP " + i + "] " + op.task);
 
@@ -415,14 +527,50 @@ function executeOpBatch(ops, options) {
         };
 
         try {
-            var handlerResult = handler(op.params || {}, targets, ctx);
+            // P3: Resolve field descriptors in params before handler sees them
+            var resolvedParams = op.params || {};
+            var handlerResult;
+            var hasFieldDescs = typeof resolveFields === "function" &&
+                typeof containsFields === "function" && containsFields(resolvedParams);
+
+            if (hasFieldDescs && targets.length > 0) {
+                // Fan-out: call handler once per target with per-target resolved params
+                var fanOk = true;
+                var fanData = [];
+                var fanWarnings = [];
+                var fanId = null;
+                for (var t = 0; t < targets.length; t++) {
+                    var perTargetParams = resolveFields(resolvedParams, targets[t], t, targets.length, ctx);
+                    var singleResult = handler(perTargetParams, [targets[t]], ctx);
+                    if (singleResult && typeof singleResult === "object") {
+                        if (singleResult.ok === false) fanOk = false;
+                        fanData.push(singleResult.data || singleResult);
+                        if (singleResult.warnings) fanWarnings = fanWarnings.concat(singleResult.warnings);
+                        if (singleResult.id && !fanId) fanId = singleResult.id;
+                    } else {
+                        fanData.push(singleResult);
+                    }
+                }
+                handlerResult = { ok: fanOk, data: { perTarget: fanData, count: targets.length }, warnings: fanWarnings, id: fanId };
+            } else {
+                if (typeof resolveFields === "function") {
+                    resolvedParams = resolveFields(resolvedParams, targets[0] || null, 0, targets.length || 1, ctx);
+                }
+                handlerResult = handler(resolvedParams, targets, ctx);
+            }
 
             // Normalize handler result
             if (handlerResult && typeof handlerResult === "object") {
                 opResult.ok = handlerResult.ok !== false;
-                opResult.data = handlerResult.data || handlerResult;
-                opResult.warnings = handlerResult.warnings || [];
-                opResult.id = handlerResult.id || opResult.id;
+                if (!opResult.ok) {
+                    // Extract nested error (makeError returns {ok:false, error:{...}})
+                    opResult.error = handlerResult.error || handlerResult;
+                    opResult.data = null;
+                } else {
+                    opResult.data = handlerResult.data || handlerResult;
+                    opResult.warnings = handlerResult.warnings || [];
+                    opResult.id = handlerResult.id || opResult.id;
+                }
             } else {
                 opResult.ok = true;
                 opResult.data = handlerResult;
@@ -430,8 +578,13 @@ function executeOpBatch(ops, options) {
 
             if (opResult.ok) {
                 passed++;
-                // Track created element IDs for summaryOnly mode
-                if (opResult.id) {
+                // Track created element IDs — support all return shapes
+                var _batchIds = opResult.data && (opResult.data.ids || opResult.data.createdIds);
+                if (_batchIds && typeof _batchIds.length === "number" && _batchIds.length > 0) {
+                    // Multi-create ops (element_create_multi) return data.ids[]
+                    for (var mi = 0; mi < _batchIds.length; mi++) createdIds.push(_batchIds[mi]);
+                } else if (opResult.id) {
+                    // Singular create ops (element_create, layer_create)
                     createdIds.push(opResult.id);
                 }
                 // Track successful mutating ops for rollback
@@ -440,6 +593,46 @@ function executeOpBatch(ops, options) {
                 }
             } else {
                 failed++;
+
+                // Strict + rollback for non-exception failures (e.g. assert_exists returning ok:false)
+                if (strict) {
+                    opResult.duration_ms = ctx.clock() - t0;
+                    results.push(opResult);
+
+                    if (rollback) {
+                        if (useSnapshot && preSnapshot && typeof restoreSnapshot === "function") {
+                            if (trace) trace.push("[ROLLBACK] Restoring from snapshot (handler fail)");
+                            var createdDeleted2 = 0;
+                            if (createdIds.length > 0) {
+                                // Build lookup set for created IDs
+                                var cidSet = {};
+                                for (var ci2 = 0; ci2 < createdIds.length; ci2++) cidSet[createdIds[ci2]] = true;
+                                // Iterate layers to find and delete created items by note
+                                for (var lx = 0; lx < doc.layers.length; lx++) {
+                                    for (var px = doc.layers[lx].pageItems.length - 1; px >= 0; px--) {
+                                        var pi = doc.layers[lx].pageItems[px];
+                                        var pn = pi.note || '';
+                                        var pm = pn.match(/@mcp:id=([^\s]+)/);
+                                        if (pm && cidSet[pm[1]]) {
+                                            try { pi.remove(); createdDeleted2++; } catch (d2) { }
+                                        }
+                                    }
+                                }
+                                if (typeof invalidateIdIndex === "function") invalidateIdIndex();
+                            }
+                            try {
+                                var rr = restoreSnapshot(doc, preSnapshot, { geometry: true, style: true });
+                                rolledBackCount = rr.restored + createdDeleted2;
+                            } catch (re) { }
+                        } else if (undoCount > 0) {
+                            if (trace) trace.push("[ROLLBACK] Undoing " + undoCount + " ops (handler fail)");
+                            for (var u2 = 0; u2 < undoCount; u2++) {
+                                try { app.executeMenuCommand('undo'); rolledBackCount++; } catch (ue) { }
+                            }
+                        }
+                    }
+                    break;
+                }
             }
 
         } catch (e) {
@@ -449,12 +642,12 @@ function executeOpBatch(ops, options) {
                 e.message,
                 "apply",
                 null,
-                { line: e.line || null, task: op.task }
-            );
+                { line: e.line || null, task: op.task, opIndex: i }
+            ).error;
             failed++;
 
             if (strict) {
-                opResult.duration_ms = new Date().getTime() - t0;
+                opResult.duration_ms = ctx.clock() - t0;
                 results.push(opResult);
 
                 // Rollback on failure if enabled
@@ -467,16 +660,20 @@ function executeOpBatch(ops, options) {
                         var createdDeleted = 0;
                         if (createdIds.length > 0) {
                             if (trace) trace.push("[ROLLBACK] Deleting " + createdIds.length + " created items");
-                            var idIndex = typeof $.global.mcpIdIndex === "object" ? $.global.mcpIdIndex.index : {};
-                            for (var ci = 0; ci < createdIds.length; ci++) {
-                                try {
-                                    var createdItem = idIndex[createdIds[ci]];
-                                    if (createdItem && createdItem.remove) {
-                                        createdItem.remove();
-                                        createdDeleted++;
+                            // Build lookup set for created IDs
+                            var cidSet2 = {};
+                            for (var ci = 0; ci < createdIds.length; ci++) cidSet2[createdIds[ci]] = true;
+                            // Iterate layers to find and delete created items by note
+                            for (var lx2 = 0; lx2 < doc.layers.length; lx2++) {
+                                for (var px2 = doc.layers[lx2].pageItems.length - 1; px2 >= 0; px2--) {
+                                    var pi2 = doc.layers[lx2].pageItems[px2];
+                                    var pn2 = pi2.note || '';
+                                    var pm2 = pn2.match(/@mcp:id=([^\s]+)/);
+                                    if (pm2 && cidSet2[pm2[1]]) {
+                                        try { pi2.remove(); createdDeleted++; } catch (delErr) {
+                                            if (trace) trace.push("[ROLLBACK] Failed to delete " + pm2[1] + ": " + delErr.message);
+                                        }
                                     }
-                                } catch (delErr) {
-                                    if (trace) trace.push("[ROLLBACK] Failed to delete " + createdIds[ci] + ": " + delErr.message);
                                 }
                             }
                             // Invalidate ID index after deleting created items
@@ -510,7 +707,7 @@ function executeOpBatch(ops, options) {
             }
         }
 
-        opResult.duration_ms = new Date().getTime() - t0;
+        opResult.duration_ms = ctx.clock() - t0;
         results.push(opResult);
 
         // Progress callback
@@ -542,7 +739,7 @@ function executeOpBatch(ops, options) {
                 opsTotal: ops.length,
                 passed: passed,
                 failed: failed,
-                final: true,
+                isFinal: true,
                 percentComplete: 100
             });
         } catch (cbErr) {
@@ -553,6 +750,54 @@ function executeOpBatch(ops, options) {
     // === BUILD REPORT ===
     var allOk = failed === 0;
     var totalMs = results.reduce(function (sum, r) { return sum + r.duration_ms; }, 0);
+
+    // P1: Add deprecation warning to report if selection targeting was used
+    var reportWarnings = [];
+    if (ctx.diagnostics.selectionWarnings > 0) {
+        reportWarnings.push("DEPRECATED: 'selection' targeting used " + ctx.diagnostics.selectionWarnings + "x. Use 'id' targeting. Removal at v2.0.");
+    }
+
+    // Find first failed op index for quick debugging
+    var failedAtIndex = null;
+    for (var fi = 0; fi < results.length; fi++) {
+        if (!results[fi].ok) { failedAtIndex = results[fi].index; break; }
+    }
+
+    // === JOURNAL RECORDING (P6) — runs for BOTH summary and full reports ===
+    // Uses internal results[] array, not the returned report, so journal
+    // always has full detail even when summaryOnly omits per-op data.
+    if (journalEnabled && typeof journalAppend === "function") {
+        var batchId = (typeof generateUUID === "function") ? generateUUID() : ("batch_" + ctx.clock());
+        // Strip ops to just task/params/targets (no resolved items)
+        var journalOps = [];
+        for (var j = 0; j < ops.length; j++) {
+            journalOps.push({
+                task: ops[j].task,
+                params: ops[j].params,
+                targets: ops[j].targets
+            });
+        }
+        journalAppend({
+            batchId: batchId,
+            timestamp: ctx.clock(),
+            ops: journalOps,
+            createdIds: createdIds,
+            generatorMeta: options.generatorMeta || undefined,
+            options: { strict: strict, rollback: rollback, snapshot: useSnapshot },
+            report: { ok: allOk, stats: { total: ops.length, passed: passed, failed: failed } }
+        }, doc.name, doc);
+    }
+
+    // Always invalidate ID index at end of batch to prevent stale cache
+    // across script executions (items may have been created/deleted)
+    if (typeof invalidateIdIndex === "function") {
+        invalidateIdIndex();
+    }
+
+    // Gate redraw on actual DOM mutations (redraw is expensive)
+    if (passed > 0) {
+        app.redraw();
+    }
 
     // summaryOnly mode: omit per-op details to reduce token usage
     if (summaryOnly) {
@@ -566,11 +811,12 @@ function executeOpBatch(ops, options) {
                 total: ops.length,
                 executed: results.length,
                 passed: passed,
-                failed: failed
+                failed: failed,
+                failedAtIndex: failedAtIndex
             },
             timing: { total_ms: totalMs },
             diagnostics: ctx.diagnostics,
-            // Only include errors, not successful op details
+            warnings: reportWarnings.length > 0 ? reportWarnings : undefined,
             errors: results.filter(function (r) { return !r.ok; }).map(function (r) {
                 return { index: r.index, task: r.task, error: r.error };
             }),
@@ -588,10 +834,12 @@ function executeOpBatch(ops, options) {
             total: ops.length,
             executed: results.length,
             passed: passed,
-            failed: failed
+            failed: failed,
+            failedAtIndex: failedAtIndex
         },
         timing: { total_ms: totalMs },
         diagnostics: ctx.diagnostics,
+        warnings: reportWarnings.length > 0 ? reportWarnings : undefined,
         trace: trace
     };
 }
@@ -604,9 +852,11 @@ function executeOpBatch(ops, options) {
  * @param {Function} fn
  * @returns {Object} {result, duration_ms}
  */
-function profileOp(label, fn) {
-    var t0 = new Date().getTime();
+function profileOp(label, fn, clock) {
+    var now = clock || function () { return new Date().getTime(); };
+    var t0 = now();
     var result = fn();
-    var t1 = new Date().getTime();
+    var t1 = now();
     return { result: result, duration_ms: t1 - t0, label: label };
 }
+

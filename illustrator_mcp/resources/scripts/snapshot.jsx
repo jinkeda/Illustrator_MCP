@@ -135,15 +135,17 @@ function captureItemState(item) {
  * @param {Document} doc - Active document
  * @param {Object} options - Capture options
  * @param {boolean} options.mcpOnly - Only capture MCP-managed items (default: true)
+ * @param {Function} options.clock - Injectable clock for P2 compliance (default: new Date().getTime)
  * @returns {Object} Snapshot object
  */
 function captureSnapshot(doc, options) {
     options = options || {};
     var mcpOnly = options.mcpOnly !== false;
+    var clock = options.clock || function () { return new Date().getTime(); };
 
     var snapshot = {
         version: "1.0",
-        timestamp: new Date().getTime(),
+        timestamp: clock(),
         docName: doc.name,
         artboardIndex: doc.artboards.getActiveArtboardIndex(),
         items: [],
@@ -196,6 +198,7 @@ function captureSnapshot(doc, options) {
  * @param {Object} snapshot - Snapshot to restore
  * @param {Object} options - Restore options
  * @param {boolean} options.geometry - Restore position/size (default: true)
+ * @param {boolean} options.restoreSize - Restore width/height within geometry (default: false)
  * @param {boolean} options.style - Restore fill/stroke (default: true)
  * @param {boolean} options.visibility - Restore visibility/lock state (default: false)
  * @returns {Object} Result with restored/failed counts
@@ -203,6 +206,7 @@ function captureSnapshot(doc, options) {
 function restoreSnapshot(doc, snapshot, options) {
     options = options || {};
     var restoreGeometry = options.geometry !== false;
+    var restoreSize = options.restoreSize === true;
     var restoreStyle = options.style !== false;
     var restoreVisibility = options.visibility === true;
 
@@ -246,9 +250,15 @@ function restoreSnapshot(doc, snapshot, options) {
             if (restoreGeometry) {
                 item.left = saved.position[0];
                 item.top = saved.position[1];
-                // Note: Restoring size can be complex for certain item types
-                // item.width = saved.size[0];
-                // item.height = saved.size[1];
+                // Size restore is opt-in (can be complex for certain item types)
+                if (restoreSize && saved.size) {
+                    try {
+                        item.width = saved.size[0];
+                        item.height = saved.size[1];
+                    } catch (sizeErr) {
+                        // Some item types (e.g. linked images) may not support size assignment
+                    }
+                }
             }
 
             // Restore style

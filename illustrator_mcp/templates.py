@@ -234,6 +234,8 @@ GET_DOCUMENT_STRUCTURE = """
             width: doc.width,
             height: doc.height,
             colorMode: doc.documentColorSpace.toString(),
+            saved: doc.saved,
+            layerCount: doc.layers.length,
             artboardCount: doc.artboards.length,
             artboards: []
         },
@@ -369,6 +371,33 @@ REDO = """
     }
 })()
 """
+
+
+HISTORY_MULTI = Template("""
+(function() {
+    var count = ${count};
+    var action = "${action_name}";
+    var succeeded = 0;
+    var failed = 0;
+    
+    for (var i = 0; i < count; i++) {
+        try {
+            app.${action_method}();
+            succeeded++;
+        } catch (e) {
+            failed++;
+            break;  // Stop if nothing more to undo/redo
+        }
+    }
+    
+    return JSON.stringify({
+        success: succeeded > 0,
+        message: action + " " + succeeded + "/" + count + " actions",
+        succeeded: succeeded,
+        failed: failed
+    });
+})()
+""")
 
 
 # ==================== Linked Items ====================

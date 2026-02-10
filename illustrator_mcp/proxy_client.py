@@ -272,7 +272,7 @@ async def execute_script_with_context(
 async def execute_op_batch_chunked(
     ops: List[Dict[str, Any]],
     options: Optional[Dict[str, Any]] = None,
-    config: Optional[ChunkConfig] = None,
+    chunk_config: Optional[ChunkConfig] = None,
     timeout: Optional[float] = None
 ) -> ExecutionResponse:
     """
@@ -284,18 +284,18 @@ async def execute_op_batch_chunked(
     Args:
         ops: List of SOC operations
         options: executeOpBatch options (strict, trace, rollback, etc.)
-        config: Chunking configuration
+        chunk_config: Chunking configuration
         timeout: Per-chunk execution timeout
         
     Returns:
         Merged ExecutionResponse with aggregated stats
     """
-    config = config or ChunkConfig()
+    chunk_config = chunk_config or ChunkConfig()
     options = options or {}
-    timeout = timeout or config.timeout if hasattr(config, 'timeout') else 60.0
+    timeout = timeout or config.timeout
     
     # If chunking not needed, execute directly
-    if not should_chunk(ops, config):
+    if not should_chunk(ops, chunk_config):
         script = f"executeOpBatch({json.dumps(ops)}, {json.dumps(options)})"
         return await execute_script_with_context(
             script=script,
@@ -305,15 +305,15 @@ async def execute_op_batch_chunked(
         )
     
     # Execute in chunks
-    chunk_count = estimate_chunk_count(ops, config)
+    chunk_count = estimate_chunk_count(ops, chunk_config)
     logger.info(f"Chunking {len(ops)} ops into {chunk_count} chunks")
     
     results = []
     created_ids = []
     
-    for i, chunk in enumerate(chunk_ops(ops, config)):
+    for i, chunk in enumerate(chunk_ops(ops, chunk_config)):
         # Add summaryOnly to reduce response size
-        chunk_options = {**options, "summaryOnly": config.use_summary_only}
+        chunk_options = {**options, "summaryOnly": chunk_config.use_summary_only}
         
         script = f"executeOpBatch({json.dumps(chunk)}, {json.dumps(chunk_options)})"
         trace_id = f"chunk_{i+1}_{chunk_count}"
@@ -328,7 +328,7 @@ async def execute_op_batch_chunked(
         
         if response.get("error"):
             # Chunk failed - return error or continue based on strict mode
-            if config.strict:
+            if chunk_config.strict:
                 return {
                     "ok": False,
                     "error": f"Chunk {i+1}/{chunk_count} failed: {response['error']}",
@@ -345,7 +345,7 @@ async def execute_op_batch_chunked(
             created_ids.extend(result.get("createdIds", []))
         
         # Stop on first failure in strict mode
-        if config.strict and isinstance(result, dict) and not result.get("ok", True):
+        if chunk_config.strict and isinstance(result, dict) and not result.get("ok", True):
             return merge_chunk_results(results, created_ids)
     
     return merge_chunk_results(results, created_ids)
@@ -436,9 +436,9 @@ def format_response(response: dict[str, Any], context: str = "") -> str:
             error_msg = result.get('error', 'Operation failed')
             return format_error_response(error_msg, context)
 
-    # Check for error patterns in string results
-    if isinstance(result, str):
-        # Detect common error patterns in result strings
+    # Check for error patterns in string results (skip JSON payloads)
+    if isinstance(result, str) and not result.lstrip().startswith(("{", "[")):
+        # Detect common error patterns in plain-text result strings
         error_prefixes = ("Error:", "error:", "ERROR:", "ReferenceError:", "TypeError:", "SyntaxError:")
         if result.startswith(error_prefixes) or classify_error(result) is not None:
             return format_error_response(result, context)
@@ -543,8 +543,8 @@ def format_envelope(
                 "result": None
             })
 
-    # Check for error patterns in string results
-    if isinstance(result, str):
+    # Check for error patterns in string results (skip JSON payloads)
+    if isinstance(result, str) and not result.lstrip().startswith(("{", "[")):
         error_prefixes = ("Error:", "error:", "ERROR:", "ReferenceError:", "TypeError:", "SyntaxError:")
         if result.startswith(error_prefixes) or classify_error(result) is not None:
             structured = create_structured_error(result, context)

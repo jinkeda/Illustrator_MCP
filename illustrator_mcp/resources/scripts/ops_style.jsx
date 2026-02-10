@@ -103,12 +103,15 @@ registerOpHandler("style_set_opacity", function (params, targets, ctx) {
         return { ok: true, data: { modified: 0 } };
     }
 
-    var opacity = params.opacity !== undefined ? params.opacity : 1;
+    var opacity = params.opacity !== undefined ? params.opacity : 100;
+    // Clamp to Illustrator's valid range (0-100)
+    if (opacity < 0) opacity = 0;
+    if (opacity > 100) opacity = 100;
     var modified = 0;
 
     for (var i = 0; i < targets.length; i++) {
         try {
-            targets[i].opacity = opacity * 100;
+            targets[i].opacity = opacity;
             modified++;
         } catch (e) { }
     }

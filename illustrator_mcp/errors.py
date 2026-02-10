@@ -258,7 +258,7 @@ ERROR_PATTERNS = [
 
     # Script errors
     (r"SyntaxError|syntax error|Unexpected token", ErrorCode.S_SYNTAX_ERROR),
-    (r"ReferenceError|is not defined|undefined", ErrorCode.S_REFERENCE_ERROR),
+    (r"ReferenceError|is not defined|is undefined", ErrorCode.S_REFERENCE_ERROR),
     (r"TypeError|is not a function|cannot read property", ErrorCode.S_TYPE_ERROR),
     (r"RangeError|Invalid array length|out of range", ErrorCode.S_RANGE_ERROR),
 

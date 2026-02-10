@@ -103,7 +103,7 @@ registerOpHandler("element_create", function (params, targets, ctx) {
         case "text":
             var contents = params.contents || params.text || "";
             var fontSize = params.fontSize || 12;
-            if (width && height && (params.width || params.w) && (params.height || params.h)) {
+            if (params.width != null && params.height != null) {
                 // Area text: create container rect, then use areaText()
                 var container = targetLayer.pathItems.rectangle(aiTop, aiLeft, width, height);
                 container.filled = false;

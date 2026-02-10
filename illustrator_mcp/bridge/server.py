@@ -113,6 +113,9 @@ class WebSocketServer:
         """Send message to connected client."""
         if not self.client:
             raise ConnectionError("No client connected")
+        if not self.is_connected():
+            self.client = None
+            raise ConnectionError("Client connection is closed")
         await self.client.send(message)
 
     def stop(self):
@@ -130,6 +133,6 @@ class WebSocketServer:
                 return self.client.open
             if hasattr(self.client, 'closed'):
                 return not self.client.closed
-            return True
+            return False  # Safe default: assume disconnected if unknown
         except Exception:
             return False

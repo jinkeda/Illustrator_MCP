@@ -49,7 +49,7 @@ class SaveDocumentInput(ToolInputBase):
 
 class ExportDocumentInput(ToolInputBase):
     """Input for exporting a document."""
-    file_path: str = Field(..., description="Export path with extension", min_length=1)
+    file_path: str = Field(..., description="Full output path with extension (e.g. C:/output/figure.png)", min_length=1)
     format: ExportFormat = Field(default=ExportFormat.PNG, description="Export format")
     scale: float = Field(default=1.0, description="Scale factor", ge=0.1, le=10.0)
     artboard_only: bool = Field(default=False, description="Clip export to artboard bounds")
@@ -392,18 +392,7 @@ async def illustrator_export_document(params: ExportDocumentInput) -> Union[str,
     return envelope
 
 
-@mcp.tool(
-    name="illustrator_get_document_info",
-    annotations={"title": "Get Document Info", "readOnlyHint": True, "destructiveHint": False}
-)
-async def illustrator_get_document_info() -> str:
-    """Get information about the active document."""
-    return await execute_jsx_tool(
-        script=templates.GET_DOCUMENT_INFO,
-        command_type="get_document_info",
-        tool_name="illustrator_get_document_info",
-        params={}
-    )
+# NOTE: get_document_info functionality is now in context.py as illustrator_get_document
 
 
 @mcp.tool(
@@ -452,39 +441,46 @@ async def illustrator_import_image(params: ImportImageInput) -> str:
     )
 
 
-# Undo/Redo tools
-@mcp.tool(
-    name="illustrator_undo",
-    annotations={"title": "Undo", "readOnlyHint": False, "destructiveHint": False}
-)
-async def illustrator_undo() -> str:
-    """Undo the last action in Illustrator.
-    
-    Use this to revert mistakes or unwanted changes.
-    Multiple calls will undo multiple actions.
-    """
-    return await execute_jsx_tool(
-        script=templates.UNDO,
-        command_type="undo",
-        tool_name="illustrator_undo",
-        params={}
-    )
+# Combined Undo/Redo tool
+class HistoryInput(ToolInputBase):
+    """Input for undo/redo operations."""
+    action: str = Field(default="undo", description="Action: 'undo' or 'redo'")
+    count: int = Field(default=1, description="Number of times to perform action", ge=1, le=100)
 
 
 @mcp.tool(
-    name="illustrator_redo",
-    annotations={"title": "Redo", "readOnlyHint": False, "destructiveHint": False}
+    name="illustrator_history",
+    annotations={"title": "Undo/Redo History", "readOnlyHint": False, "destructiveHint": False}
 )
-async def illustrator_redo() -> str:
-    """Redo the last undone action.
+async def illustrator_history(params: HistoryInput) -> str:
+    """Undo or redo actions in Illustrator.
     
-    Use this to restore an action after undo.
+    Args:
+        action: 'undo' to revert changes, 'redo' to restore undone changes
+        count: Number of times to perform the action (default 1)
+    
+    Use this to revert mistakes or restore undone changes.
     """
+    if params.action not in ("undo", "redo"):
+        return json.dumps({"ok": False, "error": "Invalid action. Use 'undo' or 'redo'"})
+    
+    template = templates.UNDO if params.action == "undo" else templates.REDO
+    
+    # For count > 1, we need to modify the script to loop
+    if params.count > 1:
+        script = templates.HISTORY_MULTI.substitute(
+            action_method="undo" if params.action == "undo" else "redo",
+            count=params.count,
+            action_name=params.action
+        )
+    else:
+        script = template
+    
     return await execute_jsx_tool(
-        script=templates.REDO,
-        command_type="redo",
-        tool_name="illustrator_redo",
-        params={}
+        script=script,
+        command_type=params.action,
+        tool_name="illustrator_history",
+        params={"action": params.action, "count": params.count}
     )
 
 

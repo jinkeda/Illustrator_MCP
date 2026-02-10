@@ -29,7 +29,7 @@ class ConnectionState(Enum):
     """WebSocket connection state."""
     DISCONNECTED = auto()
     CONNECTING = auto()
-    CONNECTED = auto()
+    LISTENING = auto()   # Server is listening, but no client connected yet
     ERROR = auto()
 
 
@@ -125,7 +125,7 @@ class WebSocketBridge:
             self.state = ConnectionState.ERROR
         else:
             logger.info("WebSocket bridge thread started successfully")
-            self.state = ConnectionState.CONNECTED
+            self.state = ConnectionState.LISTENING
             self._ready.set()
 
     def wait_until_ready(self, timeout: float = 10.0) -> bool:
