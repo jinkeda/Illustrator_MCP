@@ -126,7 +126,8 @@
             "file": "op_schemas.jsx",
             "version": "1.0.0",
             "dependencies": [
-                "task_executor"
+                "task_executor",
+                "field_eval"
             ],
             "exports": [
                 "OP_PARAM_SCHEMAS",
@@ -152,7 +153,8 @@
             "file": "ops_journal.jsx",
             "version": "1.0.0",
             "dependencies": [
-                "snapshot"
+                "snapshot",
+                "ops_core"
             ],
             "exports": [
                 "journalAppend",
@@ -209,7 +211,9 @@
             "dependencies": [
                 "ops_core",
                 "task_executor",
-                "geo_ir"
+                "geo_ir",
+                "session",
+                "generative"
             ],
             "exports": [],
             "description": "Element CRUD operations (create, modify, delete)"
@@ -329,7 +333,9 @@
         "session": {
             "file": "session.jsx",
             "version": "1.0.0",
-            "dependencies": [],
+            "dependencies": [
+                "geo_ir"
+            ],
             "exports": [
                 "stashPut",
                 "stashGet",
