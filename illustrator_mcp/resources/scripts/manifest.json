@@ -51,6 +51,21 @@
             ],
             "description": "Grid creation, layout arrangement, distribution, and alignment helpers"
         },
+        "assets": {
+            "file": "assets.jsx",
+            "version": "1.0.0",
+            "dependencies": [
+                "geometry"
+            ],
+            "exports": [
+                "analyzeAssets",
+                "getAssetInfo",
+                "collectAllPlaced",
+                "collectPlacedFromLayer",
+                "isPlacedOrRaster"
+            ],
+            "description": "Asset analysis for placed and raster items: metadata, bounds, aspect ratio"
+        },
         "task_executor": {
             "file": "task_executor.jsx",
             "version": "2.3.1",

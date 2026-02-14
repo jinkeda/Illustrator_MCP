@@ -22,9 +22,9 @@ def mock_execute():
 
 @pytest.fixture
 def mock_format():
-    """Mock the format_response function."""
-    with patch('illustrator_mcp.tools.execute.format_response') as mock:
-        mock.side_effect = lambda x: str(x.get('result', x))
+    """Mock the format_envelope function."""
+    with patch('illustrator_mcp.tools.execute.format_envelope') as mock:
+        mock.side_effect = lambda response=None, **kwargs: str(response.get('result', response)) if isinstance(response, dict) else str(response)
         yield mock
 
 

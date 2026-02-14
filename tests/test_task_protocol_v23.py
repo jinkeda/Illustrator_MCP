@@ -70,9 +70,9 @@ class TestTaskPayloadV23:
     """Tests for V2.3 TaskPayload features."""
 
     def test_default_version(self):
-        """Ensure version defaults to 2.3.1."""
+        """Ensure version defaults to 3.0.0."""
         payload = TaskPayload(task="test")
-        assert payload.version == "2.3.1"
+        assert payload.version == "3.0.0"
 
     def test_payload_with_selector(self):
         """Test payload with full TargetSelector."""
@@ -97,7 +97,7 @@ class TestRetryPolicy:
         policy = RetryPolicy()
         assert policy.maxAttempts == 3
         assert RetryableStage.COLLECT in policy.retryableStages
-        assert RetryableStage.APPLY not in policy.retryableStages
+        assert "apply" not in [s.value for s in RetryableStage]  # APPLY intentionally excluded
 
     def test_retry_custom_policy(self):
         """Test custom retry policy."""

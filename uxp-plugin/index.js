@@ -9,6 +9,13 @@ let ws = null;
 let reconnectInterval = null;
 const PROXY_WS_URL = 'ws://localhost:8081';
 
+// Heartbeat + busy tracking
+const HEARTBEAT_MS = 5000;
+let heartbeatTimer = null;
+let isExecuting = false;
+let activeRequestId = null;
+let connectedAt = 0;
+
 // UI Elements
 let connectionStatus = null;
 let logArea = null;
@@ -82,15 +89,43 @@ function connect() {
         ws.onopen = () => {
             log('Connected to proxy', 'success');
             updateStatus(true);
+            connectedAt = Date.now();
             if (reconnectInterval) {
                 clearInterval(reconnectInterval);
                 reconnectInterval = null;
             }
+            // Start heartbeat
+            heartbeatTimer = setInterval(() => {
+                if (ws && ws.readyState === WebSocket.OPEN) {
+                    ws.send(JSON.stringify({
+                        type: 'heartbeat',
+                        busy: isExecuting,
+                        activeRequestId: activeRequestId,
+                        uptimeMs: Date.now() - connectedAt,
+                    }));
+                }
+            }, HEARTBEAT_MS);
         };
 
         ws.onmessage = async (event) => {
             try {
                 const message = JSON.parse(event.data);
+
+                // Busy guard: reject if already executing
+                if (isExecuting) {
+                    if (ws && ws.readyState === WebSocket.OPEN) {
+                        ws.send(JSON.stringify({
+                            id: message.id,
+                            type: 'complete',
+                            error: `BUSY: Script ${activeRequestId} still executing`,
+                        }));
+                        log(`Rejected ${message.id} (busy)`, 'error');
+                    }
+                    return;
+                }
+
+                isExecuting = true;
+                activeRequestId = message.id;
                 log(`Executing script (id: ${message.id})...`);
 
                 // Execute the script in Illustrator
@@ -104,14 +139,20 @@ function connect() {
                     log(`Error: ${e.message}`, 'error');
                 }
 
+                isExecuting = false;
+                activeRequestId = null;
+
                 // Send response
                 const response = {
                     id: message.id,
+                    type: 'complete',
                     result: result
                 };
                 ws.send(JSON.stringify(response));
 
             } catch (error) {
+                isExecuting = false;
+                activeRequestId = null;
                 log(`Error: ${error.message}`, 'error');
             }
         };
@@ -119,6 +160,13 @@ function connect() {
         ws.onclose = () => {
             log('Disconnected');
             updateStatus(false);
+            // Cleanup heartbeat + busy state
+            if (heartbeatTimer) {
+                clearInterval(heartbeatTimer);
+                heartbeatTimer = null;
+            }
+            isExecuting = false;
+            activeRequestId = null;
             if (!reconnectInterval) {
                 reconnectInterval = setInterval(() => {
                     if (!ws || ws.readyState !== WebSocket.OPEN) {

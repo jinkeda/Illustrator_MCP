@@ -274,5 +274,7 @@ async def illustrator_get_connection_info() -> dict:
     """
     from illustrator_mcp.runtime import get_runtime
     bridge = get_runtime().get_bridge()
-    return bridge.get_connection_info()
+    info = bridge.get_connection_info()
+    info["panel_health"] = bridge.get_panel_health()
+    return info
 

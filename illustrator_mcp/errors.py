@@ -64,6 +64,7 @@ class ErrorCode(str, Enum):
     R_ELEMENT_NOT_FOUND = "R008"
     R_UNKNOWN = "R009"           # Catch-all for unexpected runtime errors
     R_INJECTION_FAILED = "R010"  # Library injection failed (catch-all)
+    R_BUSY = "R011"              # Panel busy — previous script still executing
 
     # === SCRIPT / SYSTEM (S) ===
     # Covers both ExtendScript engine failures (syntax, reference, type errors)
@@ -188,6 +189,15 @@ ERROR_SUGGESTIONS: Dict[str, Dict[str, Any]] = {
         "suggestions": [
             "An unexpected error occurred during library injection",
             "Check server logs for details",
+        ],
+    },
+    ErrorCode.R_BUSY.value: {
+        "message": "Panel busy — previous script still executing",
+        "recoverable": True,
+        "suggestions": [
+            "Wait for the current operation to finish before sending another",
+            "Increase timeout if the operation is expected to take long",
+            "Check panel health via illustrator_get_connection_info",
         ],
     },
 

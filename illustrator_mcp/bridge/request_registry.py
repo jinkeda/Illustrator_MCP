@@ -151,6 +151,13 @@ class RequestRegistry:
         Returns:
             True if completed, False if not found.
         """
+        # Coerce request_id to int for safety — JSON may return str
+        try:
+            request_id = int(request_id)
+        except (TypeError, ValueError):
+            logger.warning(f"Non-integer request_id in streaming: {request_id!r}")
+            return False
+
         with self._lock:
             streaming = self._streaming.get(request_id)
             if streaming:
@@ -214,6 +221,13 @@ class RequestRegistry:
         Validates response shape: must contain 'result' or 'error' key.
         Malformed responses are wrapped as C_PROTOCOL error.
         """
+        # Coerce request_id to int for safety — JSON may return str
+        try:
+            request_id = int(request_id)
+        except (TypeError, ValueError):
+            logger.warning(f"Non-integer request_id: {request_id!r}")
+            return False
+
         with self._lock:
             pending = self._pending.get(request_id)
             if not pending:

@@ -181,21 +181,6 @@ class ItemRef(BaseModel):
     itemName: Optional[str] = Field(None, description="item.name value")
 
 
-# Legacy ItemRef for backward compatibility
-class ItemRefLegacy(BaseModel):
-    """
-    Legacy item reference (for backward compatibility).
-    
-    .. deprecated:: 2.3.0
-        Use :class:`ItemRef` with locator/identity/tags structure instead.
-        Will be removed in v3.0.
-    """
-    layerPath: str = Field(..., description="Layer path: 'Layer 1/Group A'")
-    indexPath: List[int] = Field(default_factory=list, description="Index path: [0, 2, 5]")
-    itemId: Optional[str] = Field(None, description="Unique ID written into note")
-    itemName: Optional[str] = Field(None, description="item.name")
-    itemType: str = Field(..., description="PathItem, TextFrame, etc.")
-
 
 # ==================== Retry Semantics ====================
 
@@ -340,7 +325,7 @@ class TaskReport(BaseModel):
 class TaskPayload(BaseModel):
     """Standard task payload."""
     task: str = Field(..., description="Task type: draw_shapes, apply_styles, query_items")
-    version: str = Field(default="2.3.1", description="Protocol version")
+    version: str = Field(default="3.0.0", description="Protocol version")
     targets: Optional[Union[TargetSelector, Dict[str, Any]]] = Field(
         default=None,
         description="Target selector (structured or legacy dict)"

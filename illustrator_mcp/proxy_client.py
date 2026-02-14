@@ -149,11 +149,31 @@ async def _execute_via_bridge(
         
     except TimeoutError:
         # ===== TIER 2: Script Execution Timeout =====
-        return {
-            "error": format_code(ErrorCode.R_TIMEOUT,
+        # Use panel health to provide differentiated timeout messages
+        try:
+            health = bridge.get_panel_health()
+            if health.get("busy"):
+                detail = (
+                    f"Illustrator is still executing (busy flag active, "
+                    f"request {health.get('active_request_id')}). "
+                    f"Consider increasing timeout beyond {timeout}s."
+                )
+            elif health.get("stale"):
+                detail = (
+                    f"No heartbeat received — panel may be frozen or crashed. "
+                    f"Try reconnecting the CEP panel."
+                )
+            else:
+                detail = (
+                    f"Script timed out after {timeout}s despite panel being available. "
+                    f"Consider breaking into smaller operations."
+                )
+        except Exception:
+            detail = (
                 f"Script execution timed out after {timeout}s. "
-                "Consider breaking into smaller operations or increasing timeout.")
-        }
+                "Consider breaking into smaller operations or increasing timeout."
+            )
+        return {"error": format_code(ErrorCode.R_TIMEOUT, detail)}
     except ConnectionError as e:
         # ===== TIER 1: Connection Lost During Execution =====
         # C_DISCONNECTED covers: not connected, dropped, network reset
@@ -432,13 +452,19 @@ def _try_parse_json(value: Any) -> Any:
         return value
 
 
-def _unwrap_result(result: Any) -> Any:
+def _unwrap_result(result: Any, _depth: int = 0) -> Any:
     """
     Recursively unwrap nested success/result envelopes.
 
     Handles double-wrapped results like:
     {success: true, result: "{\"success\": true, \"result\": ...}"}
+
+    Has a depth guard (max 10) to prevent infinite recursion on
+    malformed responses with circular nesting.
     """
+    if _depth > 10:
+        return result
+
     if not isinstance(result, dict):
         return result
 
@@ -453,7 +479,7 @@ def _unwrap_result(result: Any) -> Any:
         inner = result["result"]
         # Parse if string, then recurse
         parsed = _try_parse_json(inner) if isinstance(inner, str) else inner
-        return _unwrap_result(parsed)
+        return _unwrap_result(parsed, _depth + 1)
 
     return result
 

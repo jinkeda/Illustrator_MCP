@@ -57,12 +57,22 @@ CREATE_DOCUMENT = Template("""
 
 OPEN_DOCUMENT = Template("""
 (function() {
-    var file = new File("${path}");
-    if (!file.exists) {
-        throw new Error("File not found: ${path}");
+    try {
+        var file = new File("${path}");
+        if (!file.exists) {
+            return JSON.stringify({
+                success: false,
+                error: "File not found: ${path}"
+            });
+        }
+        var doc = app.open(file);
+        return JSON.stringify({success: true, name: doc.name, path: "${path}"});
+    } catch (e) {
+        return JSON.stringify({
+            success: false,
+            error: e.message || String(e)
+        });
     }
-    var doc = app.open(file);
-    return JSON.stringify({success: true, name: doc.name, path: "${path}"});
 })()
 """)
 
@@ -435,17 +445,3 @@ UPDATE_LINKED_ITEMS = """
 """
 
 
-# ==================== Helper Functions ====================
-
-def render_template(template: Template, **kwargs) -> str:
-    """
-    Render a template with the given variables.
-    
-    Args:
-        template: A string.Template object
-        **kwargs: Variables to substitute
-        
-    Returns:
-        Rendered script string
-    """
-    return template.substitute(**kwargs)

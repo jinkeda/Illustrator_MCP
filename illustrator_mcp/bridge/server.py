@@ -3,6 +3,7 @@ WebSocket server for Illustrator CEP bridge.
 """
 
 import asyncio
+import threading
 import json
 import logging
 import websockets
@@ -26,10 +27,12 @@ class WebSocketServer:
         self.client: Optional[WebSocketServerProtocol] = None
         self.server = None
         self._shutdown_event: Optional[asyncio.Event] = None
+        self._start_error: Optional[Exception] = None
         
-    async def run(self, started_event: Optional[asyncio.Event] = None):
+    async def run(self, started_event: Optional[threading.Event] = None):
         """Run the WebSocket server."""
         self._shutdown_event = asyncio.Event()
+        self._start_error = None
         
         try:
             self.server = await websockets.serve(
@@ -65,11 +68,13 @@ class WebSocketServer:
                 logger.error(f"Port {self.port} is already in use!")
             else:
                 logger.error(f"WebSocket server OSError: {e}")
+            self._start_error = e
             if started_event:
                 started_event.set()
             raise
         except Exception as e:
             logger.error(f"WebSocket server error: {e}")
+            self._start_error = e
             if started_event:
                 started_event.set()
             raise

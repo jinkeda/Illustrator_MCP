@@ -14,8 +14,6 @@ from illustrator_mcp.utils.chunking import (
 # These are commonly imported via `from illustrator_mcp.utils import ...`
 from illustrator_mcp.utils_funcs import (
     escape_path_for_jsx,
-    validate_file_path,
-    escape_string_for_jsx
 )
 
 __all__ = [
@@ -27,6 +25,4 @@ __all__ = [
     "estimate_chunk_count",
     # Path/string utilities
     "escape_path_for_jsx",
-    "validate_file_path",
-    "escape_string_for_jsx"
 ]

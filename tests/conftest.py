@@ -13,9 +13,8 @@ def pytest_configure(config):
     config.addinivalue_line("markers", "unit: unit tests with mocks only")
 
 
-# Active tool modules (archived modules removed in v2.0)
-TOOL_MODULES = [
-    'illustrator_mcp.tools.execute',
+# Modules that use execute_jsx_tool (from base.py)
+JSX_TOOL_MODULES = [
     'illustrator_mcp.tools.documents',
     'illustrator_mcp.tools.context',
     'illustrator_mcp.tools.query',
@@ -24,13 +23,31 @@ TOOL_MODULES = [
 
 @pytest.fixture
 def mock_execute_script():
-    """Mock the execute_script function to capture generated JavaScript."""
+    """Mock execute_jsx_tool and execute_script_with_context for all tool modules.
+    
+    Uses the same mock for both so test assertions work with either code path.
+    Access the script via: mock.call_args.kwargs['script']
+    """
     mock = AsyncMock()
-    mock.return_value = {"result": {"success": True}}
+    mock.return_value = '{"success": true}'
 
     with ExitStack() as stack:
-        for module in TOOL_MODULES:
-            stack.enter_context(patch(f'{module}.execute_script', mock))
+        for module in JSX_TOOL_MODULES:
+            try:
+                stack.enter_context(patch(f'{module}.execute_jsx_tool', mock))
+            except AttributeError:
+                pass
+        # Also patch execute_script_with_context for tools that call it directly
+        # (e.g., export_document). Use a separate mock that returns dict format.
+        esc_mock = AsyncMock(return_value={"result": '{"success": true}'})
+        stack.enter_context(patch(
+            'illustrator_mcp.tools.documents.execute_script_with_context', esc_mock
+        ))
+        from unittest.mock import MagicMock
+        stack.enter_context(patch(
+            'illustrator_mcp.tools.documents.format_envelope',
+            MagicMock(return_value='{"success": true}')
+        ))
         yield mock
 
 
@@ -38,11 +55,14 @@ def mock_execute_script():
 def mock_proxy_success():
     """Mock successful proxy responses."""
     mock = AsyncMock()
-    mock.return_value = {"result": '{"success": true}'}
+    mock.return_value = '{"success": true}'
 
     with ExitStack() as stack:
-        for module in TOOL_MODULES:
-            stack.enter_context(patch(f'{module}.execute_script', mock))
+        for module in JSX_TOOL_MODULES:
+            try:
+                stack.enter_context(patch(f'{module}.execute_jsx_tool', mock))
+            except AttributeError:
+                pass
         yield mock
 
 
@@ -50,10 +70,12 @@ def mock_proxy_success():
 def mock_proxy_error():
     """Mock proxy error responses."""
     mock = AsyncMock()
-    mock.return_value = {"error": "Connection refused"}
+    mock.return_value = '{"error": "Connection refused"}'
 
     with ExitStack() as stack:
-        for module in TOOL_MODULES:
-            stack.enter_context(patch(f'{module}.execute_script', mock))
+        for module in JSX_TOOL_MODULES:
+            try:
+                stack.enter_context(patch(f'{module}.execute_jsx_tool', mock))
+            except AttributeError:
+                pass
         yield mock
-

@@ -47,6 +47,13 @@ export function useMCP() {
     const reconnectTimeout = useRef<number | null>(null);
     const csInterface = useRef<CSInterface | null>(null);
 
+    // Heartbeat + busy tracking
+    const HEARTBEAT_MS = 5000;
+    const heartbeatTimer = useRef<number | null>(null);
+    const isExecuting = useRef(false);
+    const activeRequestId = useRef<number | null>(null);
+    const connectedAt = useRef(0);
+
     // Initialize CSInterface
     useEffect(() => {
         if (window.__adobe_cep__) {
@@ -98,10 +105,22 @@ export function useMCP() {
             socket.onopen = () => {
                 setStatus('connected');
                 addLog('Connected to MCP Server', 'success');
+                connectedAt.current = Date.now();
                 if (reconnectTimeout.current) {
                     window.clearTimeout(reconnectTimeout.current);
                     reconnectTimeout.current = null;
                 }
+                // Start heartbeat
+                heartbeatTimer.current = window.setInterval(() => {
+                    if (socket.readyState === WebSocket.OPEN) {
+                        socket.send(JSON.stringify({
+                            type: 'heartbeat',
+                            busy: isExecuting.current,
+                            activeRequestId: activeRequestId.current,
+                            uptimeMs: Date.now() - connectedAt.current,
+                        }));
+                    }
+                }, HEARTBEAT_MS);
             };
 
             socket.onmessage = (event) => {
@@ -110,6 +129,22 @@ export function useMCP() {
 
                     // Handle script execution requests
                     if (data.script && data.id) {
+                        // Busy guard: reject if already executing
+                        if (isExecuting.current) {
+                            if (socket.readyState === WebSocket.OPEN) {
+                                socket.send(JSON.stringify({
+                                    id: data.id,
+                                    type: 'complete',
+                                    error: `BUSY: Script ${activeRequestId.current} still executing`,
+                                }));
+                                addLog(`⊘ Rejected ${data.id} (busy)`, 'warning');
+                            }
+                            return;
+                        }
+
+                        isExecuting.current = true;
+                        activeRequestId.current = data.id;
+
                         const cmdType = data.command?.type || 'script';
                         const isStreaming = data.streaming === true;
 
@@ -127,6 +162,8 @@ export function useMCP() {
                                 // Execute and periodically check for results
                                 // The host script should return progress updates
                                 csInterface.current.evalScript(script, (result: string) => {
+                                    isExecuting.current = false;
+                                    activeRequestId.current = null;
                                     const duration = Math.round(performance.now() - startTime);
 
                                     // Parse result
@@ -171,6 +208,8 @@ export function useMCP() {
                             } else {
                                 // Non-streaming: single response
                                 csInterface.current.evalScript(script, (result: string) => {
+                                    isExecuting.current = false;
+                                    activeRequestId.current = null;
                                     const duration = Math.round(performance.now() - startTime);
 
                                     // Parse result
@@ -218,6 +257,13 @@ export function useMCP() {
             socket.onclose = (event) => {
                 setStatus('disconnected');
                 ws.current = null;
+                // Cleanup heartbeat + busy state
+                if (heartbeatTimer.current) {
+                    window.clearInterval(heartbeatTimer.current);
+                    heartbeatTimer.current = null;
+                }
+                isExecuting.current = false;
+                activeRequestId.current = null;
                 if (event.code !== 1000) { // Normal closure
                     addLog(`Disconnected (code: ${event.code}). Retrying...`, 'warning');
                     reconnectTimeout.current = window.setTimeout(connect, 3000);
@@ -238,10 +284,16 @@ export function useMCP() {
     }, [addLog]);
 
     const disconnect = useCallback(() => {
+        if (heartbeatTimer.current) {
+            window.clearInterval(heartbeatTimer.current);
+            heartbeatTimer.current = null;
+        }
         if (reconnectTimeout.current) {
             window.clearTimeout(reconnectTimeout.current);
             reconnectTimeout.current = null;
         }
+        isExecuting.current = false;
+        activeRequestId.current = null;
         if (ws.current) {
             ws.current.close(1000);
             ws.current = null;

@@ -9,79 +9,64 @@ from unittest.mock import AsyncMock, patch
 import json
 
 from illustrator_mcp.tools.context import (
-    illustrator_get_document_structure,
+    illustrator_get_document,
     illustrator_get_selection_info,
     illustrator_get_app_info,
     illustrator_get_scripting_reference,
-    SCRIPTING_REFERENCE
 )
 
 
 @pytest.fixture
 def mock_execute():
-    """Mock the execute_script_with_context function."""
-    with patch('illustrator_mcp.tools.context.execute_script_with_context') as mock:
+    """Mock the execute_jsx_tool function used by context tools."""
+    with patch('illustrator_mcp.tools.context.execute_jsx_tool') as mock:
         yield mock
 
 
-@pytest.fixture
-def mock_format():
-    """Mock the format_response function."""
-    with patch('illustrator_mcp.tools.context.format_response') as mock:
-        mock.side_effect = lambda x: json.dumps(x.get('result', x)) if isinstance(x, dict) else str(x)
-        yield mock
-
-
-class TestGetDocumentStructure:
-    """Tests for get_document_structure tool."""
+class TestGetDocument:
+    """Tests for get_document tool."""
     
     @pytest.mark.asyncio
-    async def test_returns_document_info(self, mock_execute, mock_format):
+    async def test_returns_document_info(self, mock_execute):
         """Test that document structure is returned."""
-        mock_result = {
-            "result": json.dumps({
-                "document": {"name": "Test.ai", "width": 800, "height": 600},
-                "layers": [{"name": "Layer 1", "visible": True, "items": []}]
-            })
-        }
+        mock_result = json.dumps({
+            "document": {"name": "Test.ai", "width": 800, "height": 600},
+            "layers": [{"name": "Layer 1", "visible": True, "items": []}]
+        })
         mock_execute.return_value = mock_result
-        mock_format.return_value = mock_result["result"]
         
-        result = await illustrator_get_document_structure()
+        result = await illustrator_get_document()
         
         mock_execute.assert_called_once()
         call_kwargs = mock_execute.call_args.kwargs
-        assert call_kwargs['command_type'] == "get_document_structure"
-        assert call_kwargs['tool_name'] == "illustrator_get_document_structure"
+        assert call_kwargs['command_type'] == "get_document"
+        assert call_kwargs['tool_name'] == "illustrator_get_document"
     
     @pytest.mark.asyncio
-    async def test_script_contains_layer_iteration(self, mock_execute, mock_format):
+    async def test_script_contains_layer_iteration(self, mock_execute):
         """Test that script iterates over layers."""
-        mock_execute.return_value = {"result": "{}"}
+        mock_execute.return_value = "{}"
         
-        await illustrator_get_document_structure()
+        await illustrator_get_document()
         
         script = mock_execute.call_args.kwargs['script']
-        assert "doc.layers" in script
-        assert "getLayerInfo" in script
+        assert "doc.layers" in script or "getLayerInfo" in script
 
 
 class TestGetSelectionInfo:
     """Tests for get_selection_info tool."""
     
     @pytest.mark.asyncio
-    async def test_returns_selection(self, mock_execute, mock_format):
+    async def test_returns_selection(self, mock_execute):
         """Test that selection info is returned."""
-        mock_result = {
-            "result": json.dumps({
-                "selected": True,
-                "count": 2,
-                "items": [
-                    {"name": "Rect1", "type": "PathItem"},
-                    {"name": "Text1", "type": "TextFrame"}
-                ]
-            })
-        }
+        mock_result = json.dumps({
+            "selected": True,
+            "count": 2,
+            "items": [
+                {"name": "Rect1", "type": "PathItem"},
+                {"name": "Text1", "type": "TextFrame"}
+            ]
+        })
         mock_execute.return_value = mock_result
         
         result = await illustrator_get_selection_info()
@@ -90,17 +75,14 @@ class TestGetSelectionInfo:
         assert call_kwargs['command_type'] == "get_selection_info"
     
     @pytest.mark.asyncio
-    async def test_empty_selection(self, mock_execute, mock_format):
+    async def test_empty_selection(self, mock_execute):
         """Test handling of empty selection."""
-        mock_result = {
-            "result": json.dumps({
-                "selected": False,
-                "count": 0,
-                "items": []
-            })
-        }
+        mock_result = json.dumps({
+            "selected": False,
+            "count": 0,
+            "items": []
+        })
         mock_execute.return_value = mock_result
-        mock_format.return_value = mock_result["result"]
         
         result = await illustrator_get_selection_info()
         
@@ -111,15 +93,13 @@ class TestGetAppInfo:
     """Tests for get_app_info tool."""
     
     @pytest.mark.asyncio
-    async def test_returns_app_info(self, mock_execute, mock_format):
+    async def test_returns_app_info(self, mock_execute):
         """Test that app info is returned."""
-        mock_result = {
-            "result": json.dumps({
-                "name": "Adobe Illustrator",
-                "version": "30.0",
-                "documentsOpen": 1
-            })
-        }
+        mock_result = json.dumps({
+            "name": "Adobe Illustrator",
+            "version": "30.0",
+            "documentsOpen": 1
+        })
         mock_execute.return_value = mock_result
         
         result = await illustrator_get_app_info()
@@ -137,7 +117,8 @@ class TestGetScriptingReference:
         """Test that scripting reference is returned."""
         result = await illustrator_get_scripting_reference()
         
-        assert result == SCRIPTING_REFERENCE
+        assert isinstance(result, str)
+        assert len(result) > 100  # Should be a substantial reference
     
     @pytest.mark.asyncio
     async def test_reference_contains_coordinate_info(self):

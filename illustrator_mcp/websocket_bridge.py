@@ -10,6 +10,7 @@ import asyncio
 import json
 import logging
 import threading
+import time
 from enum import Enum, auto
 from typing import Any, Optional, Dict
 
@@ -67,6 +68,11 @@ class WebSocketBridge:
             on_disconnect=self._handle_disconnect
         )
 
+        # Heartbeat tracking
+        self._last_heartbeat: float = 0.0
+        self._panel_busy: bool = False
+        self._panel_active_request: Optional[int] = None
+
     def _transition(self, new_state: ConnectionState, reason: str = "") -> bool:
         """Thread-safe state transition with validation and side-effect dispatch.
 
@@ -111,6 +117,10 @@ class WebSocketBridge:
         """
         logger.warning("CEP panel disconnected — cancelling pending requests")
         self.registry.cancel_all("CEP panel disconnected")
+        # Reset heartbeat state on disconnect
+        self._last_heartbeat = 0.0
+        self._panel_busy = False
+        self._panel_active_request = None
         # State stays LISTENING (server running, no client) — no transition needed
         # since we're already LISTENING
 
@@ -124,8 +134,14 @@ class WebSocketBridge:
             
         try:
             data = json.loads(message)
-            request_id = data.get("id")
             msg_type = data.get("type", "complete")
+
+            # Heartbeat messages (no request_id needed)
+            if msg_type == "heartbeat":
+                self._handle_heartbeat(data)
+                return
+
+            request_id = data.get("id")
 
             if request_id:
                 # Check if this is a streaming request
@@ -183,6 +199,10 @@ class WebSocketBridge:
         if not self._started.wait(timeout=BRIDGE_STARTUP_TIMEOUT):
             logger.error(f"WebSocket bridge FAILED to start within {BRIDGE_STARTUP_TIMEOUT} seconds!")
             self._transition(ConnectionState.ERROR, "Startup timeout")
+        elif self.server and self.server._start_error:
+            err = self.server._start_error
+            logger.error(f"WebSocket bridge failed to start: {err}")
+            self._transition(ConnectionState.ERROR, f"Server error: {err}")
         else:
             logger.info("WebSocket bridge thread started successfully")
             self._transition(ConnectionState.LISTENING, "Server started")
@@ -240,6 +260,44 @@ class WebSocketBridge:
             "state": self.state.value if hasattr(self.state, 'value') else str(self.state),
             "is_running": self.is_running(),
             "client_info": client_info
+        }
+
+    # ==================== Heartbeat ====================
+
+    def _handle_heartbeat(self, data: dict) -> None:
+        """Update panel health tracking from a heartbeat message."""
+        self._last_heartbeat = time.time()
+        self._panel_busy = data.get("busy", False)
+        self._panel_active_request = data.get("activeRequestId")
+        logger.debug(
+            f"Heartbeat: busy={self._panel_busy}, "
+            f"active={self._panel_active_request}, "
+            f"uptime={data.get('uptimeMs', 0)}ms"
+        )
+
+    def get_panel_health(self) -> dict:
+        """Get panel health status based on heartbeats.
+
+        Returns:
+            Dictionary with:
+            - last_heartbeat_ago_ms: ms since last heartbeat (None if never)
+            - busy: whether panel reported busy
+            - active_request_id: ID of script being executed (if busy)
+            - stale: True if no heartbeat in 15s (3× interval)
+        """
+        if self._last_heartbeat == 0.0:
+            return {
+                "last_heartbeat_ago_ms": None,
+                "busy": False,
+                "active_request_id": None,
+                "stale": True,
+            }
+        ago_ms = (time.time() - self._last_heartbeat) * 1000
+        return {
+            "last_heartbeat_ago_ms": round(ago_ms),
+            "busy": self._panel_busy,
+            "active_request_id": self._panel_active_request,
+            "stale": ago_ms > 15000,
         }
 
     async def execute_script_async(
@@ -372,11 +430,12 @@ class WebSocketBridge:
             yield {"error": f"STREAMING_ERROR{cmd_ctx}: {str(e)}", "type": "error"}
 
 
-def get_bridge() -> WebSocketBridge:
-    """Get the global WebSocket bridge instance, starting it if needed."""
+# NOTE: Use get_runtime().get_bridge() directly.
+# Standalone get_bridge() was removed to eliminate duplicate accessor paths.
+
+
+def get_server():
+    """Get the WebSocket server from the bridge."""
     from illustrator_mcp.runtime import get_runtime
-    return get_runtime().get_bridge()
-
-
-
-
+    bridge = get_runtime().get_bridge()
+    return bridge.server

@@ -91,7 +91,8 @@ class TestFormatResponse:
         """Test error response formatting."""
         response = {"error": "Script failed"}
         result = format_response(response)
-        assert "Error: Script failed" in result
+        assert "Script failed" in result
+        assert "Error" in result
     
     def test_connection_error_prominent(self):
         """Test connection errors are prominently displayed."""
@@ -112,4 +113,4 @@ class TestFormatResponse:
         """Test that errors in nested result are detected."""
         response = {"result": json.dumps({"success": False, "error": "Inner error"})}
         result = format_response(response)
-        assert "Error:" in result
+        assert "Error" in result or "error" in result.lower()

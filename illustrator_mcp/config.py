@@ -28,6 +28,9 @@ class Config(BaseSettings):
     # Timeout settings
     timeout: float = Field(default=30.0, ge=1.0, le=300.0, description="Operation timeout in seconds")
     
+    # Logging
+    log_level: str = Field(default="INFO", description="Log level: DEBUG, INFO, WARNING, ERROR")
+    
     @property
     def ws_url(self) -> str:
         """WebSocket URL for CEP panel connection."""
@@ -36,3 +39,9 @@ class Config(BaseSettings):
 
 # Global config instance
 config = Config()
+
+# Apply log level from config
+import logging as _logging
+_logging.getLogger("illustrator_mcp").setLevel(
+    getattr(_logging, config.log_level.upper(), _logging.INFO)
+)

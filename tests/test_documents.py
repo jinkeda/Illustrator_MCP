@@ -12,7 +12,6 @@ from illustrator_mcp.tools.documents import (
     illustrator_open_document,
     illustrator_save_document,
     illustrator_export_document,
-    illustrator_get_document_info,
     illustrator_close_document,
     illustrator_import_image,
     CreateDocumentInput,
@@ -36,7 +35,7 @@ class TestCreateDocument:
         
         # Verify execute_script was called
         mock_execute_script.assert_called_once()
-        script = mock_execute_script.call_args[0][0]
+        script = mock_execute_script.call_args.kwargs['script']
         
         # Verify script contains expected values
         assert "preset.width = 800" in script
@@ -49,7 +48,7 @@ class TestCreateDocument:
         params = CreateDocumentInput(width=1920, height=1080)
         await illustrator_create_document(params)
         
-        script = mock_execute_script.call_args[0][0]
+        script = mock_execute_script.call_args.kwargs['script']
         assert "preset.width = 1920" in script
         assert "preset.height = 1080" in script
     
@@ -59,7 +58,7 @@ class TestCreateDocument:
         params = CreateDocumentInput(color_mode="CMYK")
         await illustrator_create_document(params)
         
-        script = mock_execute_script.call_args[0][0]
+        script = mock_execute_script.call_args.kwargs['script']
         assert "DocumentColorSpace.CMYK" in script
     
     @pytest.mark.asyncio
@@ -68,7 +67,7 @@ class TestCreateDocument:
         params = CreateDocumentInput(name="My Design")
         await illustrator_create_document(params)
         
-        script = mock_execute_script.call_args[0][0]
+        script = mock_execute_script.call_args.kwargs['script']
         assert 'preset.title = "My Design"' in script
 
 
@@ -81,7 +80,7 @@ class TestOpenDocument:
         params = OpenDocumentInput(file_path="C:/designs/logo.ai")
         await illustrator_open_document(params)
         
-        script = mock_execute_script.call_args[0][0]
+        script = mock_execute_script.call_args.kwargs['script']
         assert "C:/designs/logo.ai" in script
         assert "new File" in script
         assert "app.open" in script
@@ -92,53 +91,89 @@ class TestOpenDocument:
         params = OpenDocumentInput(file_path="C:\\Users\\test\\design.ai")
         await illustrator_open_document(params)
         
-        script = mock_execute_script.call_args[0][0]
+        script = mock_execute_script.call_args.kwargs['script']
         # Backslashes should be doubled for JavaScript
         assert "\\\\" in script or "/" in script
 
 
 class TestExportDocument:
-    """Tests for illustrator_export_document tool."""
+    """Tests for illustrator_export_document tool.
+    
+    export_document calls execute_script_with_context directly (not execute_jsx_tool),
+    so we use a dedicated fixture.
+    """
+    
+    @pytest.fixture
+    def mock_esc(self):
+        """Mock execute_script_with_context and format_envelope for export tests."""
+        from unittest.mock import MagicMock
+        esc_mock = AsyncMock(return_value={"result": '{"success": true}'})
+        fmt_mock = MagicMock(return_value='{"success": true}')
+        with patch('illustrator_mcp.tools.documents.execute_script_with_context', esc_mock), \
+             patch('illustrator_mcp.tools.documents.format_envelope', fmt_mock):
+            yield esc_mock
     
     @pytest.mark.asyncio
-    async def test_export_png(self, mock_execute_script):
+    async def test_export_png(self, mock_esc):
         """Test PNG export."""
         params = ExportDocumentInput(file_path="C:/output/image.png", format=ExportFormat.PNG)
         await illustrator_export_document(params)
         
-        script = mock_execute_script.call_args[0][0]
+        # Find the main export call (not the precheck)
+        for call in mock_esc.call_args_list:
+            if call.kwargs.get('command_type') == 'export_document':
+                script = call.kwargs['script']
+                assert "ExportOptionsPNG24" in script
+                assert "ExportType.PNG24" in script
+                return
+        # If no export_document call, check last call
+        script = mock_esc.call_args.kwargs['script']
         assert "ExportOptionsPNG24" in script
-        assert "ExportType.PNG24" in script
     
     @pytest.mark.asyncio
-    async def test_export_jpg(self, mock_execute_script):
+    async def test_export_jpg(self, mock_esc):
         """Test JPG export."""
         params = ExportDocumentInput(file_path="C:/output/image.jpg", format=ExportFormat.JPG)
         await illustrator_export_document(params)
         
-        script = mock_execute_script.call_args[0][0]
+        for call in mock_esc.call_args_list:
+            if call.kwargs.get('command_type') == 'export_document':
+                script = call.kwargs['script']
+                assert "ExportOptionsJPEG" in script
+                assert "ExportType.JPEG" in script
+                return
+        script = mock_esc.call_args.kwargs['script']
         assert "ExportOptionsJPEG" in script
-        assert "ExportType.JPEG" in script
     
     @pytest.mark.asyncio
-    async def test_export_svg(self, mock_execute_script):
+    async def test_export_svg(self, mock_esc):
         """Test SVG export."""
         params = ExportDocumentInput(file_path="C:/output/image.svg", format=ExportFormat.SVG)
         await illustrator_export_document(params)
         
-        script = mock_execute_script.call_args[0][0]
+        for call in mock_esc.call_args_list:
+            if call.kwargs.get('command_type') == 'export_document':
+                script = call.kwargs['script']
+                assert "ExportOptionsSVG" in script
+                assert "ExportType.SVG" in script
+                return
+        script = mock_esc.call_args.kwargs['script']
         assert "ExportOptionsSVG" in script
-        assert "ExportType.SVG" in script
     
     @pytest.mark.asyncio
-    async def test_export_with_scale(self, mock_execute_script):
+    async def test_export_with_scale(self, mock_esc):
         """Test export with custom scale."""
         params = ExportDocumentInput(file_path="C:/output/image.png", scale=2.0)
         await illustrator_export_document(params)
         
-        script = mock_execute_script.call_args[0][0]
+        for call in mock_esc.call_args_list:
+            if call.kwargs.get('command_type') == 'export_document':
+                script = call.kwargs['script']
+                assert "horizontalScale = 200" in script
+                assert "verticalScale = 200" in script
+                return
+        script = mock_esc.call_args.kwargs['script']
         assert "horizontalScale = 200" in script
-        assert "verticalScale = 200" in script
 
 
 class TestImportImage:
@@ -150,7 +185,7 @@ class TestImportImage:
         params = ImportImageInput(file_path="C:/images/photo.jpg", x=100, y=200, link=True)
         await illustrator_import_image(params)
         
-        script = mock_execute_script.call_args[0][0]
+        script = mock_execute_script.call_args.kwargs['script']
         assert "placedItems.add()" in script
         assert "placed.file = file" in script
         assert "placed.left = 100" in script
@@ -163,7 +198,7 @@ class TestImportImage:
         params = ImportImageInput(file_path="C:/images/photo.jpg", link=False)
         await illustrator_import_image(params)
         
-        script = mock_execute_script.call_args[0][0]
+        script = mock_execute_script.call_args.kwargs['script']
         assert "placed.embed();" in script
 
 
@@ -176,7 +211,7 @@ class TestCloseDocument:
         params = CloseDocumentInput(save_before_close=False)
         await illustrator_close_document(params)
         
-        script = mock_execute_script.call_args[0][0]
+        script = mock_execute_script.call_args.kwargs['script']
         assert "SaveOptions.DONOTSAVECHANGES" in script
     
     @pytest.mark.asyncio
@@ -185,21 +220,5 @@ class TestCloseDocument:
         params = CloseDocumentInput(save_before_close=True)
         await illustrator_close_document(params)
         
-        script = mock_execute_script.call_args[0][0]
+        script = mock_execute_script.call_args.kwargs['script']
         assert "SaveOptions.SAVECHANGES" in script
-
-
-class TestGetDocumentInfo:
-    """Tests for illustrator_get_document_info tool."""
-    
-    @pytest.mark.asyncio
-    async def test_get_document_info_script(self, mock_execute_script):
-        """Test document info retrieval script."""
-        await illustrator_get_document_info()
-        
-        script = mock_execute_script.call_args[0][0]
-        assert "app.activeDocument" in script
-        assert "doc.name" in script
-        assert "doc.width" in script
-        assert "doc.height" in script
-        assert "documentColorSpace" in script

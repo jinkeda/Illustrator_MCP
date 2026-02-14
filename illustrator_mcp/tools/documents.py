@@ -302,15 +302,15 @@ async def illustrator_export_document(params: ExportDocumentInput) -> Union[str,
         ExportFormat.PDF: {"options": "PDFSaveOptions", "type": None, "scales": False},
     }
 
-    config = export_configs[params.format]
+    fmt_config = export_configs[params.format]
 
     # Build export script with artboard clipping support
-    if config["type"]:  # Standard exportFile (PNG, JPG, SVG)
+    if fmt_config["type"]:  # Standard exportFile (PNG, JPG, SVG)
         ab_index_js = params.artboard_index if params.artboard_index is not None else 'doc.artboards.getActiveArtboardIndex()'
         artboard_clip = "true" if params.artboard_only else "false"
 
         scale_opts = ""
-        if config["scales"]:
+        if fmt_config["scales"]:
             scale_opts = f"""
             opts.horizontalScale = {scale};
             opts.verticalScale = {scale};"""
@@ -326,11 +326,11 @@ async def illustrator_export_document(params: ExportDocumentInput) -> Union[str,
     var abIdx = {ab_index_js};
     doc.artboards.setActiveArtboardIndex(abIdx);
 
-    var opts = new {config["options"]}();{scale_opts}
+    var opts = new {fmt_config["options"]}();{scale_opts}
     {clip_opt}
 
     var file = new File("{path}");
-    doc.exportFile(file, {config["type"]}, opts);
+    doc.exportFile(file, {fmt_config["type"]}, opts);
 
     var abRect = doc.artboards[abIdx].artboardRect;
     var exportWidth = Math.round((abRect[2] - abRect[0]) * {scale} / 100);
@@ -521,25 +521,6 @@ async def illustrator_place_file(params: PlaceFileInput) -> str:
         tool_name="illustrator_place_file",
         error_prefix="File",
         embed_editable=params.embed_editable
-    )
-
-
-# DISABLED: Tool limit reduction for Antigravity
-# @mcp.tool(
-#     name="illustrator_embed_placed_items",
-#     annotations={"title": "Embed All Placed Items", "readOnlyHint": False, "destructiveHint": False}
-# )
-async def illustrator_embed_placed_items() -> str:
-    """Embed all linked/placed items in the document.
-    
-    Use when finalizing a figure for submission.
-    After embedding, all elements become editable paths and text.
-    """
-    return await execute_jsx_tool(
-        script=templates.EMBED_PLACED_ITEMS,
-        command_type="embed_placed_items",
-        tool_name="illustrator_embed_placed_items",
-        params={}
     )
 
 
