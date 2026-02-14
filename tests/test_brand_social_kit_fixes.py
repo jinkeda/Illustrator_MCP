@@ -81,9 +81,7 @@ async def _run_export(params, captured_scripts=None, captured_kwargs=None):
 
     with patch("illustrator_mcp.tools.documents.execute_script_with_context",
                side_effect=capture):
-        with patch("illustrator_mcp.tools.documents.inject_libraries",
-                   side_effect=lambda s, libs: s):
-            result = await illustrator_export_document(params)
+        result = await illustrator_export_document(params)
     return result, scripts, kwargs_list
 
 
@@ -262,9 +260,7 @@ class TestPrecheckScope:
 
         with patch("illustrator_mcp.tools.documents.execute_script_with_context",
                    side_effect=mock_exec):
-            with patch("illustrator_mcp.tools.documents.inject_libraries",
-                       side_effect=lambda s, libs: s):
-                result_str = await illustrator_export_document(params)
+            result_str = await illustrator_export_document(params)
 
         result = json.loads(result_str)
         assert any("blank" in w.lower() for w in result.get("warnings", []))
@@ -289,9 +285,7 @@ class TestPrecheckScope:
 
         with patch("illustrator_mcp.tools.documents.execute_script_with_context",
                    side_effect=mock_exec):
-            with patch("illustrator_mcp.tools.documents.inject_libraries",
-                       side_effect=lambda s, libs: s):
-                result_str = await illustrator_export_document(params)
+            result_str = await illustrator_export_document(params)
 
         result = json.loads(result_str)
         # Should have a warning about precheck failure but still attempted export

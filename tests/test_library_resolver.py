@@ -14,7 +14,7 @@ import tempfile
 from pathlib import Path
 from unittest.mock import patch, MagicMock
 
-from illustrator_mcp.tools.execute import LibraryResolver, inject_libraries
+from illustrator_mcp.libraries import LibraryResolver, inject_libraries
 
 
 class TestLibraryResolverBasic:

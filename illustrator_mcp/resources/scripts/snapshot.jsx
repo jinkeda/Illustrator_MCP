@@ -6,7 +6,7 @@
  * - Captures serializable state before batch execution
  * - Restores state on failure instead of relying on undo history
  * 
- * @requires ops_core (for MCP ID extraction)
+ * @requires mcp_id (for extractMcpId)
  * @version 1.0.0
  */
 
@@ -75,14 +75,9 @@ function deserializeColor(colorData) {
 }
 
 // ==================== ID Extraction ====================
-
-/**
- * Extract MCP ID from item note
- */
-function extractMcpId(note) {
-    if (!note) return null;
-    var match = note.match(/@mcp:id=([^\s@]+)/);
-    return match ? match[1] : null;
+// extractMcpId is provided by mcp_id.jsx (shared utility)
+if (typeof extractMcpId !== "function") {
+    throw new Error("snapshot.jsx requires mcp_id.jsx (extractMcpId not found)");
 }
 
 // ==================== Snapshot Capture ====================

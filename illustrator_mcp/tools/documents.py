@@ -16,7 +16,7 @@ from illustrator_mcp.shared import mcp
 from illustrator_mcp.tools.base import execute_jsx_tool, ToolInputBase
 from illustrator_mcp.utils import escape_path_for_jsx
 from illustrator_mcp.proxy_client import execute_script_with_context, format_envelope
-from illustrator_mcp.libraries import inject_libraries, get_injection_metadata
+from illustrator_mcp.libraries import get_injection_metadata
 from illustrator_mcp import templates
 
 
@@ -267,27 +267,30 @@ async def illustrator_export_document(params: ExportDocumentInput) -> Union[str,
         }});
         """
         try:
-            check_with_lib = inject_libraries(check_script, ["validate"])
             check_response = await execute_script_with_context(
-                script=check_with_lib,
+                script=check_script,
                 command_type="export_precheck",
-                tool_name="illustrator_export_document"
+                tool_name="illustrator_export_document",
+                includes=["validate"]
             )
-            # CEP returns {"success": bool, "result": "JSON string"}
-            cep_result = check_response.get("result", {})
-            if isinstance(cep_result, str):
-                cep_result = json.loads(cep_result)
-
-            # Extract inner result (the actual validation data)
-            inner_result = cep_result.get("result", "{}")
-            if isinstance(inner_result, str):
-                count = json.loads(inner_result)
+            if check_response.get("error"):
+                warnings.append(f"Pre-export check failed: {check_response['error']}")
             else:
-                count = inner_result
+                # CEP returns {"success": bool, "result": "JSON string"}
+                cep_result = check_response.get("result", {})
+                if isinstance(cep_result, str):
+                    cep_result = json.loads(cep_result)
 
-            if count.get('on_artboard', 0) == 0:
-                warnings.append("Nothing intersects artboard - export will be blank")
-            diagnostics["precheck_result"] = count
+                # Extract inner result (the actual validation data)
+                inner_result = cep_result.get("result", "{}")
+                if isinstance(inner_result, str):
+                    count = json.loads(inner_result)
+                else:
+                    count = inner_result
+
+                if count.get('on_artboard', 0) == 0:
+                    warnings.append("Nothing intersects artboard - export will be blank")
+                diagnostics["precheck_result"] = count
         except Exception as e:
             warnings.append(f"Pre-export check failed: {e}")
 

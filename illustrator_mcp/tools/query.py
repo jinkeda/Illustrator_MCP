@@ -12,7 +12,7 @@ from pydantic import Field
 import logging
 from illustrator_mcp.shared import mcp
 from illustrator_mcp.proxy_client import execute_script_with_context, format_envelope
-from illustrator_mcp.libraries import inject_libraries, get_injection_metadata
+from illustrator_mcp.libraries import get_injection_metadata
 from illustrator_mcp.tools.base import ToolInputBase
 
 logger = logging.getLogger("illustrator_mcp")
@@ -164,20 +164,7 @@ if (typeof executeTask !== "function" || typeof validatePayload !== "function") 
 }}
 """
     
-    # Inject task_executor library
-    try:
-        final_script = inject_libraries(script, ["task_executor"])
-    except ValueError as e:
-        return f"Error loading task_executor library: {str(e)}"
-    
-    response = await execute_script_with_context(
-        script=final_script,
-        command_type="query_items",
-        tool_name="illustrator_query_items",
-        params=params.model_dump()
-    )
-
-    # Get canonicalized includes metadata
+    # Get canonicalized includes metadata for diagnostics
     meta = get_injection_metadata(["task_executor"])
     diagnostics = {
         "targets": params.targets,
@@ -185,12 +172,24 @@ if (typeof executeTask !== "function" || typeof validatePayload !== "function") 
         "prelude_hash": meta["prelude_hash"]
     }
 
+    response = await execute_script_with_context(
+        script=script,
+        command_type="query_items",
+        tool_name="illustrator_query_items",
+        params=params.model_dump(),
+        includes=["task_executor"]
+    )
+
+    # Check for pipeline-level errors (connection, library injection, etc.)
+    if response.get("error"):
+        return format_envelope(response, context="query_items", diagnostics=diagnostics)
+
     # Debug mode: return raw response
     if params.debug:
         debug_output = {
             "raw_response": response,
-            "script_length": len(final_script),
-            "script_preview": final_script[:500] + "..." if len(final_script) > 500 else final_script
+            "script_length": len(script),
+            "script_preview": script[:500] + "..." if len(script) > 500 else script
         }
         return json.dumps({
             "ok": True,
@@ -513,27 +512,20 @@ async def illustrator_preflight_check(params: PreflightCheckInput) -> str:
         "prelude_hash": preflight_meta["prelude_hash"]
     }
 
-    try:
-        # Inject validate library
-        final_script = inject_libraries(script, ["validate"])
-    except ValueError as e:
-        return json.dumps({
-            "ok": False,
-            "warnings": [],
-            "error": {"code": "V_LIBRARY_NOT_FOUND", "message": str(e)},
-            "diagnostics": diagnostics,
-            "result": None
-        })
-
     logger.info(f"preflight_check: artboard={params.artboard_index}, policy={params.policy}")
 
     try:
         response = await execute_script_with_context(
-            script=final_script,
+            script=script,
             command_type="preflight_check",
             tool_name="illustrator_preflight_check",
-            params=params.model_dump()
+            params=params.model_dump(),
+            includes=["validate"]
         )
+
+        # Check for pipeline-level errors (connection, library injection, etc.)
+        if response.get("error"):
+            return format_envelope(response, context="preflight_check", diagnostics=diagnostics)
 
         # Parse result - CEP returns {"success": bool, "result": "JSON string"}
         cep_result = response.get("result", {})

@@ -49,7 +49,7 @@ class TestRequestRegistry:
         
         request_id, future = registry.create_request(loop, "script")
         
-        result = {"success": True, "data": "test"}
+        result = {"result": "test_data"}
         registry.complete_request(request_id, result)
         
         assert future.done()

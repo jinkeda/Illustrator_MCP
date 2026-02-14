@@ -12,7 +12,6 @@ from illustrator_mcp.proxy_client import (
     execute_script_with_context,
     format_envelope,
 )
-from illustrator_mcp.libraries import inject_libraries
 
 
 # ==================== Shared Pydantic Base ====================
@@ -63,16 +62,13 @@ async def execute_jsx_tool(
                 params={"key": params.key}
             )
     """
-    # Inject libraries if requested
-    if includes:
-        script = inject_libraries(script, includes)
-
-    # Execute with context
+    # Execute with context (library injection handled by pipeline)
     response = await execute_script_with_context(
         script=script,
         command_type=command_type,
         tool_name=tool_name,
-        params=params or {}
+        params=params or {},
+        includes=includes
     )
 
     # Return standardized envelope for consistent API contract

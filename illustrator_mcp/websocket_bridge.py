@@ -14,11 +14,11 @@ from enum import Enum, auto
 from typing import Any, Optional, Dict
 
 from illustrator_mcp.config import config, BRIDGE_STARTUP_TIMEOUT
-from illustrator_mcp.shared import (
+from illustrator_mcp.types import (
     CommandMetadata,
     ExecutionResponse,
-    create_connection_error
 )
+from illustrator_mcp.connection_helpers import create_connection_error
 from illustrator_mcp.bridge.server import WebSocketServer
 from illustrator_mcp.bridge.request_registry import RequestRegistry
 
@@ -29,8 +29,19 @@ class ConnectionState(Enum):
     """WebSocket connection state."""
     DISCONNECTED = auto()
     CONNECTING = auto()
-    LISTENING = auto()   # Server is listening, but no client connected yet
+    LISTENING = auto()      # Server listening, no client connected
+    SHUTTING_DOWN = auto()  # Shutdown initiated, no new requests
     ERROR = auto()
+
+
+# Explicit transition table — illegal transitions are rejected.
+ALLOWED_TRANSITIONS: Dict[ConnectionState, set] = {
+    ConnectionState.DISCONNECTED:  {ConnectionState.CONNECTING},
+    ConnectionState.CONNECTING:    {ConnectionState.LISTENING, ConnectionState.ERROR},
+    ConnectionState.LISTENING:     {ConnectionState.SHUTTING_DOWN, ConnectionState.ERROR},
+    ConnectionState.SHUTTING_DOWN: {ConnectionState.DISCONNECTED},
+    ConnectionState.ERROR:         {ConnectionState.DISCONNECTED, ConnectionState.CONNECTING},
+}
 
 
 class WebSocketBridge:
@@ -47,12 +58,61 @@ class WebSocketBridge:
         self._started = threading.Event()
         self._ready = threading.Event()  # Ready after server is actually listening
         self.state = ConnectionState.DISCONNECTED
+        self._state_lock = threading.Lock()
         
         # Initialize server (will be run in loop)
         self.server = WebSocketServer(
             port=self.port,
-            on_message=self._handle_message
+            on_message=self._handle_message,
+            on_disconnect=self._handle_disconnect
         )
+
+    def _transition(self, new_state: ConnectionState, reason: str = "") -> bool:
+        """Thread-safe state transition with validation and side-effect dispatch.
+
+        Bridge emits lifecycle events only; the registry decides what to
+        do with requests (cancel_all is called by the disconnect handler,
+        not by _transition itself, to preserve the registry as the
+        single source of truth for request state).
+
+        Returns:
+            True if transition was applied, False if rejected.
+        """
+        with self._state_lock:
+            old = self.state
+            if old == new_state:
+                return True  # no-op
+            allowed = ALLOWED_TRANSITIONS.get(old, set())
+            if new_state not in allowed:
+                logger.error(
+                    f"Illegal transition {old.name} → {new_state.name} ({reason})"
+                )
+                return False
+            self.state = new_state
+            logger.info(f"Bridge: {old.name} → {new_state.name} ({reason})")
+
+        # Side effects (outside state lock — registry has its own lock)
+        if new_state in (
+            ConnectionState.ERROR,
+            ConnectionState.SHUTTING_DOWN,
+        ):
+            self.registry.cancel_all(reason)
+            self._ready.set()  # unblock startup waiters on failure
+
+        return True
+
+    async def _handle_disconnect(self) -> None:
+        """Called when the CEP panel disconnects.
+
+        Cancels all pending requests immediately to prevent hanging futures.
+        State stays at LISTENING (server still running, no client).
+        cancel_all is called here — not in _transition — because
+        LISTENING is also the initial post-start state where we don't cancel.
+        """
+        logger.warning("CEP panel disconnected — cancelling pending requests")
+        self.registry.cancel_all("CEP panel disconnected")
+        # State stays LISTENING (server running, no client) — no transition needed
+        # since we're already LISTENING
 
     async def _handle_message(self, message: str) -> None:
         """Callback for incoming WebSocket messages."""
@@ -100,10 +160,10 @@ class WebSocketBridge:
             self.loop.run_until_complete(self.server.run(self._started))
         except Exception as e:
             logger.error(f"Server thread error: {e}")
-            self.state = ConnectionState.ERROR
+            self._transition(ConnectionState.ERROR, f"Server thread error: {e}")
         finally:
-            # Cancel any pending requests on shutdown
-            self.registry.cancel_all("Bridge shutting down")
+            # _transition to SHUTTING_DOWN handles cancel_all + unblocking _ready
+            self._transition(ConnectionState.SHUTTING_DOWN, "Bridge shutting down")
             self.loop.close()
 
     def start(self):
@@ -112,7 +172,7 @@ class WebSocketBridge:
             logger.warning("WebSocket bridge already running")
             return
 
-        self.state = ConnectionState.CONNECTING
+        self._transition(ConnectionState.CONNECTING, "Starting bridge")
         logger.info("Starting WebSocket bridge thread...")
         self._started.clear()
         self._ready.clear()
@@ -122,10 +182,10 @@ class WebSocketBridge:
         # Wait for server to start
         if not self._started.wait(timeout=BRIDGE_STARTUP_TIMEOUT):
             logger.error(f"WebSocket bridge FAILED to start within {BRIDGE_STARTUP_TIMEOUT} seconds!")
-            self.state = ConnectionState.ERROR
+            self._transition(ConnectionState.ERROR, "Startup timeout")
         else:
             logger.info("WebSocket bridge thread started successfully")
-            self.state = ConnectionState.LISTENING
+            self._transition(ConnectionState.LISTENING, "Server started")
             self._ready.set()
 
     def wait_until_ready(self, timeout: float = 10.0) -> bool:
@@ -150,7 +210,8 @@ class WebSocketBridge:
             if self._thread.is_alive():
                 logger.warning("WebSocket bridge thread did not exit cleanly")
         
-        self.state = ConnectionState.DISCONNECTED
+        # SHUTTING_DOWN → DISCONNECTED (SHUTTING_DOWN set by _thread_main.finally)
+        self._transition(ConnectionState.DISCONNECTED, "Bridge stopped")
 
     def is_running(self) -> bool:
         """Check if the bridge thread is alive and running."""

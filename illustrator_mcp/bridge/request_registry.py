@@ -22,12 +22,15 @@ class PendingRequest:
 
 @dataclass
 class StreamingRequest:
-    """A streaming request that receives multiple updates before completion."""
+    """A streaming request that receives multiple updates before completion.
+    
+    Completion is signaled via a sentinel message {type: "complete"} in the queue.
+    No separate `completed` flag — single-channel truth prevents race conditions.
+    """
     queue: asyncio.Queue
     script: str
     command: Optional[Dict[str, Any]] = None
     trace_id: Optional[str] = None
-    completed: bool = False
 
 
 class RequestRegistry:
@@ -126,7 +129,7 @@ class RequestRegistry:
         """
         with self._lock:
             streaming = self._streaming.get(request_id)
-            if streaming and not streaming.completed:
+            if streaming:
                 try:
                     streaming.queue.put_nowait(update)
                     return True
@@ -138,7 +141,8 @@ class RequestRegistry:
         """
         Complete a streaming request with final result.
         
-        Thread-safe: the lock protects lookup, completion flag, and queue put.
+        Thread-safe: sends a sentinel message {type: "complete"} through the queue.
+        The consumer detects the sentinel and exits — no separate flag needed.
         
         Args:
             request_id: The streaming request ID.
@@ -149,8 +153,7 @@ class RequestRegistry:
         """
         with self._lock:
             streaming = self._streaming.get(request_id)
-            if streaming and not streaming.completed:
-                streaming.completed = True
+            if streaming:
                 final_result["type"] = "complete"
                 try:
                     streaming.queue.put_nowait(final_result)
@@ -167,12 +170,16 @@ class RequestRegistry:
         """
         Async iterator for streaming request updates.
         
+        Driven entirely by queue messages (single-channel truth).
+        Exits when a sentinel {type: "complete"} is received.
+        No flag checking — eliminates the race between flag set and queue read.
+        
         Args:
             request_id: The streaming request ID.
             timeout: Timeout for each update.
             
         Yields:
-            Update dictionaries until completion.
+            Update dictionaries until completion sentinel.
         """
         with self._lock:
             streaming = self._streaming.get(request_id)
@@ -181,7 +188,7 @@ class RequestRegistry:
             return
         
         try:
-            while not streaming.completed:
+            while True:
                 try:
                     update = await asyncio.wait_for(
                         streaming.queue.get(), 
@@ -204,15 +211,40 @@ class RequestRegistry:
         """
         Complete a pending request with a result.
         
-        Returns:
-            True if request was found and completed, False otherwise.
+        Validates response shape: must contain 'result' or 'error' key.
+        Malformed responses are wrapped as C_PROTOCOL error.
         """
         with self._lock:
-            pending = self._pending.pop(request_id, None)
-            if pending and not pending.future.done():
+            pending = self._pending.get(request_id)
+            if not pending:
+                logger.warning(f"complete_request for unknown ID: {request_id}")
+                return False
+            
+            if pending.future.done():
+                logger.debug(f"Request {request_id} already resolved, ignoring late result")
+                return False
+
+            try:
+                # Validate response shape
+                if isinstance(result, dict) and not (
+                    "result" in result or "error" in result
+                ):
+                    from illustrator_mcp.errors import ErrorCode, format_code
+                    logger.warning(
+                        format_code(ErrorCode.C_PROTOCOL,
+                            f"Request {request_id}: missing 'result'/'error'. "
+                            f"Keys: {list(result.keys())}")
+                    )
+                    result = {
+                        "error": format_code(ErrorCode.C_PROTOCOL,
+                            f"Response missing required 'result' or 'error' key. "
+                            f"Got: {list(result.keys())}")
+                    }
                 pending.future.set_result(result)
                 return True
-        return False
+            finally:
+                # Remove the request from pending after it's been completed or failed
+                self._pending.pop(request_id, None)
         
     def fail_request(self, request_id: int, error: Exception) -> bool:
         """
@@ -234,11 +266,10 @@ class RequestRegistry:
             requests = list(self._pending.items())
             self._pending.clear()
             
-            # Also cancel streaming requests
+            # Also cancel streaming requests via sentinel
             for req_id, streaming in self._streaming.items():
-                streaming.completed = True
                 try:
-                    streaming.queue.put_nowait({"type": "cancelled", "reason": reason})
+                    streaming.queue.put_nowait({"type": "complete", "cancelled": True, "reason": reason})
                 except asyncio.QueueFull:
                     pass
             self._streaming.clear()

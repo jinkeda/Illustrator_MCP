@@ -16,38 +16,7 @@ from pydantic import BaseModel, Field, model_validator
 
 # ==================== Error Codes ====================
 
-class ErrorCode(str, Enum):
-    """
-    Standardized error codes matching task_executor.jsx.
-    
-    Categories:
-    - V (Validation): Fail before execution
-    - R (Runtime): Fail during execution
-    - S (System): Illustrator/environment issues
-    """
-    # Validation errors (fail before execution)
-    V_NO_DOCUMENT = "V001"
-    V_NO_SELECTION = "V002"
-    V_INVALID_PAYLOAD = "V003"
-    V_INVALID_TARGETS = "V004"
-    V_UNKNOWN_TARGET_TYPE = "V005"
-    V_MISSING_REQUIRED_PARAM = "V006"
-    V_INVALID_PARAM_TYPE = "V007"
-    V_SCHEMA_MISMATCH = "V008"
-    
-    # Runtime errors (fail during execution)
-    R_COLLECT_FAILED = "R001"
-    R_COMPUTE_FAILED = "R002"
-    R_APPLY_FAILED = "R003"
-    R_ITEM_OPERATION_FAILED = "R004"
-    R_TIMEOUT = "R005"
-    R_OUT_OF_BOUNDS = "R006"
-    
-    # System errors
-    S_APP_ERROR = "S001"
-    S_SCRIPT_ERROR = "S002"
-    S_IO_ERROR = "S003"
-    S_MEMORY_ERROR = "S004"
+from illustrator_mcp.errors import ErrorCode  # noqa: F401 — single source of truth
 
 
 # ==================== Ordering & Filtering ====================

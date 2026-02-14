@@ -6,7 +6,7 @@ import sys
 root_dir = Path(__file__).parent.parent
 sys.path.append(str(root_dir))
 
-from illustrator_mcp.tools.execute import inject_libraries
+from illustrator_mcp.libraries import inject_libraries
 
 def test_inject_no_includes():
     script = "var x = 1;"
@@ -38,4 +38,4 @@ def test_inject_multiple():
 def test_inject_missing_library():
     with pytest.raises(ValueError) as excinfo:
         inject_libraries("foo", ["non_existent_library_123"])
-    assert "Library not found" in str(excinfo.value)
+    assert "Unknown library" in str(excinfo.value)

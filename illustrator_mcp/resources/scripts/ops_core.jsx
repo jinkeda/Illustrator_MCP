@@ -10,14 +10,18 @@
  * - Context injection for pure ops
  * 
  * @requires task_executor (for ErrorCodes, makeError, collectTargets, etc.)
+ * @requires mcp_id (for extractMcpId, removeFromIdIndex)
  * @requires geometry (for shape creation helpers)
- * @version 1.0.0
+ * @version 1.1.0
  */
 
 // ==================== Dependency Guard ====================
 
 if (typeof makeError !== "function" || typeof ErrorCodes === "undefined") {
     throw new Error("ops_core.jsx requires task_executor.jsx (makeError=" + typeof makeError + ", ErrorCodes=" + typeof ErrorCodes + ")");
+}
+if (typeof extractMcpId !== "function") {
+    throw new Error("ops_core.jsx requires mcp_id.jsx (extractMcpId=" + typeof extractMcpId + ")");
 }
 
 // ==================== Op Schema Version ====================
@@ -212,9 +216,9 @@ function buildIDIndex(doc, ctx) {
             var item = container.pageItems[i];
             try {
                 if (item.note) {
-                    var match = item.note.match(/@mcp:id=([^\s@]+)/);
-                    if (match) {
-                        index[match[1]] = item;
+                    var id = extractMcpId(item.note);
+                    if (id) {
+                        index[id] = item;
                     }
                 }
             } catch (e) { }
@@ -801,8 +805,8 @@ function executeOpBatch(ops, options) {
         }, doc.name, doc);
     }
 
-    // Always invalidate ID index at end of batch to prevent stale cache
-    // across script executions (items may have been created/deleted)
+    // Invalidate ID index at end of batch if any handler requested it
+    // or always invalidate to prevent stale cache across script executions
     if (typeof invalidateIdIndex === "function") {
         invalidateIdIndex();
     }

@@ -15,7 +15,7 @@ from pydantic import Field, model_validator
 from illustrator_mcp.shared import mcp
 from illustrator_mcp.proxy_client import execute_script_with_context, format_envelope
 from illustrator_mcp.protocol import TaskPayload, TaskReport, format_task_report
-from illustrator_mcp.libraries import inject_libraries, get_injection_metadata
+from illustrator_mcp.libraries import get_injection_metadata
 from illustrator_mcp.tools.base import ToolInputBase
 from mcp.types import ImageContent
 
@@ -338,21 +338,6 @@ async def illustrator_execute_script(params: ExecuteScriptInput) -> Union[str, l
         "artboard_index": params.artboard_index
     }
 
-    # Inject standard libraries if requested
-    final_script = script
-    if params.includes:
-        try:
-            final_script = inject_libraries(script, params.includes)
-            logger.info(f"Injected libraries: {params.includes}")
-        except ValueError as e:
-            return json.dumps({
-                "ok": False,
-                "warnings": [],
-                "error": {"code": "V_LIBRARY_NOT_FOUND", "message": str(e)},
-                "diagnostics": diagnostics,
-                "result": None
-            })
-
     # Create a descriptive command_type for CEP panel
     # Priority: description > script snippet
     if desc:
@@ -367,11 +352,12 @@ async def illustrator_execute_script(params: ExecuteScriptInput) -> Union[str, l
 
     try:
         response = await execute_script_with_context(
-            script=final_script,
+            script=script,
             command_type=command_type,
             tool_name="illustrator_execute_script",
             params={"description": desc or "raw script", "length": script_len},
-            timeout=params.timeout
+            timeout=params.timeout,
+            includes=params.includes
         )
 
         # Optional bounds validation after execution
@@ -389,11 +375,11 @@ async def illustrator_execute_script(params: ExecuteScriptInput) -> Union[str, l
             }});
             """
             try:
-                check_with_lib = inject_libraries(check_script, ["validate"])
                 check_response = await execute_script_with_context(
-                    script=check_with_lib,
+                    script=check_script,
                     command_type="bounds_validation",
-                    tool_name="illustrator_execute_script"
+                    tool_name="illustrator_execute_script",
+                    includes=["validate"]
                 )
                 # CEP returns {"success": bool, "result": "JSON string"}
                 cep_result = check_response.get("result", {})
@@ -581,29 +567,22 @@ JSON.stringify(report);
         "includes": all_includes
     }
 
-    # Inject libraries
-    try:
-        final_script = inject_libraries(script, all_includes)
-    except ValueError as e:
-        return json.dumps({
-            "ok": False,
-            "warnings": [],
-            "error": {"code": "V_LIBRARY_NOT_FOUND", "message": str(e)},
-            "diagnostics": diagnostics,
-            "result": None
-        })
-
     logger.info(f"execute_task: {params.payload.task}")
 
     try:
         response = await execute_script_with_context(
-            script=final_script,
+            script=script,
             command_type=f"task:{params.payload.task}",
             tool_name="illustrator_execute_task",
-            params=params.payload.model_dump()
+            params=params.payload.model_dump(),
+            includes=all_includes
         )
 
         context = f"execute_task: {params.payload.task}"
+
+        # Check for pipeline-level errors (connection, library injection, etc.)
+        if response.get("error"):
+            return format_envelope(response, context=context, diagnostics=diagnostics)
 
         # Try to parse TaskReport for formatted output
         try:

@@ -923,6 +923,11 @@ registerOpHandler("element_delete", function (params, targets, ctx) {
     // Delete in reverse order to avoid index shifting issues
     for (var i = targets.length - 1; i >= 0; i--) {
         try {
+            // Targeted index removal (O(1) per item) before DOM removal
+            if (typeof extractMcpId === "function" && typeof removeFromIdIndex === "function") {
+                var id = extractMcpId(targets[i].note);
+                if (id) removeFromIdIndex(id);
+            }
             targets[i].remove();
             deleted++;
         } catch (e) {
@@ -930,7 +935,7 @@ registerOpHandler("element_delete", function (params, targets, ctx) {
         }
     }
 
-    // Invalidate ID index after deletes (deleted items would cause stale references)
+    // Full invalidation as safety net (handles any edge cases missed by targeted removal)
     if (deleted > 0 && typeof invalidateIdIndex === "function") {
         invalidateIdIndex();
     }

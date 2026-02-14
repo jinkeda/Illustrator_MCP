@@ -1,11 +1,14 @@
 """
-Standardized error codes and structured error handling for Illustrator MCP.
+Unified error codes and structured error handling for Illustrator MCP.
 
-Provides:
-- Error code enums matching task_executor.jsx
-- Suggestions for common errors
-- Structured error response model
-- Helper functions for error formatting
+Single source of truth for all error classification. Every error-emitting
+module imports from here — no duplicate enums allowed.
+
+Taxonomy (non-overlapping):
+- C_*  Connection/Transport — WebSocket, CEP panel, protocol issues
+- V_*  Validation — fail before execution
+- R_*  Runtime — fail during execution  
+- S_*  Script/System — ExtendScript engine failures AND host environment errors
 """
 
 import re
@@ -15,41 +18,30 @@ from typing import Any, Dict, List, Optional
 
 
 # =============================================================================
-# ERROR CODE ENUMS
+# ERROR CODE ENUM — SINGLE SOURCE OF TRUTH
 # =============================================================================
-
-class IllustratorError(str, Enum):
-    """High-level error categories for MCP operations."""
-
-    DISCONNECTED = "ILLUSTRATOR_DISCONNECTED"
-    NO_DOCUMENT = "NO_DOCUMENT"
-    SCRIPT_ERROR = "SCRIPT_ERROR"
-    TIMEOUT = "TIMEOUT_ERROR"
-    VALIDATION_ERROR = "VALIDATION_ERROR"
-    PROXY_ERROR = "PROXY_ERROR"
-    LIBRARY_ERROR = "LIBRARY_ERROR"
-
-    def format(self, message: str) -> str:
-        """Format an error message with this error code prefix."""
-        return f"{self.value}: {message}"
-
 
 class ErrorCode(str, Enum):
     """
-    Detailed error codes matching task_executor.jsx ErrorCodes.
+    Unified error codes for all Illustrator MCP operations.
 
     Naming convention:
+    - C_xxx: Connection/transport errors
     - V_xxx: Validation errors (fail before execution)
     - R_xxx: Runtime errors (fail during execution)
-    - C_xxx: Connection errors
-    - S_xxx: Script errors
-    """
-    # === CONNECTION (C) ===
-    C_DISCONNECTED = "C001"
-    C_TIMEOUT = "C002"
-    C_BRIDGE_ERROR = "C003"
+    - S_xxx: Script/system errors (ExtendScript engine + host environment)
 
-    # === VALIDATION (V) - fail before execution ===
+    Imported by protocol.py — do not define a second enum elsewhere.
+    """
+    # === CONNECTION / TRANSPORT (C) ===
+    # Covers all communication-layer failures.
+    # C_DISCONNECTED covers: not connected, connection dropped, network reset.
+    C_DISCONNECTED = "C001"
+    C_TIMEOUT = "C002"           # Transport-layer timeout (send/receive)
+    C_BRIDGE_ERROR = "C003"      # Internal bridge error
+    C_PROTOCOL = "C004"          # Malformed response (missing keys, invalid JSON)
+
+    # === VALIDATION (V) — fail before execution ===
     V_NO_DOCUMENT = "V001"
     V_NO_SELECTION = "V002"
     V_INVALID_PAYLOAD = "V003"
@@ -59,22 +51,50 @@ class ErrorCode(str, Enum):
     V_INVALID_PARAM_TYPE = "V007"
     V_SCHEMA_MISMATCH = "V008"
     V_LIBRARY_NOT_FOUND = "V009"
+    V_LIBRARY_CONFLICT = "V010"
 
-    # === RUNTIME (R) - fail during execution ===
+    # === RUNTIME (R) — fail during execution ===
     R_COLLECT_FAILED = "R001"
     R_COMPUTE_FAILED = "R002"
     R_APPLY_FAILED = "R003"
     R_ITEM_OPERATION_FAILED = "R004"
-    R_LAYER_NOT_FOUND = "R005"
-    R_ELEMENT_NOT_FOUND = "R006"
-    R_SCRIPT_EVAL_ERROR = "R007"
-    R_PERMISSION_DENIED = "R008"
+    R_TIMEOUT = "R005"           # Script execution timeout
+    R_OUT_OF_BOUNDS = "R006"
+    R_LAYER_NOT_FOUND = "R007"
+    R_ELEMENT_NOT_FOUND = "R008"
+    R_UNKNOWN = "R009"           # Catch-all for unexpected runtime errors
+    R_INJECTION_FAILED = "R010"  # Library injection failed (catch-all)
 
-    # === SCRIPT (S) - ExtendScript-specific errors ===
-    S_SYNTAX_ERROR = "S001"
-    S_REFERENCE_ERROR = "S002"
-    S_TYPE_ERROR = "S003"
-    S_RANGE_ERROR = "S004"
+    # === SCRIPT / SYSTEM (S) ===
+    # Covers both ExtendScript engine failures (syntax, reference, type errors)
+    # and host environment issues (app crashes, I/O, memory).
+    S_APP_ERROR = "S001"
+    S_SCRIPT_ERROR = "S002"
+    S_IO_ERROR = "S003"
+    S_MEMORY_ERROR = "S004"
+    S_SYNTAX_ERROR = "S005"
+    S_REFERENCE_ERROR = "S006"
+    S_TYPE_ERROR = "S007"
+    S_RANGE_ERROR = "S008"
+    S_PERMISSION_DENIED = "S009"
+    S_LIBRARY_IO = "S010"        # Library file I/O failure
+    S_MANIFEST_ERROR = "S011"    # Manifest parse/load failure
+
+
+# =============================================================================
+# FORMATTING HELPER
+# =============================================================================
+
+def format_code(code: ErrorCode, message: str) -> str:
+    """
+    Format an error code with a message string.
+
+    Produces: ``[C001] CEP panel is not connected...``
+
+    This is the single formatting entry point. All error-emitting code
+    must use this instead of f-string interpolation.
+    """
+    return f"[{code.value}] {message}"
 
 
 # =============================================================================
@@ -94,12 +114,21 @@ ERROR_SUGGESTIONS: Dict[str, Dict[str, Any]] = {
         ],
     },
     ErrorCode.C_TIMEOUT.value: {
-        "message": "Script execution timed out",
+        "message": "Transport timeout",
         "recoverable": True,
         "suggestions": [
-            "The script may be too complex - try breaking it into smaller operations",
             "Check if Illustrator is responding (not frozen)",
-            "Increase timeout if processing large documents",
+            "Verify the WebSocket connection is alive",
+            "Restart the CEP panel if connection seems stuck",
+        ],
+    },
+    ErrorCode.C_PROTOCOL.value: {
+        "message": "Malformed response from Illustrator",
+        "recoverable": False,
+        "suggestions": [
+            "Check CEP panel logs at http://localhost:8088",
+            "Verify CEP panel version matches MCP server version",
+            "Restart Illustrator and reconnect",
         ],
     },
 
@@ -129,8 +158,49 @@ ERROR_SUGGESTIONS: Dict[str, Dict[str, Any]] = {
             "Ensure the library file exists in resources/scripts/",
         ],
     },
+    ErrorCode.V_LIBRARY_CONFLICT.value: {
+        "message": "Library symbol collision detected",
+        "recoverable": False,
+        "suggestions": [
+            "Two requested libraries export the same symbol",
+            "Remove one of the conflicting includes",
+        ],
+    },
+    ErrorCode.S_LIBRARY_IO.value: {
+        "message": "Library file I/O error",
+        "recoverable": False,
+        "suggestions": [
+            "Ensure library files exist in resources/scripts/",
+            "Check file permissions on the library directory",
+        ],
+    },
+    ErrorCode.S_MANIFEST_ERROR.value: {
+        "message": "Library manifest error",
+        "recoverable": False,
+        "suggestions": [
+            "Check manifest.json in resources/scripts/ for syntax errors",
+            "Ensure manifest version is compatible",
+        ],
+    },
+    ErrorCode.R_INJECTION_FAILED.value: {
+        "message": "Library injection failed",
+        "recoverable": False,
+        "suggestions": [
+            "An unexpected error occurred during library injection",
+            "Check server logs for details",
+        ],
+    },
 
     # Runtime errors
+    ErrorCode.R_TIMEOUT.value: {
+        "message": "Script execution timed out",
+        "recoverable": True,
+        "suggestions": [
+            "The script may be too complex - try breaking it into smaller operations",
+            "Check if Illustrator is responding (not frozen)",
+            "Increase timeout if processing large documents",
+        ],
+    },
     ErrorCode.R_LAYER_NOT_FOUND.value: {
         "message": "Layer not found",
         "recoverable": True,
@@ -149,7 +219,18 @@ ERROR_SUGGESTIONS: Dict[str, Dict[str, Any]] = {
             "Check item name spelling (case-sensitive)",
         ],
     },
-    ErrorCode.R_SCRIPT_EVAL_ERROR.value: {
+    ErrorCode.R_UNKNOWN.value: {
+        "message": "Unexpected runtime error",
+        "recoverable": False,
+        "suggestions": [
+            "Check the error message for details",
+            "See server logs for the full traceback",
+            "Report the issue if it persists",
+        ],
+    },
+
+    # Script/system errors
+    ErrorCode.S_SCRIPT_ERROR.value: {
         "message": "Script evaluation error",
         "recoverable": False,
         "suggestions": [
@@ -158,8 +239,6 @@ ERROR_SUGGESTIONS: Dict[str, Dict[str, Any]] = {
             "Use illustrator_get_scripting_reference for correct API usage",
         ],
     },
-
-    # Script errors
     ErrorCode.S_SYNTAX_ERROR.value: {
         "message": "JavaScript syntax error",
         "recoverable": False,
@@ -244,26 +323,38 @@ class StructuredError:
 # ERROR DETECTION AND CLASSIFICATION
 # =============================================================================
 
-# Patterns for detecting error types from raw error messages
+# Patterns for detecting error types from raw error messages.
+# Matches both new format "[C001] ..." and legacy "DISCONNECTED ..." strings.
 ERROR_PATTERNS = [
-    # Connection errors
-    (r"DISCONNECTED|not connected|connection.*failed", ErrorCode.C_DISCONNECTED),
-    (r"TIMEOUT|timed out", ErrorCode.C_TIMEOUT),
+    # Connection errors (new bracketed format)
+    (r"\[C001\]|DISCONNECTED|not connected|connection.*failed", ErrorCode.C_DISCONNECTED),
+    (r"\[C002\]|transport.*timeout", ErrorCode.C_TIMEOUT),
+    (r"\[C004\]|PROTOCOL_ERROR|Invalid JSON", ErrorCode.C_PROTOCOL),
+
+    # Timeouts
+    (r"\[R005\]|TIMEOUT|timed out", ErrorCode.R_TIMEOUT),
 
     # Validation errors
-    (r"No documents? open|No active document", ErrorCode.V_NO_DOCUMENT),
-    (r"No selection|Nothing selected|selection is empty", ErrorCode.V_NO_SELECTION),
-    (r"Layer.*not found|no layer named", ErrorCode.R_LAYER_NOT_FOUND),
-    (r"No such element|Element not found|item not found", ErrorCode.R_ELEMENT_NOT_FOUND),
+    (r"\[V001\]|No documents? open|No active document", ErrorCode.V_NO_DOCUMENT),
+    (r"\[V002\]|No selection|Nothing selected|selection is empty", ErrorCode.V_NO_SELECTION),
+
+    # Runtime errors
+    (r"\[R007\]|Layer.*not found|no layer named", ErrorCode.R_LAYER_NOT_FOUND),
+    (r"\[R008\]|No such element|Element not found|item not found", ErrorCode.R_ELEMENT_NOT_FOUND),
+    (r"\[R009\]|Unexpected error", ErrorCode.R_UNKNOWN),
 
     # Script errors
-    (r"SyntaxError|syntax error|Unexpected token", ErrorCode.S_SYNTAX_ERROR),
-    (r"ReferenceError|is not defined|is undefined", ErrorCode.S_REFERENCE_ERROR),
-    (r"TypeError|is not a function|cannot read property", ErrorCode.S_TYPE_ERROR),
+    (r"\[S005\]|SyntaxError|syntax error|Unexpected token", ErrorCode.S_SYNTAX_ERROR),
+    (r"\[S006\]|ReferenceError|is not defined|is undefined", ErrorCode.S_REFERENCE_ERROR),
+    (r"\[S007\]|TypeError|is not a function|cannot read property", ErrorCode.S_TYPE_ERROR),
     (r"RangeError|Invalid array length|out of range", ErrorCode.S_RANGE_ERROR),
 
     # Library errors
-    (r"Library not found|library.*not found", ErrorCode.V_LIBRARY_NOT_FOUND),
+    (r"\[V009\]|Library not found|library.*not found|Unknown library", ErrorCode.V_LIBRARY_NOT_FOUND),
+    (r"\[V010\]|Symbol collision|symbol.*collision", ErrorCode.V_LIBRARY_CONFLICT),
+    (r"\[S010\]|Library file.*I/O|library.*io error", ErrorCode.S_LIBRARY_IO),
+    (r"\[S011\]|Manifest.*error|manifest.*parse", ErrorCode.S_MANIFEST_ERROR),
+    (r"\[R010\]|injection failed", ErrorCode.R_INJECTION_FAILED),
 ]
 
 
@@ -271,14 +362,14 @@ def classify_error(error_message: str) -> Optional[ErrorCode]:
     """
     Classify an error message into an error code.
 
+    Recognizes both new ``[C001] ...`` format and legacy string patterns.
+
     Args:
         error_message: Raw error message string
 
     Returns:
         ErrorCode if pattern matches, None otherwise
     """
-    error_lower = error_message.lower()
-
     for pattern, code in ERROR_PATTERNS:
         if re.search(pattern, error_message, re.IGNORECASE):
             return code
@@ -364,7 +455,8 @@ def format_error_response(
 def is_connection_error(error_message: str) -> bool:
     """Check if error is a connection-related error."""
     code = classify_error(error_message)
-    return code in (ErrorCode.C_DISCONNECTED, ErrorCode.C_TIMEOUT, ErrorCode.C_BRIDGE_ERROR)
+    return code in (ErrorCode.C_DISCONNECTED, ErrorCode.C_TIMEOUT,
+                    ErrorCode.C_BRIDGE_ERROR, ErrorCode.C_PROTOCOL)
 
 
 def is_recoverable(error_message: str) -> bool:

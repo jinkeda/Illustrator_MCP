@@ -19,11 +19,9 @@ import uuid
 from typing import Any, Dict, List, Optional
 
 from illustrator_mcp.config import config
-from illustrator_mcp.shared import (
-    CommandMetadata, 
-    ExecutionResponse, 
-    check_connection_or_error,
-)
+from illustrator_mcp.types import CommandMetadata, ExecutionResponse
+from illustrator_mcp.connection_helpers import check_connection_or_error
+from illustrator_mcp.errors import ErrorCode, format_code
 from illustrator_mcp.log_config import log_command
 from illustrator_mcp.logging import log_request as log_request_to_file
 from illustrator_mcp.utils.chunking import (
@@ -125,6 +123,7 @@ async def _execute_via_bridge(
     # ===== TIER 1: Connection Check =====
     # Uses health-check to detect stale connections
     is_connected, error_response = check_connection_or_error(
+        _get_bridge,
         config.ws_port, 
         context,
         health_check=False  # Skip health-check here, done at higher level
@@ -149,32 +148,35 @@ async def _execute_via_bridge(
         return await asyncio.wrap_future(conc_future)
         
     except TimeoutError:
-        # ===== TIER 2: Timeout =====
-        # Script took too long - may need to simplify or increase timeout
+        # ===== TIER 2: Script Execution Timeout =====
         return {
-            "error": f"[TIMEOUT] Script execution timed out after {timeout}s. "
-                     "Consider breaking into smaller operations or increasing timeout."
+            "error": format_code(ErrorCode.R_TIMEOUT,
+                f"Script execution timed out after {timeout}s. "
+                "Consider breaking into smaller operations or increasing timeout.")
         }
     except ConnectionError as e:
         # ===== TIER 1: Connection Lost During Execution =====
-        logger.warning(f"[C002] Connection lost [{context}]: {e}")
+        # C_DISCONNECTED covers: not connected, dropped, network reset
+        logger.warning(format_code(ErrorCode.C_DISCONNECTED, f"Connection lost [{context}]: {e}"))
         return {
-            "error": f"[C002] Connection lost during execution: {str(e)}. "
-                     "The CEP panel may have disconnected. Try reconnecting."
+            "error": format_code(ErrorCode.C_DISCONNECTED,
+                f"Connection lost during execution: {str(e)}. "
+                "The CEP panel may have disconnected. Try reconnecting.")
         }
     except json.JSONDecodeError as e:
         # ===== TIER 3: Protocol Error =====
-        logger.error(f"[V001] Invalid JSON from Illustrator [{context}]: {e}")
+        logger.error(format_code(ErrorCode.C_PROTOCOL, f"Invalid JSON [{context}]: {e}"))
         return {
-            "error": f"[V001] Invalid response from Illustrator: {str(e)}. "
-                     "Check CEP panel logs at http://localhost:8088"
+            "error": format_code(ErrorCode.C_PROTOCOL,
+                f"Invalid response from Illustrator: {str(e)}. "
+                "Check CEP panel logs at http://localhost:8088")
         }
     except Exception as e:
         # ===== TIER 3: Unexpected Runtime Error =====
-        logger.exception(f"[R000] Unexpected error [{context}]")
+        logger.exception(format_code(ErrorCode.R_UNKNOWN, f"Unexpected error [{context}]"))
         return {
-            "error": f"[R000] Unexpected error: {str(e)}. "
-                     "See server logs for details."
+            "error": format_code(ErrorCode.R_UNKNOWN,
+                f"Unexpected error: {str(e)}. See server logs for details.")
         }
 
 
@@ -199,13 +201,15 @@ async def execute_script_with_context(
     tool_name: Optional[str] = None,
     params: Optional[dict] = None,
     trace_id: Optional[str] = None,
-    timeout: Optional[float] = None
+    timeout: Optional[float] = None,
+    includes: Optional[List[str]] = None
 ) -> ExecutionResponse:
     """
     Execute a JavaScript script with command context for hybrid protocol.
 
-    This provides better logging and debugging by including metadata
-    about what operation is being performed.
+    This is the single point of library injection. Tools declare intent via
+    ``includes=["geometry", ...]`` and this function handles resolution,
+    injection, metadata, and logging.
     
     Delegates to _execute_via_bridge for actual execution.
 
@@ -215,10 +219,16 @@ async def execute_script_with_context(
         tool_name: Name of the MCP tool (e.g., "illustrator_draw_rectangle")
         params: Parameters passed to the tool (for debugging, not execution)
         trace_id: Optional trace ID for tracing (auto-generated if not provided)
+        timeout: Optional timeout override
+        includes: Optional list of library names to inject (e.g., ["geometry"])
 
     Returns:
         ExecutionResponse with 'result' or 'error' key
     """
+    from illustrator_mcp.libraries import (
+        inject_libraries, get_injection_metadata, INJECTION_SENTINEL
+    )
+
     # Generate trace_id if not provided
     tid = trace_id or generate_trace_id()
     
@@ -229,6 +239,55 @@ async def execute_script_with_context(
         params=params or {},
         trace_id=tid
     )
+    
+    # --- Library injection (centralized) ---
+    injection_meta = None
+    if includes:
+        # Sentinel guard: detect already-injected scripts
+        if INJECTION_SENTINEL in script:
+            logger.warning(
+                f"[{tid}] Script already contains injection sentinel — "
+                f"skipping double injection (includes={includes})"
+            )
+        else:
+            try:
+                script = inject_libraries(script, includes)
+                injection_meta = get_injection_metadata(includes)
+            except ValueError as e:
+                err_msg = str(e)
+                # Refined error classification
+                if "Unknown library" in err_msg or "not found" in err_msg.lower():
+                    code = ErrorCode.V_LIBRARY_NOT_FOUND
+                elif "collision" in err_msg.lower() or "conflict" in err_msg.lower():
+                    code = ErrorCode.V_LIBRARY_CONFLICT
+                else:
+                    code = ErrorCode.V_LIBRARY_NOT_FOUND  # default for ValueError
+                logger.error(f"[{tid}] Library injection failed: {err_msg}")
+                return {
+                    "ok": False,
+                    "error": format_code(code, err_msg),
+                    "trace_id": tid,
+                }
+            except (OSError, json.JSONDecodeError) as e:
+                err_msg = str(e)
+                if isinstance(e, json.JSONDecodeError):
+                    code = ErrorCode.S_MANIFEST_ERROR
+                else:
+                    code = ErrorCode.S_LIBRARY_IO
+                logger.error(f"[{tid}] Library system error: {err_msg}")
+                return {
+                    "ok": False,
+                    "error": format_code(code, err_msg),
+                    "trace_id": tid,
+                }
+            except Exception as e:
+                err_msg = str(e)
+                logger.error(f"[{tid}] Unexpected injection failure: {err_msg}")
+                return {
+                    "ok": False,
+                    "error": format_code(ErrorCode.R_INJECTION_FAILED, err_msg),
+                    "trace_id": tid,
+                }
     
     # Note: Connection check is done in _execute_via_bridge, avoiding duplication
     start_time = time.time()
@@ -255,7 +314,7 @@ async def execute_script_with_context(
         log_request_to_file(
             trace_id=tid,
             script=script,
-            includes=None,  # Includes added at higher level
+            includes=includes,
             result=response,
             duration_ms=duration_ms
         )
@@ -266,7 +325,19 @@ async def execute_script_with_context(
     response["trace_id"] = tid
     response["elapsed_ms"] = duration_ms
     
+    # Attach normalized injection metadata
+    if injection_meta:
+        response["injection"] = {
+            "includes_requested": injection_meta.get("includes_requested", []),
+            "includes_resolved": injection_meta.get("includes_resolved", []),
+            "prelude_hash": injection_meta.get("prelude_hash", ""),
+            "prelude_length": injection_meta.get("prelude_length", 0),
+            "library_versions": injection_meta.get("library_versions", {}),
+            "manifest_version": injection_meta.get("manifest_version", ""),
+        }
+    
     return response
+
 
 
 async def execute_op_batch_chunked(

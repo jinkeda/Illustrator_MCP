@@ -18,9 +18,11 @@ class WebSocketServer:
     Does not handle request logic, only transport.
     """
     
-    def __init__(self, port: int, on_message: Callable[[str], Awaitable[None]]):
+    def __init__(self, port: int, on_message: Callable[[str], Awaitable[None]],
+                 on_disconnect: Optional[Callable[[], Awaitable[None]]] = None):
         self.port = port
         self.on_message = on_message
+        self.on_disconnect = on_disconnect
         self.client: Optional[WebSocketServerProtocol] = None
         self.server = None
         self._shutdown_event: Optional[asyncio.Event] = None
@@ -107,7 +109,11 @@ class WebSocketServer:
         finally:
             if self.client == websocket:
                 self.client = None
-                # Let upper layer know if needed (could add on_disconnect callback)
+                if self.on_disconnect:
+                    try:
+                        await self.on_disconnect()
+                    except Exception as e:
+                        logger.error(f"on_disconnect callback error: {e}")
 
     async def send(self, message: str):
         """Send message to connected client."""

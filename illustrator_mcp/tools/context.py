@@ -2,13 +2,123 @@
 Context and state inspection tools for Adobe Illustrator.
 
 These tools help agents understand the current document state before writing scripts.
+Also registers MCP resources for static reference content (Issue #6).
 """
 
+import json
+import logging
 from pathlib import Path
+from typing import Dict, List
 
 from illustrator_mcp.shared import mcp
 from illustrator_mcp.tools.base import execute_jsx_tool
 from illustrator_mcp import templates
+
+logger = logging.getLogger(__name__)
+
+# ==================== Resource Paths ====================
+
+_RESOURCES_DIR = Path(__file__).parent.parent / "resources"
+_REFERENCE_PATH = _RESOURCES_DIR / "docs" / "extendscript_reference.md"
+_MANIFEST_PATH = _RESOURCES_DIR / "scripts" / "manifest.json"
+
+
+# ==================== Internal Helpers ====================
+
+def _load_manifest() -> dict:
+    """Load library manifest JSON."""
+    try:
+        return json.loads(_MANIFEST_PATH.read_text(encoding="utf-8"))
+    except (FileNotFoundError, json.JSONDecodeError) as e:
+        logger.warning(f"Failed to load manifest: {e}")
+        return {}
+
+
+def _generate_library_catalog() -> str:
+    """Generate a concise helper library catalog from manifest.json.
+
+    Output constraints (per reviewer feedback):
+    - 3-8 lines per library
+    - Minimal function signatures
+    - Always show version and deprecated status
+    """
+    manifest = _load_manifest()
+    libs = manifest.get("libraries", {})
+
+    if not libs:
+        return "# Helper Library Catalog\n\nNo libraries found in manifest."
+
+    # Categorize libraries
+    categories: Dict[str, List[str]] = {
+        "Geometry & Layout": [],
+        "SOC Operations": [],
+        "Data & Generation": [],
+        "Task Pipeline": [],
+        "Utilities": [],
+    }
+
+    for name, info in libs.items():
+        if info.get("deprecated"):
+            continue
+        if name.startswith("ops_"):
+            categories["SOC Operations"].append(name)
+        elif name in ("geometry", "layout", "selection", "presets"):
+            categories["Geometry & Layout"].append(name)
+        elif name in ("generative", "geo_ir", "session", "snapshot"):
+            categories["Data & Generation"].append(name)
+        elif name in ("task_pipeline", "polyfills", "item_ref", "targets",
+                       "contracts", "field_eval"):
+            categories["Task Pipeline"].append(name)
+        else:
+            categories["Utilities"].append(name)
+
+    lines = [
+        f"# Helper Library Catalog (manifest v{manifest.get('version', '?')})",
+        "",
+        "Available libraries for `includes` parameter in `execute_script`.",
+        "Dependencies are auto-resolved (transitive).",
+        "",
+    ]
+
+    for category, lib_names in categories.items():
+        if not lib_names:
+            continue
+        lines.append(f"## {category}")
+        lines.append("")
+        for name in sorted(lib_names):
+            info = libs[name]
+            version = info.get("version", "?")
+            desc = info.get("description", "")
+            exports = info.get("exports", [])
+            deps = info.get("dependencies", [])
+
+            lines.append(f"### `{name}` v{version}")
+            if desc:
+                lines.append(f"{desc}")
+            if exports:
+                # Show up to 8 exports, then truncate
+                shown = exports[:8]
+                suffix = f" (+{len(exports) - 8} more)" if len(exports) > 8 else ""
+                lines.append(f"**Exports:** `{'`, `'.join(shown)}`{suffix}")
+            if deps:
+                lines.append(f"**Deps:** `{'`, `'.join(deps)}`")
+            lines.append("")
+
+    return "\n".join(lines)
+
+
+# ==================== MCP Resources ====================
+
+@mcp.resource("illustrator://reference/extendscript")
+def extendscript_reference_resource() -> str:
+    """Static ExtendScript scripting reference (cached by client)."""
+    return _get_scripting_reference()
+
+
+@mcp.resource("illustrator://reference/libraries")
+def library_catalog_resource() -> str:
+    """Helper library catalog auto-generated from manifest.json."""
+    return _generate_library_catalog()
 
 
 @mcp.tool(
@@ -104,9 +214,8 @@ async def illustrator_get_app_info() -> str:
 
 def _get_scripting_reference() -> str:
     """Load ExtendScript reference from markdown file."""
-    ref_path = Path(__file__).parent.parent / "resources" / "docs" / "extendscript_reference.md"
     try:
-        return ref_path.read_text(encoding='utf-8')
+        return _REFERENCE_PATH.read_text(encoding='utf-8')
     except FileNotFoundError:
         return "Error: ExtendScript reference file not found."
 

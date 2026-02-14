@@ -54,6 +54,7 @@
         "task_executor": {
             "file": "task_executor.jsx",
             "version": "2.3.1",
+            "deprecated": true,
             "dependencies": [],
             "exports": [
                 "ErrorCodes",
@@ -86,7 +87,77 @@
                 "profile",
                 "formatTiming"
             ],
-            "description": "Task execution framework with error handling, retries, and structured reporting"
+            "description": "DEPRECATED: Use polyfills + item_ref + targets + task_pipeline. Kept for backward compat."
+        },
+        "polyfills": {
+            "file": "polyfills.jsx",
+            "version": "1.0.0",
+            "dependencies": [],
+            "exports": [],
+            "description": "ES3 Array polyfills and JSON polyfill. Must load first."
+        },
+        "item_ref": {
+            "file": "item_ref.jsx",
+            "version": "1.0.0",
+            "dependencies": [
+                "polyfills"
+            ],
+            "exports": [
+                "getLayerPath",
+                "getIndexPath",
+                "describeItem",
+                "describeItemV2",
+                "parseMcpTags",
+                "assignItemId",
+                "assignItemIdV2"
+            ],
+            "description": "Stable item references, tag parsing, and ID assignment"
+        },
+        "targets": {
+            "file": "targets.jsx",
+            "version": "1.0.0",
+            "dependencies": [
+                "polyfills"
+            ],
+            "exports": [
+                "sortItems",
+                "filterItems",
+                "isInsideClippingMask",
+                "selectionToArray",
+                "pageItemsToArray",
+                "findLayer",
+                "collectContainerItems",
+                "collectLayerItems",
+                "queryItems",
+                "collectTargets"
+            ],
+            "description": "Declarative target selection, sorting, and filtering"
+        },
+        "task_pipeline": {
+            "file": "task_pipeline.jsx",
+            "version": "1.0.0",
+            "dependencies": [
+                "polyfills",
+                "contracts",
+                "item_ref",
+                "targets"
+            ],
+            "exports": [
+                "makeError",
+                "safeExecute",
+                "buildReport",
+                "validatePayload",
+                "executeTask",
+                "executeTaskWithRetry",
+                "executeTaskWithRetrySafe",
+                "isRetryable",
+                "recordTaskHistory",
+                "getTaskHistory",
+                "clearTaskHistory",
+                "profile",
+                "formatTiming"
+            ],
+            "description": "Task execution pipeline with collect->compute->apply flow, retry, and history"
         },
         "presets": {
             "file": "presets.jsx",
@@ -125,6 +196,7 @@
         "op_schemas": {
             "file": "op_schemas.jsx",
             "version": "1.0.0",
+            "deprecated": true,
             "dependencies": [
                 "task_executor",
                 "field_eval"
@@ -135,12 +207,53 @@
                 "getOpSchema",
                 "listSchemaOps"
             ],
-            "description": "Parameter schemas for SOC op validation"
+            "description": "DEPRECATED: Use contracts instead. Kept for backward compat."
+        },
+        "contracts": {
+            "file": "contracts.jsx",
+            "version": "1.0.0",
+            "dependencies": [
+                "field_eval"
+            ],
+            "exports": [
+                "CONTRACTS_CHECKSUM",
+                "ErrorCodes",
+                "RETRYABLE_CODES",
+                "OP_PARAM_SCHEMAS",
+                "validateOpParams",
+                "getOpSchema",
+                "listSchemaOps",
+                "getValueType"
+            ],
+            "description": "Compiled operation contracts (SSOT: schemas/contracts.py). Includes ErrorCodes, schemas, and validators."
+        },
+        "heap": {
+            "file": "heap.jsx",
+            "version": "1.0.0",
+            "dependencies": [
+                "mcp_id"
+            ],
+            "exports": [
+                "heapBeginTxn",
+                "heapCommitTxn",
+                "heapRollbackTxn",
+                "heapRegister",
+                "heapTombstone",
+                "heapDelete",
+                "heapResolve",
+                "heapResolveMany",
+                "heapRebuildIndex",
+                "heapInvalidate",
+                "heapDiagnostics"
+            ],
+            "description": "Transaction-scoped ID index with begin/commit/rollback lifecycle"
         },
         "snapshot": {
             "file": "snapshot.jsx",
-            "version": "1.0.0",
-            "dependencies": [],
+            "version": "1.0.1",
+            "dependencies": [
+                "mcp_id"
+            ],
             "exports": [
                 "captureSnapshot",
                 "restoreSnapshot",
@@ -182,10 +295,12 @@
         },
         "ops_core": {
             "file": "ops_core.jsx",
-            "version": "1.0.0",
+            "version": "1.2.0",
             "dependencies": [
                 "task_executor",
-                "op_schemas",
+                "mcp_id",
+                "heap",
+                "contracts",
                 "snapshot",
                 "ops_journal",
                 "field_eval"
@@ -297,6 +412,18 @@
                 "irMapPoints"
             ],
             "description": "Geometry Intermediate Representation: versioned schema, factories, validation, and point mapping utilities"
+        },
+        "mcp_id": {
+            "file": "mcp_id.jsx",
+            "version": "1.0.0",
+            "dependencies": [],
+            "exports": [
+                "extractMcpId",
+                "setMcpId",
+                "removeIdFromNote",
+                "removeFromIdIndex"
+            ],
+            "description": "MCP ID utilities: extraction, assignment, note manipulation, and targeted index removal"
         },
         "generative": {
             "file": "generative.jsx",

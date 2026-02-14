@@ -198,27 +198,89 @@ class LibraryResolver:
         with self._file_lock:
             self._file_cache.clear()
 
+    def _resolve_dependency_order(self, includes: List[str]) -> List[str]:
+        """Resolve libraries with transitive dependencies, returning load order.
+
+        Returns the ordered list of library names (deps first, then requested).
+        This is the same resolution logic as resolve() but returns names, not code.
+        """
+        manifest = self._load_manifest()
+        if not manifest or not manifest.get("libraries"):
+            return list(includes)
+
+        resolved: List[str] = []
+        seen: set = set()
+
+        def walk(lib_name: str) -> None:
+            nonlocal manifest
+            if lib_name in seen:
+                return
+            if lib_name not in manifest["libraries"]:
+                self._manifest_cache = None
+                manifest = self._load_manifest()
+                if lib_name not in manifest["libraries"]:
+                    return  # skip unknown, resolve() will raise
+            lib = manifest["libraries"][lib_name]
+            for dep in lib.get("dependencies", []):
+                walk(dep)
+            seen.add(lib_name)
+            resolved.append(lib_name)
+
+        for lib_name in includes:
+            walk(lib_name)
+
+        return resolved
+
     def get_resolution_metadata(self, includes: List[str]) -> Dict[str, Any]:
-        """Get metadata for diagnostics including canonicalized includes and prelude hash.
+        """Get metadata for diagnostics including resolution details and versions.
 
         Args:
-            includes: List of library names to resolve.
+            includes: List of requested library names.
 
         Returns:
             Dict with:
-            - includes_canonical: Sorted list of library names
+            - includes_requested: Original requested libraries (sorted)
+            - includes_resolved: All libraries actually loaded (incl. transitive deps, load order)
+            - includes_canonical: Sorted list (backward compat alias for includes_requested)
             - prelude_hash: MD5 hash prefix (8 chars) of resolved code
+            - prelude_length: Length of resolved code in bytes
+            - library_versions: Dict of library name → version string
+            - manifest_version: Manifest version string
         """
         if not includes:
-            return {"includes_canonical": [], "prelude_hash": None}
+            return {
+                "includes_requested": [],
+                "includes_resolved": [],
+                "includes_canonical": [],
+                "prelude_hash": None,
+                "prelude_length": 0,
+                "library_versions": {},
+                "manifest_version": None,
+            }
 
-        canonical = sorted(includes)
+        requested = sorted(includes)
+        resolved_order = self._resolve_dependency_order(includes)
         code = self.resolve(includes)
-        prelude_hash = hashlib.md5(code.encode('utf-8')).hexdigest()[:8]
+        code_bytes = code.encode('utf-8')
+        prelude_hash = hashlib.md5(code_bytes).hexdigest()[:8]
+
+        # Extract versions from manifest
+        manifest = self._load_manifest()
+        libs = manifest.get("libraries", {})
+        library_versions = {
+            name: libs[name].get("version", "?")
+            for name in resolved_order
+            if name in libs
+        }
 
         return {
-            "includes_canonical": canonical,
-            "prelude_hash": prelude_hash
+            "includes_requested": requested,
+            "includes_resolved": resolved_order,
+            "includes_canonical": requested,  # backward compat
+            "prelude_hash": prelude_hash,
+            "prelude_length": len(code_bytes),
+            "library_versions": library_versions,
+            "manifest_version": manifest.get("version"),
         }
 
 
@@ -252,6 +314,10 @@ def get_injection_metadata(includes: List[str]) -> Dict[str, Any]:
     return get_resolver().get_resolution_metadata(includes)
 
 
+# Sentinel marker to detect already-injected scripts
+INJECTION_SENTINEL = "/* @ILLUSTRATOR_MCP_INJECTED */"
+
+
 def inject_libraries(script: str, includes: List[str]) -> str:
     """Prepend standard library code to a script using manifest-driven resolution.
     
@@ -260,13 +326,14 @@ def inject_libraries(script: str, includes: List[str]) -> str:
     - Deduplication (each library loaded exactly once)
     - Symbol collision detection
     - Library content caching
+    - Sentinel marker for double-injection prevention
     
     Args:
         script: The user's ExtendScript code.
         includes: List of library names (e.g., ["geometry", "selection", "layout"]).
     
     Returns:
-        Combined script with libraries prepended.
+        Combined script with libraries prepended and sentinel marker.
     
     Raises:
         ValueError: If a requested library file is not found or symbol collision detected.
@@ -275,4 +342,5 @@ def inject_libraries(script: str, includes: List[str]) -> str:
         return script
     
     library_code = get_resolver().resolve(includes)
-    return library_code + "\n\n// === User Script ===\n" + script
+    return INJECTION_SENTINEL + "\n" + library_code + "\n\n// === User Script ===\n" + script
+
