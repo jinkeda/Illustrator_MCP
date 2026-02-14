@@ -9,8 +9,8 @@
  * - Strict/continue error modes
  * - Context injection for pure ops
  * 
- * @requires task_executor (for ErrorCodes, makeError, collectTargets, etc.)
- * @requires mcp_id (for extractMcpId, removeFromIdIndex)
+ * @requires contracts (for ErrorCodes, makeError, validateOpParams)
+ * @requires mcp_id (for extractMcpId)
  * @requires geometry (for shape creation helpers)
  * @version 1.1.0
  */
@@ -18,7 +18,7 @@
 // ==================== Dependency Guard ====================
 
 if (typeof makeError !== "function" || typeof ErrorCodes === "undefined") {
-    throw new Error("ops_core.jsx requires task_executor.jsx (makeError=" + typeof makeError + ", ErrorCodes=" + typeof ErrorCodes + ")");
+    throw new Error("ops_core.jsx requires contracts.jsx (makeError=" + typeof makeError + ", ErrorCodes=" + typeof ErrorCodes + ")");
 }
 if (typeof extractMcpId !== "function") {
     throw new Error("ops_core.jsx requires mcp_id.jsx (extractMcpId=" + typeof extractMcpId + ")");
@@ -117,7 +117,7 @@ function validateOp(op, strict) {
     // Targets validation
     if (op.targets) {
         var targetType = op.targets.type;
-        var allowedTypes = ["id", "query", "selection", "layer", "all"];
+        var allowedTypes = ["id", "query", "selection", "layer", "all", "spatial", "compound"];
         var found = false;
         for (var i = 0; i < allowedTypes.length; i++) {
             if (allowedTypes[i] === targetType) { found = true; break; }
@@ -133,7 +133,7 @@ function validateOp(op, strict) {
 
     // Strict mode: reject unknown keys
     if (strict) {
-        var allowedKeys = ["task", "targets", "params", "comment", "id"];
+        var allowedKeys = ["task", "targets", "params", "comment", "id", "when", "unless"];
         for (var key in op) {
             if (op.hasOwnProperty(key)) {
                 var isAllowed = false;
@@ -154,109 +154,40 @@ function validateOp(op, strict) {
     return { ok: errors.length === 0, errors: errors };
 }
 
-// ==================== ID-Based Target Resolution ====================
-
-// Initialize global ID index cache (persists across batch calls)
-if (!$.global.mcpIdIndex) {
-    $.global.mcpIdIndex = { docName: null, index: {} };
-}
-
 /**
- * Invalidate the global ID index cache.
- * Called automatically at the end of every executeOpBatch.
- *
- * IMPORTANT: You MUST call this manually after any DOM changes
- * made outside executeOpBatch (e.g., direct item.remove(),
- * layer manipulation, or test cleanup). Failure to do so causes
- * target resolution to use a stale index, silently targeting
- * wrong or removed items.
+ * Generate a cache key for validation deduplication (P3).
+ * Two ops with the same task, param keys, param types, and enum values
+ * are validation-equivalent — no need to re-run validateOp.
+ * @param {Object} op - Operation: {task, params?}
+ * @returns {string} Shape key
  */
-function invalidateIdIndex() {
-    $.global.mcpIdIndex = { docName: null, index: {} };
-}
-
-/**
- * Register a new ID in the global index (for newly created elements).
- * @param {string} id - Element ID
- * @param {PageItem} item - The element
- */
-function registerIdInIndex(id, item) {
-    if ($.global.mcpIdIndex && $.global.mcpIdIndex.index) {
-        $.global.mcpIdIndex.index[id] = item;
+function validationShapeKey(op) {
+    var key = op.task;
+    if (!op.params) return key + "::";
+    var keys = [];
+    for (var k in op.params) {
+        if (op.params.hasOwnProperty(k)) keys.push(k);
     }
-}
-
-/**
- * Build ID index for O(1) lookups.
- * Uses $.global for persistence across batches within the same session.
- * Automatically invalidates if document changes.
- * @param {Document} doc - Active document
- * @param {Object} ctx - Batch context (for diagnostics)
- * @returns {Object} ID index {id: item}
- */
-function buildIDIndex(doc, ctx) {
-    // Check if we already have a valid global index for this document
-    var docName = doc.name;
-    if ($.global.mcpIdIndex.docName === docName && $.global.mcpIdIndex.index) {
-        ctx.diagnostics.idIndexCacheHit = true;
-        // Also store in ctx for backward compatibility
-        ctx.idIndex = $.global.mcpIdIndex.index;
-        return ctx.idIndex;
+    keys.sort();
+    for (var i = 0; i < keys.length; i++) {
+        key += "|" + keys[i] + ":" + getValueType(op.params[keys[i]]);
     }
-
-    // Need to rebuild index
-    var index = {};
-    var maxDepth = 100; // Prevent infinite recursion
-
-    function scan(container, depth) {
-        if (depth > maxDepth) return;
-        if (!container || !container.pageItems) return;
-
-        for (var i = 0; i < container.pageItems.length; i++) {
-            var item = container.pageItems[i];
-            try {
-                if (item.note) {
-                    var id = extractMcpId(item.note);
-                    if (id) {
-                        index[id] = item;
-                    }
-                }
-            } catch (e) { }
-            if (item.typename === "GroupItem") {
-                scan(item, depth + 1);
+    // Include enum field values (these affect validation outcome)
+    var schema = (typeof getOpSchema === "function") ? getOpSchema(op.task) : null;
+    if (schema && schema.enumValues) {
+        for (var ek in schema.enumValues) {
+            if (schema.enumValues.hasOwnProperty(ek) && op.params[ek] !== undefined) {
+                key += "=" + ek + ":" + op.params[ek];
             }
         }
     }
-
-    for (var i = 0; i < doc.layers.length; i++) {
-        scan(doc.layers[i], 0);
-    }
-
-    // Store in global cache
-    $.global.mcpIdIndex = { docName: docName, index: index };
-    ctx.idIndex = index;
-    ctx.diagnostics.idScans++;
-    ctx.diagnostics.idIndexCacheHit = false;
-    return index;
+    return key;
 }
 
-/**
- * Resolve targets by ID using index (O(1) per ID)
- * @param {Document} doc - Active document
- * @param {Array<string>} ids - Array of item IDs to find
- * @param {Object} ctx - Batch context (for index)
- * @returns {Array<PageItem>} Found items
- */
-function resolveById(doc, ids, ctx) {
-    var index = buildIDIndex(doc, ctx);
-    var items = [];
-    for (var i = 0; i < ids.length; i++) {
-        if (index[ids[i]]) {
-            items.push(index[ids[i]]);
-        }
-    }
-    return items;
-}
+// ==================== ID-Based Target Resolution ====================
+// Delegates to heap.jsx for transactional, identity-verified resolution.
+// The heap index ($.global.mcpHeap) persists across batches/chunks.
+// Transaction lifecycle (begin/commit/rollback) is managed in executeOpBatch.
 
 /**
  * Extended target resolution with ID support
@@ -278,7 +209,7 @@ function resolveTargets(doc, targets, ctx) {
         }
     }
 
-    // ID-based targeting (stable) - uses index
+    // ID-based targeting (stable) - uses heap for identity-verified O(1) resolution
     if (targets.type === "id") {
         var ids = targets.ids || [];
         var cacheKey = "id:" + ids.join(",");
@@ -287,7 +218,7 @@ function resolveTargets(doc, targets, ctx) {
             return ctx.cache[cacheKey];
         }
         ctx.diagnostics.cacheMisses++;
-        var items = resolveById(doc, ids, ctx); // Pass ctx for index
+        var items = heapResolveMany(doc, ids);
         ctx.cache[cacheKey] = items;
         return items;
     }
@@ -303,6 +234,483 @@ function resolveTargets(doc, targets, ctx) {
     var items = collectTargets(doc, targets);
     ctx.cache[cacheKey] = items;
     return items;
+}
+
+// ==================== Rollback Helper (A2) ====================
+
+/**
+ * Perform batch rollback: delete created items, restore snapshot or undo.
+ * Extracted from executeOpBatch to eliminate duplicated rollback blocks.
+ *
+ * @param {Document} doc - Active document
+ * @param {Object|null} preSnapshot - Pre-execution snapshot (or null)
+ * @param {Array} createdIds - MCP IDs of items created during batch
+ * @param {number} undoCount - Number of mutating ops to undo (fallback)
+ * @param {boolean} useSnapshot - Whether snapshot-based restore is enabled
+ * @param {Array|null} trace - Trace log array (or null)
+ * @returns {number} Number of items rolled back
+ */
+function rollbackBatch(doc, preSnapshot, createdIds, undoCount, useSnapshot, trace) {
+    var rolledBack = 0;
+
+    if (useSnapshot && preSnapshot && typeof restoreSnapshot === "function") {
+        if (trace) trace.push("[ROLLBACK] Restoring from snapshot");
+
+        // Delete created items first (they weren't in the snapshot)
+        var createdDeleted = 0;
+        if (createdIds.length > 0) {
+            var cidSet = {};
+            for (var ci = 0; ci < createdIds.length; ci++) cidSet[createdIds[ci]] = true;
+            for (var lx = 0; lx < doc.layers.length; lx++) {
+                for (var px = doc.layers[lx].pageItems.length - 1; px >= 0; px--) {
+                    var pi = doc.layers[lx].pageItems[px];
+                    var pm = (pi.note || "").match(/@mcp:id=([^\s]+)/);
+                    if (pm && cidSet[pm[1]]) {
+                        try { pi.remove(); createdDeleted++; } catch (e) {
+                            if (trace) trace.push("[ROLLBACK] Delete failed: " + e.message);
+                        }
+                    }
+                }
+            }
+            heapRollbackTxn();
+        }
+
+        // Restore pre-existing items from snapshot
+        try {
+            var rr = restoreSnapshot(doc, preSnapshot, { geometry: true, style: true });
+            rolledBack = rr.restored + createdDeleted;
+            if (trace) trace.push("[ROLLBACK] Restored " + rr.restored + ", deleted " + createdDeleted);
+        } catch (e) {
+            if (trace) trace.push("[ROLLBACK ERROR] " + e.message);
+        }
+    } else if (undoCount > 0) {
+        // Fallback to undo-based rollback
+        if (trace) trace.push("[ROLLBACK] Undoing " + undoCount + " ops");
+        for (var u = 0; u < undoCount; u++) {
+            try { app.executeMenuCommand("undo"); rolledBack++; } catch (e) { }
+        }
+    }
+
+    return rolledBack;
+}
+
+// ==================== Guard Evaluation (C2) ====================
+
+/**
+ * Read a property from a PageItem using the bounds-derived allowlist.
+ * @param {PageItem} item
+ * @param {string} property
+ * @returns {Object} Success: {ok: true, value: *}. Failure: {ok: false, error: {code: string, message: string, stage: string}}.
+ */
+function readGuardProperty(item, property) {
+    // Check that item has geometricBounds (PageItem-like)
+    if (typeof item.geometricBounds === "undefined") {
+        return makeError(ErrorCodes.G_UNKNOWN_PROPERTY,
+            "Guard target has no geometricBounds (not a PageItem)", "guard");
+    }
+    var b = item.geometricBounds; // [left, top, right, bottom]
+    switch (property) {
+        case "width": return { ok: true, value: b[2] - b[0] };
+        case "height": return { ok: true, value: b[1] - b[3] };
+        case "left": return { ok: true, value: b[0] };
+        case "top": return { ok: true, value: b[1] };
+        case "opacity": return { ok: true, value: item.opacity };
+        case "name": return { ok: true, value: item.name };
+        case "locked": return { ok: true, value: item.locked };
+        case "typename": return { ok: true, value: item.typename };
+        default:
+            return makeError(ErrorCodes.G_UNKNOWN_PROPERTY,
+                "Unknown guard property '" + property + "'. Allowed: width, height, left, top, opacity, name, locked, typename",
+                "guard");
+    }
+}
+
+/**
+ * Evaluate a single comparator against a value.
+ * @param {*} value - The actual property value
+ * @param {string} comparator - eq/neq/gt/gte/lt/lte/contains/matches
+ * @param {*} expected - The expected value from the guard
+ * @returns {{ok: boolean, result: boolean, error: Object}}
+ */
+function evalComparator(value, comparator, expected) {
+    // Numeric comparators require numeric value
+    var numericOps = { gt: true, gte: true, lt: true, lte: true };
+    if (numericOps[comparator]) {
+        if (typeof value !== "number" || typeof expected !== "number") {
+            return makeError(ErrorCodes.G_INVALID_COMPARATOR,
+                "Comparator '" + comparator + "' requires numeric values, got " + typeof value + " vs " + typeof expected,
+                "guard");
+        }
+    }
+    switch (comparator) {
+        case "eq": return { ok: true, result: value === expected };
+        case "neq": return { ok: true, result: value !== expected };
+        case "gt": return { ok: true, result: value > expected };
+        case "gte": return { ok: true, result: value >= expected };
+        case "lt": return { ok: true, result: value < expected };
+        case "lte": return { ok: true, result: value <= expected };
+        case "contains":
+            if (typeof value !== "string") {
+                return makeError(ErrorCodes.G_INVALID_COMPARATOR,
+                    "'contains' requires string value, got " + typeof value, "guard");
+            }
+            return { ok: true, result: value.indexOf(String(expected)) !== -1 };
+        case "matches":
+            if (typeof value !== "string") {
+                return makeError(ErrorCodes.G_INVALID_COMPARATOR,
+                    "'matches' requires string value, got " + typeof value, "guard");
+            }
+            try {
+                var rx = new RegExp(String(expected));
+                return { ok: true, result: rx.test(value) };
+            } catch (e) {
+                return makeError(ErrorCodes.G_INVALID_COMPARATOR,
+                    "Invalid regex pattern: " + expected, "guard");
+            }
+        default:
+            return makeError(ErrorCodes.G_INVALID_COMPARATOR,
+                "Unknown comparator '" + comparator + "'. Allowed: eq, neq, gt, gte, lt, lte, contains, matches",
+                "guard");
+    }
+}
+
+/**
+ * Validate guard structure and extract comparator + expected value.
+ * @param {Object} guard - The when/unless guard object
+ * @returns {{ok: boolean, property: string, comparator: string, expected: *, error: Object}}
+ */
+function validateGuard(guard) {
+    if (!guard || typeof guard !== "object") {
+        return makeError(ErrorCodes.G_MALFORMED, "Guard must be an object", "guard");
+    }
+    if (!guard.property || typeof guard.property !== "string") {
+        return makeError(ErrorCodes.G_MALFORMED, "Guard missing 'property' string", "guard");
+    }
+    // Find the comparator key (the key that isn't 'property')
+    var COMPARATORS = { eq: 1, neq: 1, gt: 1, gte: 1, lt: 1, lte: 1, contains: 1, matches: 1 };
+    var comparator = null;
+    var expected = undefined;
+    for (var k in guard) {
+        if (guard.hasOwnProperty(k) && k !== "property" && COMPARATORS[k]) {
+            comparator = k;
+            expected = guard[k];
+            break;
+        }
+    }
+    if (!comparator) {
+        return makeError(ErrorCodes.G_MALFORMED,
+            "Guard missing comparator. Use one of: eq, neq, gt, gte, lt, lte, contains, matches",
+            "guard");
+    }
+    return { ok: true, property: guard.property, comparator: comparator, expected: expected };
+}
+
+/**
+ * Filter targets by a when/unless guard. Per-target evaluation.
+ * @param {Array} targets - Resolved PageItems
+ * @param {Object} guard - The guard predicate
+ * @param {boolean} isUnless - true for unless (invert), false for when
+ * @returns {{ok: boolean, targets: Array, error: Object}}
+ */
+function filterByGuard(targets, guard, isUnless) {
+    var parsed = validateGuard(guard);
+    if (!parsed.ok) return parsed;
+
+    var filtered = [];
+    for (var i = 0; i < targets.length; i++) {
+        var propResult = readGuardProperty(targets[i], parsed.property);
+        if (!propResult.ok) return propResult;  // Hard error for non-PageItem or unknown prop
+
+        var cmpResult = evalComparator(propResult.value, parsed.comparator, parsed.expected);
+        if (!cmpResult.ok) return cmpResult;  // Hard error for type mismatch
+
+        // when: keep if true; unless: keep if false
+        var keep = isUnless ? !cmpResult.result : cmpResult.result;
+        if (keep) filtered.push(targets[i]);
+    }
+    return { ok: true, targets: filtered };
+}
+
+// ==================== Sub-Op Execution (C1) ====================
+
+/**
+ * Execute sub-ops within an existing context. Does NOT start/commit heap txn.
+ * Used by executeOpBatch for the main loop AND by compound handler for sub-ops.
+ *
+ * @param {Array} ops - Operations to execute
+ * @param {Object} ctx - Existing execution context (inherited)
+ * @param {Object} mode - Execution mode:
+ *   mode.strict    — stop on first error
+ *   mode.rollback  — undo completed ops on failure (requires strict)
+ *   mode.snapshot  — use snapshot-based rollback (preferred over undo)
+ *   mode.doc       — active document
+ *   mode.preSnapshot — pre-captured snapshot (if any)
+ *   mode.trace     — trace array (or null)
+ *   mode.chunkSize — progress chunk size (0 = disabled)
+ *   mode.onProgress — progress callback
+ * @returns {Object} {ok, results[], createdIds[], passed, failed, undoCount, rolledBackCount}
+ */
+function executeSubOps(ops, ctx, mode) {
+    var doc = mode.doc;
+    var strict = mode.strict || false;
+    var rollback = mode.rollback || false;
+    var useSnapshot = mode.snapshot || false;
+    var trace = mode.trace || null;
+    var chunkSize = mode.chunkSize || 0;
+    var onProgress = mode.onProgress || null;
+    var preSnapshot = mode.preSnapshot || null;
+
+    var results = [];
+    var passed = 0;
+    var failed = 0;
+    var undoCount = 0;
+    var createdIds = [];
+    var rolledBackCount = 0;
+
+    var MUTATING_OPS = {
+        "element_create": true, "element_modify": true, "element_delete": true,
+        "style_set_fill": true, "style_set_stroke": true, "style_set_opacity": true,
+        "style_remove_fill": true, "style_remove_stroke": true,
+        "layer_create": true, "layer_delete": true, "layer_lock": true, "layer_visible": true,
+        "group_create": true, "group_ungroup": true,
+        "zorder_front": true, "zorder_back": true, "zorder_forward": true, "zorder_backward": true,
+        "text_create": true, "text_set_content": true, "text_set_style": true,
+        "align_horizontal": true, "align_vertical": true,
+        "distribute_horizontal": true, "distribute_vertical": true,
+        "compound": true
+    };
+
+    var chunkIndex = 0;
+
+    for (var i = 0; i < ops.length; i++) {
+        var op = ops[i];
+        var t0 = ctx.clock();
+
+        if (trace) trace.push("[OP " + i + "] " + op.task);
+
+        // JIT validation (P3): validate just before execution, with shape dedup
+        var shapeKey = validationShapeKey(op);
+        if (!ctx.validationCache[shapeKey]) {
+            ctx.validationCache[shapeKey] = validateOp(op, mode.strictSchema);
+            ctx.diagnostics.validationsRun++;
+        } else {
+            ctx.diagnostics.validationsSkipped++;
+        }
+        var cachedValidation = ctx.validationCache[shapeKey];
+        if (!cachedValidation.ok) {
+            results.push({
+                index: i,
+                task: op.task,
+                ok: false,
+                duration_ms: ctx.clock() - t0,
+                targets_resolved: 0,
+                id: op.params ? op.params.id : null,
+                data: null,
+                warnings: [],
+                error: cachedValidation.errors[0]
+            });
+            failed++;
+            if (strict) break;
+            continue;
+        }
+
+        var handler = OP_HANDLERS[op.task];
+        var targets = op.targets ? resolveTargets(doc, op.targets, ctx) : [];
+
+        // C2: Guard evaluation — filter targets by when/unless predicates
+        var guardSkipped = false;
+        if (op.when || op.unless) {
+            if (op.when && op.unless) {
+                opResult.warnings = opResult.warnings || [];
+                opResult.warnings.push("Op has both 'when' and 'unless'; 'when' takes precedence.");
+            }
+            var guard = op.when || op.unless;
+            var isUnless = !!op.unless;
+            var guardResult = filterByGuard(targets, guard, isUnless);
+            if (!guardResult.ok) {
+                // Guard error (G001/G002/G003) — treat as op failure
+                results.push({
+                    index: i,
+                    task: op.task,
+                    ok: false,
+                    duration_ms: ctx.clock() - t0,
+                    targets_resolved: targets.length,
+                    id: op.params ? op.params.id : null,
+                    data: null,
+                    warnings: [],
+                    error: guardResult.error
+                });
+                failed++;
+                if (strict) break;
+                continue;
+            }
+            targets = guardResult.targets;
+            if (targets.length === 0) {
+                // All targets filtered out — skip op
+                results.push({
+                    index: i,
+                    task: op.task,
+                    ok: true,
+                    skipped: true,
+                    duration_ms: ctx.clock() - t0,
+                    targets_resolved: 0,
+                    id: op.params ? op.params.id : null,
+                    data: { reason: "guard_filtered" },
+                    warnings: [],
+                    error: null
+                });
+                passed++;
+                continue;
+            }
+        }
+
+        var opResult = {
+            index: i,
+            task: op.task,
+            ok: false,
+            duration_ms: 0,
+            targets_resolved: targets.length,
+            id: op.params ? op.params.id : null,
+            data: null,
+            warnings: [],
+            error: null
+        };
+
+        try {
+            // P3: Resolve field descriptors in params before handler sees them
+            var resolvedParams = op.params || {};
+            var handlerResult;
+            var hasFieldDescs = typeof resolveFields === "function" &&
+                typeof containsFields === "function" && containsFields(resolvedParams);
+
+            if (hasFieldDescs && targets.length > 0) {
+                // Fan-out: call handler once per target with per-target resolved params
+                var fanOk = true;
+                var fanData = [];
+                var fanWarnings = [];
+                var fanId = null;
+                var fanError = null;
+                for (var t = 0; t < targets.length; t++) {
+                    var perTargetParams = resolveFields(resolvedParams, targets[t], t, targets.length, ctx);
+                    var singleResult = handler(perTargetParams, [targets[t]], ctx);
+                    if (singleResult && typeof singleResult === "object") {
+                        if (singleResult.ok === false) {
+                            fanOk = false;
+                            if (!fanError && singleResult.error) fanError = singleResult.error;
+                        }
+                        fanData.push(singleResult.data || singleResult);
+                        if (singleResult.warnings) fanWarnings = fanWarnings.concat(singleResult.warnings);
+                        if (singleResult.id && !fanId) fanId = singleResult.id;
+                    } else {
+                        fanData.push(singleResult);
+                    }
+                }
+                handlerResult = { ok: fanOk, data: { perTarget: fanData, count: targets.length }, warnings: fanWarnings, id: fanId, error: fanError };
+            } else {
+                if (typeof resolveFields === "function") {
+                    resolvedParams = resolveFields(resolvedParams, targets[0] || null, 0, targets.length || 1, ctx);
+                }
+                handlerResult = handler(resolvedParams, targets, ctx);
+            }
+
+            // Normalize handler result
+            if (handlerResult && typeof handlerResult === "object") {
+                opResult.ok = handlerResult.ok !== false;
+                if (!opResult.ok) {
+                    opResult.error = handlerResult.error || handlerResult;
+                    if (opResult.error && opResult.error.ok === false && opResult.error.error) {
+                        opResult.error = opResult.error.error;
+                    }
+                    if (!opResult.error && handlerResult.message) {
+                        opResult.error = { code: "R_UNSTRUCTURED", message: handlerResult.message, stage: "apply" };
+                    }
+                    opResult.data = null;
+                } else {
+                    opResult.data = handlerResult.data || handlerResult;
+                    opResult.warnings = handlerResult.warnings || [];
+                    opResult.id = handlerResult.id || opResult.id;
+                }
+            } else {
+                opResult.ok = true;
+                opResult.data = handlerResult;
+            }
+
+            if (opResult.ok) {
+                passed++;
+                var _batchIds = opResult.data && (opResult.data.ids || opResult.data.createdIds);
+                if (_batchIds && typeof _batchIds.length === "number" && _batchIds.length > 0) {
+                    for (var mi = 0; mi < _batchIds.length; mi++) createdIds.push(_batchIds[mi]);
+                } else if (opResult.id) {
+                    createdIds.push(opResult.id);
+                }
+                if (MUTATING_OPS[op.task]) {
+                    undoCount++;
+                }
+            } else {
+                failed++;
+                if (strict) {
+                    opResult.duration_ms = ctx.clock() - t0;
+                    results.push(opResult);
+                    if (rollback) {
+                        rolledBackCount = rollbackBatch(doc, preSnapshot, createdIds, undoCount, useSnapshot, trace);
+                    }
+                    break;
+                }
+            }
+
+        } catch (e) {
+            opResult.ok = false;
+            opResult.error = makeError(
+                ErrorCodes.R_APPLY_FAILED,
+                e.message,
+                "apply",
+                null,
+                { line: e.line || null, task: op.task, opIndex: i }
+            ).error;
+            failed++;
+
+            if (strict) {
+                opResult.duration_ms = ctx.clock() - t0;
+                results.push(opResult);
+                if (rollback) {
+                    rolledBackCount = rollbackBatch(doc, preSnapshot, createdIds, undoCount, useSnapshot, trace);
+                }
+                break;
+            }
+        }
+
+        opResult.duration_ms = ctx.clock() - t0;
+        results.push(opResult);
+
+        // Progress callback
+        if (chunkSize > 0 && onProgress && results.length % chunkSize === 0) {
+            var chunkReport = {
+                chunkIndex: chunkIndex++,
+                opsCompleted: results.length,
+                opsTotal: ops.length,
+                passed: passed,
+                failed: failed,
+                lastOp: op.task,
+                percentComplete: Math.round((results.length / ops.length) * 100)
+            };
+            try {
+                onProgress(chunkReport);
+            } catch (cbErr) {
+                if (trace) trace.push("[PROGRESS ERROR] " + cbErr.message);
+            }
+            if (trace) trace.push("[CHUNK " + (chunkIndex - 1) + "] " + results.length + "/" + ops.length);
+        }
+    }
+
+    return {
+        ok: failed === 0,
+        results: results,
+        createdIds: createdIds,
+        passed: passed,
+        failed: failed,
+        undoCount: undoCount,
+        rolledBackCount: rolledBackCount
+    };
 }
 
 // ==================== Batch Execution ====================
@@ -373,16 +781,23 @@ function executeOpBatch(ops, options) {
         app: app,
         clock: options.clock || function () { return new Date().getTime(); },
         cache: {},
+        validationCache: {},
         options: options,
         space: options.space || { units: "pt", origin: "document", yAxis: "down" },
         // Diagnostics counters
         diagnostics: {
             cacheHits: 0,
             cacheMisses: 0,
-            idScans: 0,
+            validationsRun: 0,
+            validationsSkipped: 0,
             selectionWarnings: 0
-        }
+        },
+        compoundDepth: 0
     };
+
+    // Begin heap transaction for this batch
+    var heapBatchId = generateUUID();
+    heapBeginTxn(heapBatchId);
 
     // === RECOMPUTE GATE (P6) ===
     // Requires explicit confirmation + takes snapshot before clearing
@@ -453,29 +868,8 @@ function executeOpBatch(ops, options) {
         return replayResult;
     }
 
-    // === VALIDATION PHASE ===
-    if (trace) trace.push("[VALIDATE] Checking " + ops.length + " ops");
-
-    var validationErrors = [];
-    for (var i = 0; i < ops.length; i++) {
-        var validation = validateOp(ops[i], options.strictSchema);
-        if (!validation.ok) {
-            validationErrors = validationErrors.concat(validation.errors);
-            if (strict) break;
-        }
-    }
-
-    if (validationErrors.length > 0) {
-        return {
-            ok: false,
-            errors: validationErrors,
-            ops: [],
-            stats: { total: ops.length, passed: 0, failed: validationErrors.length, failedAtIndex: 0 }
-        };
-    }
-
-    // === EXECUTION PHASE ===
-    if (trace) trace.push("[EXECUTE] Running " + ops.length + " ops");
+    // === EXECUTION PHASE (with JIT validation, P3) ===
+    if (trace) trace.push("[EXECUTE] Running " + ops.length + " ops (JIT validation)");
 
     // Capture snapshot before execution if enabled (for snapshot-based rollback)
     if (useSnapshot && rollback && typeof captureSnapshot === "function") {
@@ -487,271 +881,30 @@ function executeOpBatch(ops, options) {
         }
     }
 
-    var results = [];
-    var passed = 0;
-    var failed = 0;
+    // C1: Delegate to executeSubOps — single source of truth for per-op execution
+    var subResult = executeSubOps(ops, ctx, {
+        strict: strict,
+        rollback: rollback,
+        snapshot: useSnapshot,
+        strictSchema: options.strictSchema,
+        doc: doc,
+        preSnapshot: preSnapshot,
+        trace: trace,
+        chunkSize: chunkSize,
+        onProgress: onProgress
+    });
 
-    // Rollback tracking: count mutating ops that complete successfully
-    var undoCount = 0;
-    var MUTATING_OPS = {
-        "element_create": true, "element_modify": true, "element_delete": true,
-        "style_set_fill": true, "style_set_stroke": true, "style_set_opacity": true,
-        "style_remove_fill": true, "style_remove_stroke": true,
-        "layer_create": true, "layer_delete": true, "layer_lock": true, "layer_visible": true,
-        "group_create": true, "group_ungroup": true,
-        "zorder_front": true, "zorder_back": true, "zorder_forward": true, "zorder_backward": true,
-        "text_create": true, "text_set_content": true, "text_set_style": true,
-        "align_horizontal": true, "align_vertical": true,
-        "distribute_horizontal": true, "distribute_vertical": true
-    };
-
-    // Progress tracking
-    var chunkIndex = 0;
-    var rolledBackCount = 0;
-
-    for (var i = 0; i < ops.length; i++) {
-        var op = ops[i];
-        var t0 = ctx.clock();
-
-        if (trace) trace.push("[OP " + i + "] " + op.task);
-
-        var handler = OP_HANDLERS[op.task];
-        var targets = op.targets ? resolveTargets(doc, op.targets, ctx) : [];
-
-        var opResult = {
-            index: i,
-            task: op.task,
-            ok: false,
-            duration_ms: 0,
-            targets_resolved: targets.length,
-            id: op.params ? op.params.id : null,
-            data: null,
-            warnings: [],
-            error: null
-        };
-
-        try {
-            // P3: Resolve field descriptors in params before handler sees them
-            var resolvedParams = op.params || {};
-            var handlerResult;
-            var hasFieldDescs = typeof resolveFields === "function" &&
-                typeof containsFields === "function" && containsFields(resolvedParams);
-
-            if (hasFieldDescs && targets.length > 0) {
-                // Fan-out: call handler once per target with per-target resolved params
-                var fanOk = true;
-                var fanData = [];
-                var fanWarnings = [];
-                var fanId = null;
-                var fanError = null;  // Capture first error for propagation
-                for (var t = 0; t < targets.length; t++) {
-                    var perTargetParams = resolveFields(resolvedParams, targets[t], t, targets.length, ctx);
-                    var singleResult = handler(perTargetParams, [targets[t]], ctx);
-                    if (singleResult && typeof singleResult === "object") {
-                        if (singleResult.ok === false) {
-                            fanOk = false;
-                            // Capture nested error from makeError shape
-                            if (!fanError && singleResult.error) fanError = singleResult.error;
-                        }
-                        fanData.push(singleResult.data || singleResult);
-                        if (singleResult.warnings) fanWarnings = fanWarnings.concat(singleResult.warnings);
-                        if (singleResult.id && !fanId) fanId = singleResult.id;
-                    } else {
-                        fanData.push(singleResult);
-                    }
-                }
-                handlerResult = { ok: fanOk, data: { perTarget: fanData, count: targets.length }, warnings: fanWarnings, id: fanId, error: fanError };
-            } else {
-                if (typeof resolveFields === "function") {
-                    resolvedParams = resolveFields(resolvedParams, targets[0] || null, 0, targets.length || 1, ctx);
-                }
-                handlerResult = handler(resolvedParams, targets, ctx);
-            }
-
-            // Normalize handler result
-            if (handlerResult && typeof handlerResult === "object") {
-                opResult.ok = handlerResult.ok !== false;
-                if (!opResult.ok) {
-                    // Extract nested error (makeError returns {ok:false, error:{...}})
-                    opResult.error = handlerResult.error || handlerResult;
-                    // Defensive: unwrap double-nested makeError (Pattern B regression guard)
-                    if (opResult.error && opResult.error.ok === false && opResult.error.error) {
-                        opResult.error = opResult.error.error;
-                    }
-                    // Defensive: synthesize error from ad-hoc message (Pattern C regression guard)
-                    if (!opResult.error && handlerResult.message) {
-                        opResult.error = { code: "R_UNSTRUCTURED", message: handlerResult.message, stage: "apply" };
-                    }
-                    opResult.data = null;
-                } else {
-                    opResult.data = handlerResult.data || handlerResult;
-                    opResult.warnings = handlerResult.warnings || [];
-                    opResult.id = handlerResult.id || opResult.id;
-                }
-            } else {
-                opResult.ok = true;
-                opResult.data = handlerResult;
-            }
-
-            if (opResult.ok) {
-                passed++;
-                // Track created element IDs — support all return shapes
-                var _batchIds = opResult.data && (opResult.data.ids || opResult.data.createdIds);
-                if (_batchIds && typeof _batchIds.length === "number" && _batchIds.length > 0) {
-                    // Multi-create ops (element_create_multi) return data.ids[]
-                    for (var mi = 0; mi < _batchIds.length; mi++) createdIds.push(_batchIds[mi]);
-                } else if (opResult.id) {
-                    // Singular create ops (element_create, layer_create)
-                    createdIds.push(opResult.id);
-                }
-                // Track successful mutating ops for rollback
-                if (MUTATING_OPS[op.task]) {
-                    undoCount++;
-                }
-            } else {
-                failed++;
-
-                // Strict + rollback for non-exception failures (e.g. assert_exists returning ok:false)
-                if (strict) {
-                    opResult.duration_ms = ctx.clock() - t0;
-                    results.push(opResult);
-
-                    if (rollback) {
-                        if (useSnapshot && preSnapshot && typeof restoreSnapshot === "function") {
-                            if (trace) trace.push("[ROLLBACK] Restoring from snapshot (handler fail)");
-                            var createdDeleted2 = 0;
-                            if (createdIds.length > 0) {
-                                // Build lookup set for created IDs
-                                var cidSet = {};
-                                for (var ci2 = 0; ci2 < createdIds.length; ci2++) cidSet[createdIds[ci2]] = true;
-                                // Iterate layers to find and delete created items by note
-                                for (var lx = 0; lx < doc.layers.length; lx++) {
-                                    for (var px = doc.layers[lx].pageItems.length - 1; px >= 0; px--) {
-                                        var pi = doc.layers[lx].pageItems[px];
-                                        var pn = pi.note || '';
-                                        var pm = pn.match(/@mcp:id=([^\s]+)/);
-                                        if (pm && cidSet[pm[1]]) {
-                                            try { pi.remove(); createdDeleted2++; } catch (d2) { }
-                                        }
-                                    }
-                                }
-                                if (typeof invalidateIdIndex === "function") invalidateIdIndex();
-                            }
-                            try {
-                                var rr = restoreSnapshot(doc, preSnapshot, { geometry: true, style: true });
-                                rolledBackCount = rr.restored + createdDeleted2;
-                            } catch (re) { }
-                        } else if (undoCount > 0) {
-                            if (trace) trace.push("[ROLLBACK] Undoing " + undoCount + " ops (handler fail)");
-                            for (var u2 = 0; u2 < undoCount; u2++) {
-                                try { app.executeMenuCommand('undo'); rolledBackCount++; } catch (ue) { }
-                            }
-                        }
-                    }
-                    break;
-                }
-            }
-
-        } catch (e) {
-            opResult.ok = false;
-            opResult.error = makeError(
-                ErrorCodes.R_APPLY_FAILED,
-                e.message,
-                "apply",
-                null,
-                { line: e.line || null, task: op.task, opIndex: i }
-            ).error;
-            failed++;
-
-            if (strict) {
-                opResult.duration_ms = ctx.clock() - t0;
-                results.push(opResult);
-
-                // Rollback on failure if enabled
-                if (rollback) {
-                    // Prefer snapshot-based restore if captured
-                    if (useSnapshot && preSnapshot && typeof restoreSnapshot === "function") {
-                        if (trace) trace.push("[ROLLBACK] Restoring from snapshot");
-
-                        // First, delete any items created during this batch (they weren't in the snapshot)
-                        var createdDeleted = 0;
-                        if (createdIds.length > 0) {
-                            if (trace) trace.push("[ROLLBACK] Deleting " + createdIds.length + " created items");
-                            // Build lookup set for created IDs
-                            var cidSet2 = {};
-                            for (var ci = 0; ci < createdIds.length; ci++) cidSet2[createdIds[ci]] = true;
-                            // Iterate layers to find and delete created items by note
-                            for (var lx2 = 0; lx2 < doc.layers.length; lx2++) {
-                                for (var px2 = doc.layers[lx2].pageItems.length - 1; px2 >= 0; px2--) {
-                                    var pi2 = doc.layers[lx2].pageItems[px2];
-                                    var pn2 = pi2.note || '';
-                                    var pm2 = pn2.match(/@mcp:id=([^\s]+)/);
-                                    if (pm2 && cidSet2[pm2[1]]) {
-                                        try { pi2.remove(); createdDeleted++; } catch (delErr) {
-                                            if (trace) trace.push("[ROLLBACK] Failed to delete " + pm2[1] + ": " + delErr.message);
-                                        }
-                                    }
-                                }
-                            }
-                            // Invalidate ID index after deleting created items
-                            if (typeof invalidateIdIndex === "function") {
-                                invalidateIdIndex();
-                            }
-                        }
-
-                        // Then restore the snapshot state for pre-existing items
-                        try {
-                            var restoreResult = restoreSnapshot(doc, preSnapshot, { geometry: true, style: true });
-                            rolledBackCount = restoreResult.restored + createdDeleted;
-                            if (trace) trace.push("[ROLLBACK] Restored " + restoreResult.restored + " items, deleted " + createdDeleted + " created items");
-                        } catch (restoreErr) {
-                            if (trace) trace.push("[ROLLBACK ERROR] " + restoreErr.message);
-                        }
-                    } else if (undoCount > 0) {
-                        // Fallback to undo-based rollback
-                        if (trace) trace.push("[ROLLBACK] Undoing " + undoCount + " mutating ops (undo fallback)");
-                        for (var u = 0; u < undoCount; u++) {
-                            try {
-                                app.executeMenuCommand('undo');
-                                rolledBackCount++;
-                            } catch (undoErr) {
-                                if (trace) trace.push("[ROLLBACK ERROR] " + undoErr.message);
-                            }
-                        }
-                    }
-                }
-                break;
-            }
-        }
-
-        opResult.duration_ms = ctx.clock() - t0;
-        results.push(opResult);
-
-        // Progress callback
-        if (chunkSize > 0 && onProgress && results.length % chunkSize === 0) {
-            var chunkReport = {
-                chunkIndex: chunkIndex++,
-                opsCompleted: results.length,
-                opsTotal: ops.length,
-                passed: passed,
-                failed: failed,
-                lastOp: op.task,
-                percentComplete: Math.round((results.length / ops.length) * 100)
-            };
-            try {
-                onProgress(chunkReport);
-            } catch (cbErr) {
-                if (trace) trace.push("[PROGRESS ERROR] " + cbErr.message);
-            }
-            if (trace) trace.push("[CHUNK " + (chunkIndex - 1) + "] " + results.length + "/" + ops.length);
-        }
-    }
+    var results = subResult.results;
+    var passed = subResult.passed;
+    var failed = subResult.failed;
+    var createdIds = subResult.createdIds;
+    var rolledBackCount = subResult.rolledBackCount;
 
     // Final chunk if not aligned
     if (chunkSize > 0 && onProgress && results.length % chunkSize !== 0) {
         try {
             onProgress({
-                chunkIndex: chunkIndex,
+                chunkIndex: Math.floor(results.length / chunkSize),
                 opsCompleted: results.length,
                 opsTotal: ops.length,
                 passed: passed,
@@ -805,11 +958,10 @@ function executeOpBatch(ops, options) {
         }, doc.name, doc);
     }
 
-    // Invalidate ID index at end of batch if any handler requested it
-    // or always invalidate to prevent stale cache across script executions
-    if (typeof invalidateIdIndex === "function") {
-        invalidateIdIndex();
-    }
+    // Commit heap transaction: persist index mutations from this batch
+    var heapStats = heapCommitTxn();
+    ctx.diagnostics.heapStats = heapDiagnostics();
+    ctx.diagnostics.heapCommit = heapStats;
 
     // Gate redraw on actual DOM mutations (redraw is expensive)
     if (passed > 0) {

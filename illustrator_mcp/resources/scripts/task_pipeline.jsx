@@ -144,13 +144,13 @@ function validatePayload(payload) {
                 "targets.type is required",
                 "validate"
             ));
-        } else if (["selection", "layer", "all", "query", "compound", "id"].indexOf(target.type) < 0) {
+        } else if (["selection", "layer", "all", "query", "compound", "id", "spatial"].indexOf(target.type) < 0) {
             errors.push(makeError(
                 ErrorCodes.V_UNKNOWN_TARGET_TYPE,
                 "Unknown target type: " + target.type,
                 "validate",
                 null,
-                { validTypes: ["selection", "layer", "all", "query", "compound", "id"] }
+                { validTypes: ["selection", "layer", "all", "query", "compound", "id", "spatial"] }
             ));
         } else if (target.type === "layer" && !target.layer) {
             errors.push(makeError(
@@ -170,6 +170,88 @@ function validatePayload(payload) {
                 "targets.ids is required when type='id'",
                 "validate"
             ));
+        } else if (target.type === "spatial") {
+            // Must have at least one non-null predicate
+            if (target.within == null && target.outside == null && target.nearTo == null) {
+                errors.push(makeError(
+                    ErrorCodes.V_MISSING_REQUIRED_PARAM,
+                    "Spatial target requires 'within', 'nearTo', or 'outside'",
+                    "validate"
+                ));
+            }
+            // coord: type guard first, then enum
+            if (target.coord !== undefined) {
+                if (typeof target.coord !== "string") {
+                    errors.push(makeError(
+                        ErrorCodes.V_INVALID_PARAM_TYPE,
+                        "target.coord must be a string, got " + typeof target.coord,
+                        "validate"
+                    ));
+                } else if (target.coord !== "user" && target.coord !== "ai") {
+                    errors.push(makeError(
+                        ErrorCodes.V_INVALID_PARAM_VALUE,
+                        "target.coord must be 'user' or 'ai', got '" + target.coord + "'",
+                        "validate"
+                    ));
+                }
+            }
+            // layer: string only (v1 — array support deferred)
+            if (target.layer !== undefined && typeof target.layer !== "string") {
+                errors.push(makeError(
+                    ErrorCodes.V_INVALID_PARAM_TYPE,
+                    "target.layer must be a string, got " + typeof target.layer,
+                    "validate"
+                ));
+            }
+            // Validate within/outside rect shape
+            var _rectKeys = ["within", "outside"];
+            for (var ri = 0; ri < _rectKeys.length; ri++) {
+                var _rk = _rectKeys[ri];
+                if (target[_rk] != null) {
+                    var _rv = target[_rk];
+                    if (_rv == null || typeof _rv !== "object" || _rv instanceof Array) {
+                        errors.push(makeError(ErrorCodes.V_INVALID_PARAM_TYPE,
+                            "target." + _rk + " must be a plain object", "validate"));
+                    } else {
+                        var _reqFields = ["x", "y", "width", "height"];
+                        for (var rfi = 0; rfi < _reqFields.length; rfi++) {
+                            var _fv = _rv[_reqFields[rfi]];
+                            if (_fv == null) {
+                                errors.push(makeError(ErrorCodes.V_MISSING_REQUIRED_PARAM,
+                                    "target." + _rk + "." + _reqFields[rfi] + " is required",
+                                    "validate"));
+                            } else if (typeof _fv !== "number") {
+                                errors.push(makeError(ErrorCodes.V_INVALID_PARAM_TYPE,
+                                    "target." + _rk + "." + _reqFields[rfi] + " must be a number, got " + typeof _fv,
+                                    "validate"));
+                            }
+                        }
+                    }
+                }
+            }
+            // Validate nearTo shape
+            if (target.nearTo != null) {
+                var _nt = target.nearTo;
+                if (_nt == null || typeof _nt !== "object" || _nt instanceof Array) {
+                    errors.push(makeError(ErrorCodes.V_INVALID_PARAM_TYPE,
+                        "target.nearTo must be a plain object", "validate"));
+                } else {
+                    if (_nt.id == null) {
+                        errors.push(makeError(ErrorCodes.V_MISSING_REQUIRED_PARAM,
+                            "target.nearTo.id is required", "validate"));
+                    } else if (typeof _nt.id !== "string") {
+                        errors.push(makeError(ErrorCodes.V_INVALID_PARAM_TYPE,
+                            "target.nearTo.id must be a string, got " + typeof _nt.id, "validate"));
+                    }
+                    if (_nt.radius == null) {
+                        errors.push(makeError(ErrorCodes.V_MISSING_REQUIRED_PARAM,
+                            "target.nearTo.radius is required", "validate"));
+                    } else if (typeof _nt.radius !== "number") {
+                        errors.push(makeError(ErrorCodes.V_INVALID_PARAM_TYPE,
+                            "target.nearTo.radius must be a number, got " + typeof _nt.radius, "validate"));
+                    }
+                }
+            }
         }
     }
 

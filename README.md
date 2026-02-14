@@ -175,7 +175,7 @@ This server follows a **Scripting First** architecture: one powerful script exec
 | `illustrator_execute_script` | **Primary tool.** Execute any ExtendScript code in Illustrator. Supports library injection, params, bounds validation, and preview export. |
 | `illustrator_execute_task` | Execute a structured task using the Task Protocol (collect > compute > apply). |
 
-### Document Operations (8)
+### Document Operations (7)
 
 | Tool | Description |
 |---|---|
@@ -184,36 +184,32 @@ This server follows a **Scripting First** architecture: one powerful script exec
 | `illustrator_save_document` | Save the current document (or Save As to a new path) |
 | `illustrator_export_document` | Export to PNG, JPG, SVG, or PDF with optional visual feedback |
 | `illustrator_close_document` | Close the active document |
-| `illustrator_import_image` | Place a raster image (PNG, JPG) as linked or embedded |
-| `illustrator_place_file` | Place an external file (EPS, AI, PDF, image) with optional editable embed |
+| `illustrator_place_file` | Place an external file (PNG, JPG, EPS, AI, PDF) with optional editable embed |
 | `illustrator_update_linked_items` | Refresh all linked items from their source files |
 
-### Undo / Redo (2)
+### Undo / Redo (1)
 
 | Tool | Description |
 |---|---|
-| `illustrator_undo` | Undo the last action |
-| `illustrator_redo` | Redo the last undone action |
+| `illustrator_history` | Undo or redo actions (supports multi-step count) |
 
-### Context & Inspection (5)
+### Context & Inspection (4)
 
 | Tool | Description |
 |---|---|
-| `illustrator_get_document_info` | Active document metadata (name, dimensions, saved status) |
-| `illustrator_get_document_structure` | Full document tree: layers, sublayers, items with types, positions, bounds |
+| `illustrator_get_document` | Full document tree: layers, sublayers, items with types, positions, bounds |
 | `illustrator_get_selection_info` | Detailed info about selected objects (fill, stroke, text contents) |
 | `illustrator_get_app_info` | Illustrator version, open document count, scripting version |
 | `illustrator_get_scripting_reference` | ExtendScript syntax cheat sheet (coordinate system, shapes, colors, text) |
 
-### Query & Validation (3)
+### Query & Validation (2)
 
 | Tool | Description |
 |---|---|
 | `illustrator_query_items` | Declarative item query via the Task Protocol (target selectors, stable refs) |
 | `illustrator_preflight_check` | Read-only validation: off-artboard items, zero-size items, empty text, locked layers |
-| `illustrator_get_connection_info` | WebSocket connection status (useful for debugging multi-client issues) |
 
-**Total: 20 tools.**
+**Total: 16 tools.**
 
 ---
 
@@ -304,6 +300,10 @@ var report = executeOpBatch(ops, {strict: true, trace: true});
 ```
 
 Key capabilities: stable ID targeting (`@mcp:id=` in item.note), strict/continue error modes, `summaryOnly` for large batches, snapshot rollback, Python-side chunking for WebSocket limits, field evaluators for dynamic params, and op journaling for replay.
+
+**Conditional operations:** `when` / `unless` guards filter targets by property predicates before execution (e.g., `when: {property: 'width', gt: 100}`).
+
+**Spatial query targets:** `within`, `nearTo`, and `outside` predicates select items by geometric region. Predicates combine as OR (union). Structured error codes (`SP01`–`SP03`) provide precise diagnostics.
 
 See [`PROTOCOL.md`](PROTOCOL.md) and [`SOC_CONTRACTS.md`](SOC_CONTRACTS.md) for full specifications.
 
@@ -407,10 +407,18 @@ If occupied, change `WS_PORT` in `.env` and restart.
 | `C001` | Connection | Illustrator not connected |
 | `V001` | Validation | No document open |
 | `V002` | Validation | No selection |
+| `V006` | Validation | Missing required parameter |
+| `V007` | Validation | Invalid parameter type |
 | `R005` | Runtime | Layer not found |
 | `R006` | Runtime | Element not found |
 | `S001` | Script | Syntax error |
 | `S002` | Script | Undefined variable |
+| `G001` | Guard | Unknown guard property |
+| `G002` | Guard | Invalid comparator |
+| `G003` | Guard | Malformed guard clause |
+| `SP01` | Spatial | Missing spatial predicate |
+| `SP02` | Spatial | Invalid rect specification |
+| `SP03` | Spatial | Reference item not found |
 
 All errors include actionable recovery suggestions.
 
