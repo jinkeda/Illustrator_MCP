@@ -17,7 +17,7 @@ from illustrator_mcp.proxy_client import execute_script_with_context, format_env
 from illustrator_mcp.protocol import TaskPayload, TaskReport, format_task_report
 from illustrator_mcp.libraries import get_injection_metadata
 from illustrator_mcp.tools.base import ToolInputBase
-from mcp.types import ImageContent
+from mcp.types import ImageContent, TextContent
 
 # Set up logging for telemetry
 logger = logging.getLogger("illustrator_mcp")
@@ -145,9 +145,17 @@ class ExecuteScriptInput(ToolInputBase):
         description="After execution, auto-export a thumbnail and return as ImageContent."
     )
 
-    preview_mode: Literal["artboard", "bounds"] = Field(
+    preview_mode: Literal["artboard", "bounds", "annotated"] = Field(
         default="artboard",
-        description="'artboard': preview active artboard. 'bounds': preview specified bounds."
+        description="'artboard': preview active artboard. 'bounds': preview specified bounds. "
+                    "'annotated': artboard with numbered bounding boxes and annotation map for VLM grounding."
+    )
+
+    preview_max_items: int = Field(
+        default=200,
+        description="Max items to annotate in 'annotated' preview mode.",
+        ge=1,
+        le=500
     )
 
     preview_bounds: Optional[List[float]] = Field(
@@ -168,39 +176,20 @@ class ExecuteScriptInput(ToolInputBase):
     )
 
 
-async def _generate_preview(
-    params: 'ExecuteScriptInput',
-    timeout: Optional[float] = None
-) -> Optional[ImageContent]:
-    """Auto-export a thumbnail for the execute-and-preview feature (P4).
+async def _capture_artboard_png(
+    max_dim: int = 1024,
+    timeout: Optional[float] = None,
+) -> Optional[bytes]:
+    """Export the active artboard as PNG bytes.
 
-    Exports the active artboard to a temp file, reads it as base64,
-    returns ImageContent, and cleans up the temp file.
+    Standalone helper — no dependency on ExecuteScriptInput.
+    Returns raw PNG bytes, or None on failure.
     """
-    import base64
-
-    fmt = params.preview_format  # "png" or "jpg"
-    suffix = ".png" if fmt == "png" else ".jpg"
-    mime = "image/png" if fmt == "png" else "image/jpeg"
-
-    # Compute scale from max_dim vs artboard size
-    # We'll query artboard dims and compute needed scale
-    max_dim = params.preview_max_dim
-
-    # Create temp file
-    tmp = tempfile.NamedTemporaryFile(suffix=suffix, delete=False)
+    tmp = tempfile.NamedTemporaryFile(suffix=".png", delete=False)
     tmp_path = tmp.name.replace("\\", "/")
     tmp.close()
 
     try:
-        # Export options depend on format
-        if fmt == "png":
-            opts_class = "ExportOptionsPNG24"
-            export_type = "ExportType.PNG24"
-        else:
-            opts_class = "ExportOptionsJPEG"
-            export_type = "ExportType.JPEG"
-
         export_script = f"""
 (function() {{
     var doc = app.activeDocument;
@@ -211,48 +200,315 @@ async def _generate_preview(
     var maxDim = Math.max(abW, abH);
     var scale = Math.min({max_dim} / maxDim * 100, 100);
 
-    var opts = new {opts_class}();
+    var opts = new ExportOptionsPNG24();
     opts.horizontalScale = scale;
     opts.verticalScale = scale;
     opts.artBoardClipping = true;
 
     var file = new File("{tmp_path}");
-    doc.exportFile(file, {export_type}, opts);
+    doc.exportFile(file, ExportType.PNG24, opts);
     return JSON.stringify({{success: true}});
 }})();
 """
-        export_response = await execute_script_with_context(
+        resp = await execute_script_with_context(
             script=export_script,
             command_type="preview_export",
-            tool_name="illustrator_execute_script",
-            timeout=timeout or 30.0
+            tool_name="_capture_artboard_png",
+            timeout=timeout or 30.0,
         )
-
-        if export_response.get("error"):
+        if resp.get("error"):
             return None
 
-        # Read the exported file
-        real_path = tmp.name  # Use the original Windows path for reading
-        if not os.path.isfile(real_path):
+        if not os.path.isfile(tmp.name):
             return None
 
-        with open(real_path, 'rb') as f:
+        with open(tmp.name, "rb") as f:
             img_bytes = f.read()
 
-        if not img_bytes:
-            return None
-
-        return ImageContent(
-            type="image",
-            data=base64.b64encode(img_bytes).decode('utf-8'),
-            mimeType=mime
-        )
+        return img_bytes if img_bytes else None
     finally:
-        # Cleanup temp file
         try:
             os.unlink(tmp.name)
         except OSError:
             pass
+
+
+async def _generate_preview(
+    params: 'ExecuteScriptInput',
+    timeout: Optional[float] = None
+) -> Optional[ImageContent]:
+    """Auto-export a thumbnail for the execute-and-preview feature (P4).
+
+    Delegates to _capture_artboard_png, then wraps result as ImageContent.
+    Supports PNG and JPG via params.preview_format.
+    """
+    import base64
+
+    fmt = params.preview_format
+    max_dim = params.preview_max_dim
+
+    if fmt == "jpg":
+        # JPG path — can't reuse _capture_artboard_png (PNG-only)
+        suffix = ".jpg"
+        mime = "image/jpeg"
+        opts_class = "ExportOptionsJPEG"
+        export_type = "ExportType.JPEG"
+
+        tmp = tempfile.NamedTemporaryFile(suffix=suffix, delete=False)
+        tmp_path = tmp.name.replace("\\", "/")
+        tmp.close()
+        try:
+            export_script = f"""
+(function() {{
+    var doc = app.activeDocument;
+    var abIdx = doc.artboards.getActiveArtboardIndex();
+    var abRect = doc.artboards[abIdx].artboardRect;
+    var abW = abRect[2] - abRect[0];
+    var abH = Math.abs(abRect[3] - abRect[1]);
+    var maxDim = Math.max(abW, abH);
+    var scale = Math.min({max_dim} / maxDim * 100, 100);
+    var opts = new {opts_class}();
+    opts.horizontalScale = scale;
+    opts.verticalScale = scale;
+    opts.artBoardClipping = true;
+    var file = new File("{tmp_path}");
+    doc.exportFile(file, {export_type}, opts);
+    return JSON.stringify({{success: true}});
+}})();
+"""
+            resp = await execute_script_with_context(
+                script=export_script,
+                command_type="preview_export",
+                tool_name="illustrator_execute_script",
+                timeout=timeout or 30.0,
+            )
+            if resp.get("error"):
+                return None
+            if not os.path.isfile(tmp.name):
+                return None
+            with open(tmp.name, "rb") as f:
+                img_bytes = f.read()
+            if not img_bytes:
+                return None
+            return ImageContent(
+                type="image",
+                data=base64.b64encode(img_bytes).decode('utf-8'),
+                mimeType=mime,
+            )
+        finally:
+            try:
+                os.unlink(tmp.name)
+            except OSError:
+                pass
+    else:
+        # PNG path — delegate to _capture_artboard_png
+        img_bytes = await _capture_artboard_png(max_dim=max_dim, timeout=timeout)
+        if not img_bytes:
+            return None
+        return ImageContent(
+            type="image",
+            data=base64.b64encode(img_bytes).decode('utf-8'),
+            mimeType="image/png",
+        )
+
+
+# JSX script to collect visible item bounds for annotation overlay
+_COLLECT_ITEMS_JSX = """
+(function() {
+    var doc = app.activeDocument;
+    var abIdx = doc.artboards.getActiveArtboardIndex();
+    var ab = doc.artboards[abIdx].artboardRect;
+    var abL = ab[0], abT = ab[1], abR = ab[2], abB = ab[3];
+    var MAX = %d;
+    var items = [];
+    for (var i = 0; i < doc.pageItems.length && items.length < MAX; i++) {
+        var it = doc.pageItems[i];
+        if (it.hidden) continue;
+        try { if (it.guides) continue; } catch(e) {}
+        var vb;
+        try { vb = it.visibleBounds; } catch(e) { continue; }
+        if (vb[2] - vb[0] < 0.5 || vb[1] - vb[3] < 0.5) continue;
+        if (vb[2] < abL || vb[0] > abR || vb[3] > abT || vb[1] < abB) continue;
+        var mcpId = "";
+        var note = "";
+        try { note = it.note || ""; } catch(e) {}
+        var idx = note.indexOf("@mcp:id:");
+        if (idx >= 0) mcpId = note.substring(idx + 8, idx + 44);
+        items.push({
+            name: it.name || it.typename,
+            type: it.typename,
+            bounds: [vb[0], vb[1], vb[2], vb[3]],
+            mcp_id: mcpId
+        });
+    }
+    return JSON.stringify({artboard: ab, items: items});
+})();
+"""
+
+
+def _filter_items(items: list, artboard_rect: list) -> tuple:
+    """Filter low-value items before annotation.
+
+    Type-aware rules:
+    - Canvas-span: skip items covering ≥90% of artboard area (any type).
+    - Thin stroke: skip PathItem/CompoundPathItem/GroupItem < 5pt in
+      either dimension.  TextFrames are IMMUNE (small text is meaningful).
+
+    Returns:
+        (kept_items, filtered_count)
+    """
+    ab_w = abs(artboard_rect[2] - artboard_rect[0])
+    ab_h = abs(artboard_rect[1] - artboard_rect[3])
+    ab_area = ab_w * ab_h
+
+    kept = []
+    for item in items:
+        b = item.get("bounds", [0, 0, 0, 0])
+        w = abs(b[2] - b[0])
+        h = abs(b[1] - b[3])
+        typ = item.get("type", "")
+
+        # Rule 1: Canvas-span — skip if ≥90% of artboard area
+        if ab_area > 0 and (w * h) / ab_area >= 0.9:
+            continue
+
+        # Rule 2: Thin stroke — TextFrames are immune
+        if typ != "TextFrame" and (w < 5 or h < 5):
+            continue
+
+        kept.append(item)
+
+    return kept, len(items) - len(kept)
+
+
+async def _annotate_preview(
+    img_bytes: bytes,
+    max_items: int = 200,
+    timeout: Optional[float] = None,
+) -> tuple:
+    """Generate annotated preview with numbered bounding boxes.
+
+    Args:
+        img_bytes: Raw PNG bytes of the artboard export.
+        max_items: Maximum number of items to annotate.
+        timeout: Script execution timeout.
+
+    Returns:
+        (annotated_png_bytes, result_dict)
+        result_dict always has: {"meta": {...}, "annotations": [...], "warnings": [...]}
+    """
+    from illustrator_mcp.overlay import (
+        composite_overlay,
+        get_png_dimensions,
+        map_bounds_to_pixels,
+        HAS_PILLOW,
+    )
+
+    def _result(annotations=None, warnings=None, **meta_extra):
+        """Build structured result dict."""
+        meta = {
+            "bounds_kind": "visibleBounds",
+            "max_items": max_items,
+            "input_count": meta_extra.pop("input_count", 0),
+            "annotated_count": len(annotations) if annotations else 0,
+            "filtered_count": meta_extra.pop("filtered_count", 0),
+        }
+        meta.update(meta_extra)
+        return {
+            "meta": meta,
+            "annotations": annotations or [],
+            "warnings": warnings or [],
+        }
+
+    if not HAS_PILLOW:
+        return img_bytes, _result(
+            warnings=["Pillow not installed. Run: pip install illustrator-mcp[overlay]"]
+        )
+
+    # 1. Decode PNG dimensions
+    png_size = get_png_dimensions(img_bytes)
+    if not png_size:
+        return img_bytes, _result(warnings=["Could not decode PNG dimensions"])
+
+    # 2. Collect item bounds from Illustrator
+    collect_script = _COLLECT_ITEMS_JSX % max_items
+
+    try:
+        collect_response = await execute_script_with_context(
+            script=collect_script,
+            command_type="annotate_collect",
+            tool_name="illustrator_execute_script",
+            timeout=timeout or 30.0,
+        )
+    except Exception as e:
+        return img_bytes, _result(warnings=[f"Item collection failed: {e}"])
+
+    # 3. Parse response
+    raw_result = collect_response.get("result")
+    if not raw_result:
+        return img_bytes, _result(warnings=["Item collection returned empty"])
+
+    try:
+        if isinstance(raw_result, str):
+            snapshot = json.loads(raw_result)
+        else:
+            snapshot = raw_result
+    except (json.JSONDecodeError, TypeError):
+        return img_bytes, _result(warnings=["Could not parse item collection result"])
+
+    artboard_rect = snapshot.get("artboard")
+    if not artboard_rect or len(artboard_rect) != 4:
+        return img_bytes, _result(
+            warnings=["Missing or invalid artboard bounds — cannot map coordinates"]
+        )
+
+    raw_items = snapshot.get("items", [])
+    if not raw_items:
+        return img_bytes, _result(
+            warnings=["No visible items found on artboard"],
+            png_px=list(png_size),
+            artboard_pt=artboard_rect,
+        )
+
+    # 4. Filter low-value items, then map bounds and build annotations
+    items, filtered_count = _filter_items(raw_items, artboard_rect)
+
+    pixel_annotations = []
+    annotation_entries = []
+    warn_list = []
+
+    for i, item in enumerate(items):
+        label = str(i + 1)
+        bounds_pt = item.get("bounds", [0, 0, 0, 0])
+        mcp_id = item.get("mcp_id", "") or ""
+
+        bounds_px = map_bounds_to_pixels(bounds_pt, artboard_rect, png_size)
+
+        pixel_annotations.append({
+            "label": label,
+            "bounds_px": bounds_px,
+        })
+
+        annotation_entries.append({
+            "label": label,
+            "mcp_id": mcp_id if mcp_id else None,
+            "has_mcp_id": bool(mcp_id),
+            "name": item.get("name", ""),
+            "type": item.get("type", "Item"),
+            "bounds_pt": bounds_pt,
+        })
+
+    # 5. Composite overlay
+    annotated_bytes = composite_overlay(img_bytes, pixel_annotations)
+
+    return annotated_bytes, _result(
+        annotations=annotation_entries,
+        warnings=warn_list if warn_list else None,
+        input_count=len(raw_items),
+        filtered_count=filtered_count,
+        png_px=list(png_size),
+        artboard_pt=artboard_rect,
+    )
 
 
 @mcp.tool(
@@ -431,10 +687,33 @@ async def illustrator_execute_script(params: ExecuteScriptInput) -> Union[str, l
                     timeout=params.timeout
                 )
                 if preview_result:
-                    return [
-                        {"type": "text", "text": envelope},
-                        preview_result
-                    ]
+                    # Annotated mode: overlay numbered boxes + return annotation map
+                    if params.preview_mode == "annotated":
+                        import base64 as _b64
+                        raw_bytes = _b64.b64decode(preview_result.data)
+                        annotated_bytes, annotation_result = await _annotate_preview(
+                            img_bytes=raw_bytes,
+                            max_items=params.preview_max_items,
+                            timeout=params.timeout,
+                        )
+                        ann_b64 = _b64.b64encode(annotated_bytes).decode('utf-8')
+                        return [
+                            TextContent(type="text", text=envelope),
+                            ImageContent(
+                                type="image",
+                                data=ann_b64,
+                                mimeType=preview_result.mimeType,
+                            ),
+                            TextContent(
+                                type="text",
+                                text=json.dumps(annotation_result, indent=2),
+                            ),
+                        ]
+                    else:
+                        return [
+                            {"type": "text", "text": envelope},
+                            preview_result
+                        ]
                 else:
                     warnings.append("Preview generation returned empty")
                     return format_envelope(
@@ -498,7 +777,7 @@ class ExecuteTaskInput(ToolInputBase):
         "openWorldHint": False
     }
 )
-async def illustrator_execute_task(params: ExecuteTaskInput) -> str:
+async def illustrator_execute_task(params: ExecuteTaskInput) -> Union[str, list]:
     """
     Execute a structured task using the Task Protocol v2.1.
     
@@ -596,13 +875,44 @@ JSON.stringify(report);
             formatted = format_task_report(report, params.payload.task)
 
             # Return envelope with formatted report as result
-            return json.dumps({
+            envelope = json.dumps({
                 "ok": True,
                 "warnings": [],
                 "error": None,
                 "diagnostics": diagnostics,
                 "result": {"formatted": formatted, "report": report_data}
             })
+
+            # ── Auto-Grounding: forcibly inject annotated preview ──
+            # The LLM doesn't choose this — every SOC report comes with
+            # a visual map so the agent can't skip spatial verification.
+            try:
+                import base64 as _b64
+                raw_png = await _capture_artboard_png(max_dim=1024, timeout=30.0)
+                if raw_png:
+                    annotated_bytes, annotation_result = await _annotate_preview(
+                        img_bytes=raw_png,
+                        max_items=200,
+                        timeout=30.0,
+                    )
+                    ann_b64 = _b64.b64encode(annotated_bytes).decode('utf-8')
+                    return [
+                        TextContent(type="text", text=envelope),
+                        ImageContent(
+                            type="image",
+                            data=ann_b64,
+                            mimeType="image/png",
+                        ),
+                        TextContent(
+                            type="text",
+                            text=json.dumps(annotation_result, indent=2),
+                        ),
+                    ]
+            except Exception as e:
+                logger.warning(f"Auto-grounding overlay failed (non-fatal): {e}")
+
+            # Fallback: return text-only envelope if overlay failed
+            return envelope
 
         except (json.JSONDecodeError, Exception) as parse_error:
             # Fallback: return raw result in envelope

@@ -18,6 +18,7 @@ An [MCP](https://modelcontextprotocol.io) server that lets AI assistants like Cl
 - [Available Tools](#available-tools)
 - [Standard Libraries](#standard-libraries)
 - [Task Protocol & SOC Framework](#task-protocol--soc-framework)
+- [VLM Debug Overlay & Auto-Grounding](#vlm-debug-overlay--auto-grounding)
 - [Examples](#examples)
 - [Troubleshooting](#troubleshooting)
 - [Project Structure](#project-structure)
@@ -70,6 +71,14 @@ git clone https://github.com/jinkeda/Illustrator_MCP.git
 cd Illustrator_MCP
 pip install -e .
 ```
+
+**Optional — enable VLM overlay (annotated artboard preview):**
+
+```bash
+pip install -e ".[overlay]"
+```
+
+This installs [Pillow](https://python-pillow.org/) for compositing numbered bounding boxes onto preview images. Without it, the overlay degrades gracefully (plain preview returned instead).
 
 ### 2. Build & Install the CEP Extension
 
@@ -309,6 +318,53 @@ See [`PROTOCOL.md`](PROTOCOL.md) and [`SOC_CONTRACTS.md`](SOC_CONTRACTS.md) for 
 
 ---
 
+## VLM Debug Overlay & Auto-Grounding
+
+### Annotated Preview
+
+When calling `execute_script` with `preview_mode: "annotated"`, the server returns an annotated PNG with numbered bounding boxes overlaid on the artboard, plus a JSON annotation map linking visual labels to item IDs.
+
+```python
+execute_script(
+    script="var r = doc.pathItems.rectangle(-50, 50, 200, 100);",
+    return_preview=True,
+    preview_mode="annotated",
+    preview_max_items=50
+)
+# Returns:
+# [0] TextContent  — execution envelope
+# [1] ImageContent — annotated PNG with [1], [2], ... bounding boxes
+# [2] TextContent  — annotation map JSON
+```
+
+The annotation map bridges visual labels to stable `@mcp:id` tags:
+
+```json
+{
+  "meta": {"bounds_kind": "visibleBounds", "item_count": 3},
+  "annotations": [
+    {"label": "1", "mcp_id": "a1b2c3d4", "has_mcp_id": true, "name": "chart_area", "type": "PathItem"},
+    {"label": "2", "mcp_id": null, "has_mcp_id": false, "name": "title_text", "type": "TextFrame"}
+  ],
+  "warnings": []
+}
+```
+
+### Auto-Grounding
+
+Every `execute_task` (SOC pipeline) call **automatically** includes the annotated overlay in its return. The agent doesn't opt in — it is forcibly handed a visual map of the canvas grounded with `[1]` → `@mcp:id` tags alongside the SOC task report.
+
+```
+execute_task return shape:
+  [TextContent(SOC report), ImageContent(annotated PNG), TextContent(annotation map)]
+```
+
+This closes the visual loop: the agent sees overlapping elements, abandoned text frames, or off-artboard items before deciding its next action. If the overlay fails (Pillow missing, export error), the response degrades gracefully to the text-only SOC report.
+
+> **Requires:** `pip install -e ".[overlay]"` for Pillow. Without it, previews return without annotations.
+
+---
+
 ## Examples
 
 ### Create a Document
@@ -477,11 +533,12 @@ Illustrator_MCP/
 │   ├── tools/
 │   │   ├── __init__.py           # Tool registration
 │   │   ├── base.py               # Shared execute_jsx_tool helper
-│   │   ├── execute.py            # execute_script + execute_task
+│   │   ├── execute.py            # execute_script + execute_task + auto-grounding
 │   │   ├── documents.py          # Document I/O tools
 │   │   ├── context.py            # State inspection tools
 │   │   ├── query.py              # query_items + preflight_check
 │   │   └── archive/              # Disabled legacy tools (reference only)
+│   ├── overlay.py                # VLM annotated overlay (Pillow compositing + coordinate mapping)
 │   └── resources/
 │       ├── docs/
 │       │   └── extendscript_reference.md
@@ -512,6 +569,7 @@ Illustrator_MCP/
 │   ├── test_templates.py
 │   ├── test_proxy_client.py
 │   ├── test_websocket_bridge.py
+│   ├── test_overlay.py
 │   └── test_brand_social_kit_fixes.py
 ├── scripts/
 │   └── gen_schemas.py            # Schema codegen (Python -> JSX)
@@ -559,6 +617,7 @@ python -m scripts.gen_schemas
 4. **Context Before Creation** -- AI inspects document state (`get_document_structure`, `get_selection_info`) before writing modification scripts.
 5. **Standardized Envelope** -- All tools return `{ok, warnings, error, diagnostics, result}` for consistent downstream handling.
 6. **Fail Fast with Structured Errors** -- Typed error codes (V/R/S/C categories) with actionable recovery suggestions.
+7. **Auto-Grounding** -- SOC task results always include an annotated artboard preview, forcing the AI to see the visual state before its next action. No opt-in required.
 
 ---
 
