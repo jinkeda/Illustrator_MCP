@@ -897,6 +897,13 @@ registerOpHandler("element_create_batch", function (params, targets, ctx) {
 
     // === Template mode: duplicate() instancing ===
     if (params.template) {
+        // Validate template type upfront (contract-level check)
+        var _VALID_TEMPLATE_TYPES = { ellipse: 1, rect: 1, line: 1, polyline: 1, path: 1 };
+        if (!params.template.type || !_VALID_TEMPLATE_TYPES[params.template.type]) {
+            return makeError(ErrorCodes.V_INVALID_PARAM_TYPE,
+                "invalid template.type: '" + (params.template.type || "(missing)") +
+                "'. Valid types: ellipse, rect, line, polyline, path", "validate");
+        }
         return _createFromTemplate(params, doc, abTop, abLeft, ctx);
     }
 

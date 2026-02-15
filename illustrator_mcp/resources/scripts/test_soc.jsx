@@ -946,6 +946,27 @@ function runSOCTests() {
             errStr.substring(0, 100)));
     })();
 
+    // ── G31: Invalid template type → V_INVALID_PARAM_TYPE ──
+    (function () {
+        var r = executeOpBatch([
+            {
+                task: 'element_create_batch',
+                params: {
+                    template: { type: 'banana', r: 5 },
+                    instances: [{ x: 0, y: 0 }]
+                }
+            }
+        ]);
+        results.push(_socAssert("G31 invalid template type → fails",
+            r.ok === false));
+        var errStr = JSON.stringify(r);
+        results.push(_socAssert("G31 error mentions valid types",
+            errStr.indexOf("Valid types") >= 0,
+            errStr.substring(0, 120)));
+        results.push(_socAssert("G31 error code is V007",
+            errStr.indexOf("V007") >= 0));
+    })();
+
     // === Summary ===
     doc.close(SaveOptions.DONOTSAVECHANGES);
 
