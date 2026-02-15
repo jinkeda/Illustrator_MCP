@@ -22,10 +22,41 @@ if (typeof registerOpHandler !== "function") {
     throw new Error("ops_element.jsx requires ops_core.jsx (registerOpHandler=" + typeof registerOpHandler + ")");
 }
 if (typeof findLayer !== "function") {
-    throw new Error("ops_element.jsx requires task_executor.jsx (findLayer=" + typeof findLayer + ")");
+    throw new Error("ops_element.jsx requires targets.jsx (findLayer=" + typeof findLayer + ")");
 }
 if (typeof isIR !== "function") {
     throw new Error("ops_element.jsx requires geo_ir.jsx (isIR=" + typeof isIR + ")");
+}
+
+// ==================== Artboard Coordinate Helper ====================
+
+/**
+ * Get the top Y coordinate of the active artboard in Illustrator's
+ * coordinate system.  User-facing params use screen coords where
+ * (0,0) is the artboard top-left and Y increases downward.
+ * Illustrator's native Y axis increases upward, and a typical
+ * artboard rect is [left, top, right, bottom] = [0, 400, 600, 0].
+ *
+ * Conversion:  aiY = artboardTop - userY
+ */
+function _artboardTop(doc) {
+    try {
+        var idx = doc.artboards.getActiveArtboardIndex();
+        var rect = doc.artboards[idx].artboardRect;  // [L, T, R, B]
+        return rect[1];  // top Y in Illustrator coords
+    } catch (e) {
+        return 0;  // fallback: pasteboard origin
+    }
+}
+
+function _artboardLeft(doc) {
+    try {
+        var idx = doc.artboards.getActiveArtboardIndex();
+        var rect = doc.artboards[idx].artboardRect;
+        return rect[0];  // left X in Illustrator coords
+    } catch (e) {
+        return 0;
+    }
 }
 
 // ==================== Element Create ====================
@@ -64,9 +95,13 @@ registerOpHandler("element_create", function (params, targets, ctx) {
 
     var item = null;
 
-    // Convert to Illustrator coordinates (Y is negative downward)
-    var aiTop = -y;
-    var aiLeft = x;
+    // Convert to Illustrator coordinates:
+    // User coords: (0,0) = artboard top-left, Y increases downward
+    // Illustrator:  Y increases upward, artboard top is a positive number
+    var abTop = _artboardTop(doc);
+    var abLeft = _artboardLeft(doc);
+    var aiTop = abTop - y;          // e.g. y=50 on 400pt artboard → aiY=350
+    var aiLeft = abLeft + x;
 
     switch (type) {
         case "rect":
@@ -83,7 +118,7 @@ registerOpHandler("element_create", function (params, targets, ctx) {
             var x2 = params.x2 !== undefined ? params.x2 : x + 100;
             var y2 = params.y2 !== undefined ? params.y2 : y;
             item = targetLayer.pathItems.add();
-            item.setEntirePath([[x, -y], [x2, -y2]]);
+            item.setEntirePath([[abLeft + x, abTop - y], [abLeft + x2, abTop - y2]]);
             break;
 
         case "roundedRect":
@@ -96,14 +131,14 @@ registerOpHandler("element_create", function (params, targets, ctx) {
         case "polygon":
             var sides = params.sides || 6;
             var radius = params.radius || 50;
-            item = targetLayer.pathItems.polygon(x, -y, radius, sides);
+            item = targetLayer.pathItems.polygon(abLeft + x, abTop - y, radius, sides);
             break;
 
         case "star":
             var points = params.points || 5;
             var outerRadius = params.outerRadius || 50;
             var innerRadius = params.innerRadius || 25;
-            item = targetLayer.pathItems.star(x, -y, outerRadius, innerRadius, points);
+            item = targetLayer.pathItems.star(abLeft + x, abTop - y, outerRadius, innerRadius, points);
             break;
 
         case "text":
@@ -192,12 +227,13 @@ registerOpHandler("element_create", function (params, targets, ctx) {
             // Y-flip via irMapPoints if IR, otherwise manual
             item = targetLayer.pathItems.add();
             if (isIR(geoInput)) {
-                var flipped = irMapPoints(geoInput, function (pt) { return [pt[0], -pt[1]]; });
+                var abT = abTop, abL = abLeft;
+                var flipped = irMapPoints(geoInput, function (pt) { return [abL + pt[0], abT - pt[1]]; });
                 item.setEntirePath(flipped.points);
             } else {
                 var aiPoints = [];
                 for (var pi = 0; pi < pathPoints.length; pi++) {
-                    aiPoints.push([pathPoints[pi][0], -pathPoints[pi][1]]);
+                    aiPoints.push([abLeft + pathPoints[pi][0], abTop - pathPoints[pi][1]]);
                 }
                 item.setEntirePath(aiPoints);
             }
@@ -306,6 +342,8 @@ registerOpHandler("element_create", function (params, targets, ctx) {
  */
 registerOpHandler("element_create_multi", function (params, targets, ctx) {
     var doc = app.activeDocument;
+    var abTop = _artboardTop(doc);
+    var abLeft = _artboardLeft(doc);
     var geo = params.geometry;
 
     if (!geo || !isIR(geo)) {
@@ -407,8 +445,9 @@ registerOpHandler("element_create_multi", function (params, targets, ctx) {
             warnings.push("paths[" + i + "] decimated from " + origLen + " to " + pts.length);
         }
 
-        // Y-flip via irMapPoints — single source of truth for coord transform
-        var flipped = irMapPoints(subPath, function (pt) { return [pt[0], -pt[1]]; });
+        // Y-flip via irMapPoints — artboard-relative coord transform
+        var _abT = abTop, _abL = abLeft;
+        var flipped = irMapPoints(subPath, function (pt) { return [_abL + pt[0], _abT - pt[1]]; });
         var item = targetLayer.pathItems.add();
         item.setEntirePath(flipped.points);
         item.closed = subPath.closed === true;
@@ -600,18 +639,240 @@ function _interpolatePalette(t, palette) {
 }
 
 
+// ==================== Template Instancing Helper ====================
+
+/**
+ * Create homogeneous items via duplicate() instancing.
+ * Master template is created once, duplicated N times, then removed.
+ *
+ * @param {Object} params - must have .template and .instances[]
+ * @param {Document} doc
+ * @param {number} abTop - artboard top (pt)
+ * @param {number} abLeft - artboard left (pt)
+ * @param {Object} ctx - execution context
+ * @returns {Object} SOC result {ok, data: {created, skipped, ids, bounds}, warnings}
+ */
+function _createFromTemplate(params, doc, abTop, abLeft, ctx) {
+    var tmpl = params.template;
+    var instances = params.instances;
+
+    // Resolve target layer
+    var targetLayer = doc.activeLayer;
+    if (params.layer) {
+        var found = false;
+        for (var li = 0; li < doc.layers.length; li++) {
+            if (doc.layers[li].name === params.layer) {
+                targetLayer = doc.layers[li];
+                found = true;
+                break;
+            }
+        }
+        if (!found) {
+            return makeError(ErrorCodes.V_INVALID_PARAM_TYPE, "Layer not found: " + params.layer, "apply");
+        }
+    }
+
+    // Color cache
+    var colorCache = {};
+    function getCachedColor(colorDef) {
+        if (!colorDef || colorDef === false || colorDef === null) return null;
+        var key = (colorDef.r || 0) + "|" + (colorDef.g || 0) + "|" + (colorDef.b || 0);
+        if (!colorCache[key]) {
+            var c = new RGBColor();
+            c.red = colorDef.r || 0;
+            c.green = colorDef.g || 0;
+            c.blue = colorDef.b || 0;
+            colorCache[key] = c;
+        }
+        return colorCache[key];
+    }
+
+    // Bounds tracking
+    var bMinX = Infinity, bMinY = Infinity, bMaxX = -Infinity, bMaxY = -Infinity;
+    function trackBounds(x, y) {
+        if (x < bMinX) bMinX = x;
+        if (x > bMaxX) bMaxX = x;
+        if (y < bMinY) bMinY = y;
+        if (y > bMaxY) bMaxY = y;
+    }
+
+    var master = null;
+    var createdItems = [];
+    var ids = [];
+    var created = 0;
+    var skipped = 0;
+    var warnings = [];
+
+    try {
+        // --- Create master item ---
+        var type = tmpl.type;
+        switch (type) {
+            case "ellipse":
+                var rx = tmpl.rx || tmpl.r || 5, ry = tmpl.ry || tmpl.r || 5;
+                master = targetLayer.pathItems.ellipse(abTop + ry, abLeft - rx, rx * 2, ry * 2);
+                break;
+            case "rect":
+                var bw = tmpl.w || 50, bh = tmpl.h || 50;
+                master = targetLayer.pathItems.rectangle(abTop, abLeft, bw, bh);
+                break;
+            case "line":
+                var lp = tmpl.points;
+                if (!lp || lp.length < 2) {
+                    return makeError(ErrorCodes.V_INVALID_PARAM_TYPE, "template line needs 2 points", "validate");
+                }
+                master = targetLayer.pathItems.add();
+                master.setEntirePath([[abLeft + lp[0][0], abTop - lp[0][1]], [abLeft + lp[1][0], abTop - lp[1][1]]]);
+                master.closed = false;
+                master.filled = false;
+                break;
+            case "polyline":
+            case "path":
+                var pp = tmpl.points;
+                if (!pp || pp.length < 2) {
+                    return makeError(ErrorCodes.V_INVALID_PARAM_TYPE, "template path needs >=2 points", "validate");
+                }
+                master = targetLayer.pathItems.add();
+                var aiPts = [];
+                for (var pi = 0; pi < pp.length; pi++) {
+                    aiPts.push([abLeft + pp[pi][0], abTop - pp[pi][1]]);
+                }
+                master.setEntirePath(aiPts);
+                master.closed = tmpl.closed === true;
+                if (!tmpl.closed) master.filled = false;
+                break;
+            default:
+                return makeError(ErrorCodes.V_INVALID_PARAM_TYPE, "unknown template type: " + type, "validate");
+        }
+
+        // Apply template styling
+        if (tmpl.fill === false || tmpl.fill === null || tmpl.noFill) {
+            master.filled = false;
+        } else if (tmpl.fill) {
+            var fc = getCachedColor(tmpl.fill);
+            if (fc) { master.fillColor = fc; master.filled = true; }
+        }
+        if (tmpl.stroke === false || tmpl.stroke === null || tmpl.noStroke) {
+            master.stroked = false;
+        } else if (tmpl.stroke) {
+            var sc = getCachedColor(tmpl.stroke);
+            if (sc) {
+                master.strokeColor = sc;
+                master.stroked = true;
+                if (tmpl.stroke.width !== undefined) master.strokeWidth = tmpl.stroke.width;
+            }
+        }
+        if (tmpl.opacity !== undefined) {
+            master.opacity = Math.max(0, Math.min(100, tmpl.opacity));
+        }
+
+        // --- Duplicate for each instance ---
+        for (var i = 0; i < instances.length; i++) {
+            var inst = instances[i];
+            try {
+                var clone = master.duplicate();
+
+                // Position: absolute artboard-relative coordinates
+                if (inst.x !== undefined && inst.y !== undefined) {
+                    clone.position = [abLeft + inst.x, abTop - inst.y];
+                    trackBounds(inst.x, inst.y);
+                }
+
+                // Per-instance scale (percentage, about center)
+                if (inst.scale !== undefined && inst.scale !== 100) {
+                    clone.resize(inst.scale, inst.scale, true, true, true, true, inst.scale, Transformation.CENTER);
+                }
+
+                // Per-instance fill override
+                if (inst.fill === false || inst.fill === null) {
+                    clone.filled = false;
+                } else if (inst.fill) {
+                    var ifc = getCachedColor(inst.fill);
+                    if (ifc) { clone.fillColor = ifc; clone.filled = true; }
+                }
+
+                // Per-instance stroke override
+                if (inst.stroke === false || inst.stroke === null) {
+                    clone.stroked = false;
+                } else if (inst.stroke) {
+                    var isc = getCachedColor(inst.stroke);
+                    if (isc) {
+                        clone.strokeColor = isc;
+                        clone.stroked = true;
+                        if (inst.stroke.width !== undefined) clone.strokeWidth = inst.stroke.width;
+                    }
+                }
+
+                // Per-instance opacity
+                if (inst.opacity !== undefined) {
+                    clone.opacity = Math.max(0, Math.min(100, inst.opacity));
+                }
+
+                // Assign MCP ID
+                var id = generateUUID();
+                clone.note = "@mcp:id=" + id;
+
+                // Name
+                if (params.name) {
+                    clone.name = params.name + "_" + i;
+                }
+
+                createdItems.push(clone);
+                ids.push(id);
+                created++;
+            } catch (e) {
+                // Non-fatal per-instance error: null placeholder for index alignment
+                ids.push(null);
+                skipped++;
+                warnings.push("instances[" + i + "] error: " + e.message);
+            }
+        }
+    } catch (e) {
+        // Fatal error: cleanup all created clones
+        for (var k = createdItems.length - 1; k >= 0; k--) {
+            try { createdItems[k].remove(); } catch (ex) { }
+        }
+        return makeError(ErrorCodes.R_APPLY_FAILED, "template instancing failed: " + e.message, "apply");
+    } finally {
+        // Always remove the master template
+        if (master) {
+            try { master.remove(); } catch (ex) { }
+        }
+    }
+
+    var boundsResult = null;
+    if (bMinX !== Infinity) {
+        boundsResult = [bMinX, bMinY, bMaxX - bMinX, bMaxY - bMinY];
+    }
+
+    return {
+        ok: created > 0,
+        data: {
+            created: created,
+            skipped: skipped,
+            failed: skipped,
+            ids: ids,
+            bounds: boundsResult,
+            mode: "template"
+        },
+        warnings: warnings
+    };
+}
+
 // ==================== Element Create Batch ====================
 
 /**
- * Batch-create mixed shape types with per-item styling.
- * Performance-optimized: style caching, single layer lookup, bounds tracking.
+ * Batch-create items. Two modes (mutually exclusive):
  *
- * params.items: array of {type, style?, ...type-specific fields}
- *   type "line":     {points: [[x1,y1],[x2,y2]], style?}
- *   type "ellipse":  {cx, cy, rx, ry, style?}
- *   type "rect":     {x, y, w, h, style?}
- *   type "polyline":  {points: [[x,y],...], closed?, style?}
- *   type "path":     {points: [[x,y],...], closed?, style?}  (alias)
+ *   1. template + instances: duplicate() instancing for homogeneous shapes
+ *      params.template: {type, fill?, stroke?, opacity?, ...geometry}
+ *      params.instances: [{x, y, fill?, stroke?, opacity?, scale?}, ...]
+ *
+ *   2. items[]: heterogeneous batch with per-item type/geometry
+ *      type "line":     {points: [[x1,y1],[x2,y2]], style?}
+ *      type "ellipse":  {cx, cy, rx, ry, style?}
+ *      type "rect":     {x, y, w, h, style?}
+ *      type "polyline":  {points: [[x,y],...], closed?, style?}
+ *      type "path":     {points: [[x,y],...], closed?, style?}  (alias)
  *
  * params.defaultStyle: {fill?, stroke?} — applied when item has no style
  * params.layer:        target layer name (default: active layer)
@@ -621,6 +882,25 @@ function _interpolatePalette(t, palette) {
  */
 registerOpHandler("element_create_batch", function (params, targets, ctx) {
     var doc = ctx.doc;
+    var abTop = _artboardTop(doc);
+    var abLeft = _artboardLeft(doc);
+
+    // Mutual exclusion: template XOR items
+    if (params.template && params.items) {
+        return makeError(ErrorCodes.V_INVALID_PARAM_TYPE,
+            "cannot specify both 'template' and 'items'", "validate");
+    }
+    if (params.template && (!params.instances || !params.instances.length)) {
+        return makeError(ErrorCodes.V_MISSING_REQUIRED_PARAM,
+            "'instances' array required with 'template'", "validate");
+    }
+
+    // === Template mode: duplicate() instancing ===
+    if (params.template) {
+        return _createFromTemplate(params, doc, abTop, abLeft, ctx);
+    }
+
+    // === Items mode: existing heterogeneous batch ===
     var items = params.items;
 
     if (!items || !items.length) {
@@ -691,7 +971,7 @@ registerOpHandler("element_create_batch", function (params, targets, ctx) {
                     var lp = spec.points;
                     if (!lp || lp.length < 2) { skipped++; warnings.push("items[" + i + "] skipped: line needs 2 points"); continue; }
                     item = targetLayer.pathItems.add();
-                    item.setEntirePath([[lp[0][0], -lp[0][1]], [lp[1][0], -lp[1][1]]]);
+                    item.setEntirePath([[abLeft + lp[0][0], abTop - lp[0][1]], [abLeft + lp[1][0], abTop - lp[1][1]]]);
                     item.closed = false;
                     item.filled = false;
                     trackBounds(lp[0][0], lp[0][1]);
@@ -701,7 +981,7 @@ registerOpHandler("element_create_batch", function (params, targets, ctx) {
                 case "ellipse":
                     var cx = spec.cx || 0, cy = spec.cy || 0;
                     var rx = spec.rx || spec.r || 5, ry = spec.ry || spec.r || 5;
-                    item = targetLayer.pathItems.ellipse(-cy + ry, cx - rx, rx * 2, ry * 2);
+                    item = targetLayer.pathItems.ellipse(abTop - cy + ry, abLeft + cx - rx, rx * 2, ry * 2);
                     trackBounds(cx - rx, cy - ry);
                     trackBounds(cx + rx, cy + ry);
                     break;
@@ -709,7 +989,7 @@ registerOpHandler("element_create_batch", function (params, targets, ctx) {
                 case "rect":
                     var bx = spec.x || 0, by = spec.y || 0;
                     var bw = spec.w || 50, bh = spec.h || 50;
-                    item = targetLayer.pathItems.rectangle(-by, bx, bw, bh);
+                    item = targetLayer.pathItems.rectangle(abTop - by, abLeft + bx, bw, bh);
                     trackBounds(bx, by);
                     trackBounds(bx + bw, by + bh);
                     break;
@@ -722,7 +1002,7 @@ registerOpHandler("element_create_batch", function (params, targets, ctx) {
                     item = targetLayer.pathItems.add();
                     var aiPts = [];
                     for (var pi = 0; pi < pp.length; pi++) {
-                        aiPts.push([pp[pi][0], -pp[pi][1]]);
+                        aiPts.push([abLeft + pp[pi][0], abTop - pp[pi][1]]);
                         trackBounds(pp[pi][0], pp[pi][1]);
                     }
                     item.setEntirePath(aiPts);
@@ -798,6 +1078,7 @@ registerOpHandler("element_create_batch", function (params, targets, ctx) {
         data: {
             created: created,
             skipped: skipped,
+            failed: skipped,
             ids: ids,
             bounds: boundsResult
         },
@@ -814,14 +1095,15 @@ registerOpHandler("element_modify", function (params, targets, ctx) {
 
     var modified = 0;
     var warnings = [];
+    var firstModifiedItem = null;
 
     for (var i = 0; i < targets.length; i++) {
         var item = targets[i];
 
         try {
-            // Position
-            if (params.x !== undefined) item.left = params.x;
-            if (params.y !== undefined) item.top = -params.y;
+            // Position (artboard-relative)
+            if (params.x !== undefined) item.left = _artboardLeft(ctx.doc) + params.x;
+            if (params.y !== undefined) item.top = _artboardTop(ctx.doc) - params.y;
 
             // Size
             if (params.width !== undefined) item.width = params.width;
@@ -895,14 +1177,27 @@ registerOpHandler("element_modify", function (params, targets, ctx) {
             }
 
             modified++;
+            if (!firstModifiedItem) firstModifiedItem = item;
         } catch (e) {
             warnings.push("Failed to modify item " + i + ": " + e.message);
         }
     }
 
+    // Position echo: bounds-based position in user coords (artboard-relative, y-down)
+    // Note: width/height are axis-aligned bounding box dimensions, not original geometry
+    var posEcho = null;
+    if (firstModifiedItem) {
+        var abT = _artboardTop(ctx.doc), abL = _artboardLeft(ctx.doc);
+        posEcho = {
+            x: Math.round((firstModifiedItem.left - abL) * 100) / 100,
+            y: Math.round((abT - firstModifiedItem.top) * 100) / 100,
+            width: Math.round(firstModifiedItem.width * 100) / 100,
+            height: Math.round(firstModifiedItem.height * 100) / 100
+        };
+    }
     return {
         ok: modified > 0,
-        data: { modified: modified, total: targets.length, failed: targets.length - modified },
+        data: { modified: modified, total: targets.length, failed: targets.length - modified, position: posEcho },
         warnings: warnings
     };
 });
@@ -923,21 +1218,16 @@ registerOpHandler("element_delete", function (params, targets, ctx) {
     // Delete in reverse order to avoid index shifting issues
     for (var i = targets.length - 1; i >= 0; i--) {
         try {
-            // Targeted index removal (O(1) per item) before DOM removal
-            if (typeof extractMcpId === "function" && typeof removeFromIdIndex === "function") {
+            // Tombstone in heap before DOM removal (tracked by active txn)
+            if (typeof extractMcpId === "function" && typeof heapTombstone === "function") {
                 var id = extractMcpId(targets[i].note);
-                if (id) removeFromIdIndex(id);
+                if (id) heapTombstone(id);
             }
             targets[i].remove();
             deleted++;
         } catch (e) {
             warnings.push("Failed to delete item " + i + ": " + e.message);
         }
-    }
-
-    // Full invalidation as safety net (handles any edge cases missed by targeted removal)
-    if (deleted > 0 && typeof invalidateIdIndex === "function") {
-        invalidateIdIndex();
     }
 
     return {

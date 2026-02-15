@@ -7,6 +7,7 @@ Tests for the WebSocketBridge and RequestRegistry classes.
 import pytest
 import asyncio
 from unittest.mock import MagicMock, AsyncMock, patch
+from websockets.protocol import State
 
 from illustrator_mcp.bridge.request_registry import RequestRegistry
 
@@ -138,6 +139,7 @@ class TestDuplicateConnectionRejection:
         mock_client1 = AsyncMock()
         mock_client1.closed = False
         mock_client1.open = True
+        mock_client1.state = State.OPEN
         server.client = mock_client1
         
         # Attempt second connection
@@ -166,6 +168,7 @@ class TestDuplicateConnectionRejection:
         mock_client1 = AsyncMock()
         mock_client1.closed = True
         mock_client1.open = False
+        mock_client1.state = State.CLOSED
         mock_client1.close = AsyncMock()
         server.client = mock_client1
         

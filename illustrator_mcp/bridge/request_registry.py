@@ -142,14 +142,19 @@ class RequestRegistry:
         Complete a streaming request with final result.
         
         Thread-safe: sends a sentinel message {type: "complete"} through the queue.
-        The consumer detects the sentinel and exits — no separate flag needed.
+        The consumer (stream_updates) detects the sentinel and cleans up.
+        
+        Does NOT remove from _streaming here — the queue reference must remain
+        accessible for consumers that start after complete_streaming is called.
+        Cleanup is handled by stream_updates (on consumption) and cancel_all
+        (on disconnect).
         
         Args:
             request_id: The streaming request ID.
             final_result: Final result data.
             
         Returns:
-            True if completed, False if not found.
+            True if sentinel was sent, False if not found or already completed.
         """
         # Coerce request_id to int for safety — JSON may return str
         try:
@@ -161,9 +166,12 @@ class RequestRegistry:
         with self._lock:
             streaming = self._streaming.get(request_id)
             if streaming:
+                if getattr(streaming, '_completed', False):
+                    return False
                 final_result["type"] = "complete"
                 try:
                     streaming.queue.put_nowait(final_result)
+                    streaming._completed = True
                     return True
                 except asyncio.QueueFull:
                     logger.warning(f"Streaming queue full on complete for request {request_id}")
@@ -180,6 +188,9 @@ class RequestRegistry:
         Driven entirely by queue messages (single-channel truth).
         Exits when a sentinel {type: "complete"} is received.
         No flag checking — eliminates the race between flag set and queue read.
+        
+        Handles cleanup: removes the streaming request from _streaming when
+        the consumer exits (normal completion, timeout, or error).
         
         Args:
             request_id: The streaming request ID.
@@ -218,6 +229,10 @@ class RequestRegistry:
         """
         Complete a pending request with a result.
         
+        Always-pop semantics: the pending entry is removed under lock
+        regardless of whether set_result succeeds. This prevents both
+        pop-on-failure inconsistency and leak-on-failure.
+        
         Validates response shape: must contain 'result' or 'error' key.
         Malformed responses are wrapped as C_PROTOCOL error.
         """
@@ -229,36 +244,37 @@ class RequestRegistry:
             return False
 
         with self._lock:
-            pending = self._pending.get(request_id)
-            if not pending:
-                logger.warning(f"complete_request for unknown ID: {request_id}")
-                return False
-            
-            if pending.future.done():
-                logger.debug(f"Request {request_id} already resolved, ignoring late result")
-                return False
+            pending = self._pending.pop(request_id, None)
 
-            try:
-                # Validate response shape
-                if isinstance(result, dict) and not (
-                    "result" in result or "error" in result
-                ):
-                    from illustrator_mcp.errors import ErrorCode, format_code
-                    logger.warning(
-                        format_code(ErrorCode.C_PROTOCOL,
-                            f"Request {request_id}: missing 'result'/'error'. "
-                            f"Keys: {list(result.keys())}")
-                    )
-                    result = {
-                        "error": format_code(ErrorCode.C_PROTOCOL,
-                            f"Response missing required 'result' or 'error' key. "
-                            f"Got: {list(result.keys())}")
-                    }
-                pending.future.set_result(result)
-                return True
-            finally:
-                # Remove the request from pending after it's been completed or failed
-                self._pending.pop(request_id, None)
+        if not pending:
+            logger.warning(f"complete_request for unknown ID: {request_id}")
+            return False
+
+        if pending.future.done():
+            logger.debug(f"Request {request_id} already resolved, ignoring late result")
+            return False
+
+        # Validate response shape
+        if isinstance(result, dict) and not (
+            "result" in result or "error" in result
+        ):
+            from illustrator_mcp.errors import ErrorCode, format_code
+            logger.warning(
+                format_code(ErrorCode.C_PROTOCOL,
+                    f"Request {request_id}: missing 'result'/'error'. "
+                    f"Keys: {list(result.keys())}"))
+            result = {
+                "error": format_code(ErrorCode.C_PROTOCOL,
+                    f"Response missing required 'result' or 'error' key. "
+                    f"Got: {list(result.keys())}")
+            }
+
+        try:
+            pending.future.set_result(result)
+            return True
+        except Exception:
+            logger.warning(f"Failed to set result for request {request_id}")
+            return False
         
     def fail_request(self, request_id: int, error: Exception) -> bool:
         """

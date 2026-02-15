@@ -1,6 +1,8 @@
 """
 Configuration management for Illustrator MCP.
 """
+import logging as _logging
+
 from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
@@ -28,6 +30,14 @@ class Config(BaseSettings):
     # Timeout settings
     timeout: float = Field(default=30.0, ge=1.0, le=300.0, description="Operation timeout in seconds")
     
+    # Watchdog settings (E1)
+    watchdog_interval: float = Field(default=10.0, ge=1.0, le=60.0, description="Seconds between panel health checks")
+    watchdog_stale_threshold: float = Field(default=30.0, ge=10.0, le=120.0, description="Seconds of silence before panel is declared dead")
+    
+    # Log rotation settings (E2)
+    max_log_sessions: int = Field(default=50, ge=1, le=1000, description="Maximum session log files to keep")
+    max_log_age_days: int = Field(default=30, ge=1, le=365, description="Maximum age in days for session logs")
+    
     # Logging
     log_level: str = Field(default="INFO", description="Log level: DEBUG, INFO, WARNING, ERROR")
     
@@ -40,8 +50,7 @@ class Config(BaseSettings):
 # Global config instance
 config = Config()
 
-# Apply log level from config
-import logging as _logging
+# Set log level once at startup (not dynamically updated if config changes later)
 _logging.getLogger("illustrator_mcp").setLevel(
     getattr(_logging, config.log_level.upper(), _logging.INFO)
 )

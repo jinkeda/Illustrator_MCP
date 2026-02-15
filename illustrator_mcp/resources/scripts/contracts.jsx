@@ -3,13 +3,13 @@
  * Part of Illustrator MCP SOC Framework
  * 
  * AUTO-GENERATED - DO NOT EDIT MANUALLY
- * Generated: 2026-02-10T15:13:44Z
+ * Generated: 2026-02-14T14:29:55Z
  * Source: illustrator_mcp/schemas/contracts.py
  * 
  * To regenerate: python -m illustrator_mcp.tools.compile_contracts
  */
 
-var CONTRACTS_CHECKSUM = "433ce286a43a1a72";
+var CONTRACTS_CHECKSUM = "0f4c8b1c1ae5a5b8";
 
 // ==================== Error Codes ====================
 
@@ -23,6 +23,7 @@ var ErrorCodes = {
     V_MISSING_REQUIRED_PARAM: "V006",
     V_INVALID_PARAM_TYPE: "V007",
     V_SCHEMA_MISMATCH: "V008",
+    V_INVALID_PARAM_VALUE: "V009",
     // === RUNTIME (R) - fail during execution ===
     R_COLLECT_FAILED: "R001",
     R_COMPUTE_FAILED: "R002",
@@ -36,7 +37,17 @@ var ErrorCodes = {
     S_APP_ERROR: "S001",
     S_SCRIPT_ERROR: "S002",
     S_IO_ERROR: "S003",
-    S_MEMORY_ERROR: "S004"
+    S_MEMORY_ERROR: "S004",
+    C_NESTING_NOT_ALLOWED: "C001",
+    C_PREV_UNAVAILABLE: "C002",
+    C_INVALID_TOKEN_POSITION: "C003",
+    C_UNKNOWN_TOKEN: "C004",
+    G_UNKNOWN_PROPERTY: "G001",
+    G_INVALID_COMPARATOR: "G002",
+    G_MALFORMED: "G003",
+    SP_MISSING_PREDICATE: "SP01",
+    SP_INVALID_RECT: "SP02",
+    SP_REF_NOT_FOUND: "SP03"
 };
 
 var RETRYABLE_CODES = [ErrorCodes.R_COLLECT_FAILED, ErrorCodes.R_COMPUTE_FAILED];
@@ -393,6 +404,14 @@ var OP_PARAM_SCHEMAS = {
         "required": [],
         "optional": [],
         "types": {}
+    },
+    "compound": {
+        "required": ["ops"],
+        "optional": ["atomic"],
+        "types": {
+            "ops": "array",
+            "atomic": "boolean"
+        }
     }
 };
 

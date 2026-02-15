@@ -11,7 +11,6 @@ from typing import Optional, TYPE_CHECKING
 if TYPE_CHECKING:
     from illustrator_mcp.websocket_bridge import WebSocketBridge
     from illustrator_mcp.proxy_client import IllustratorProxy
-    from illustrator_mcp.tools.execute import LibraryResolver
 
 
 @dataclass
@@ -22,13 +21,12 @@ class RuntimeContext:
     _lock: threading.Lock = field(default_factory=threading.Lock, init=False, repr=False)
 
     def get_bridge(self) -> 'WebSocketBridge':
+        """Get or create the WebSocketBridge singleton.
 
-        """Get or create the WebSocketBridge singleton."""
-        if self.bridge:
-            return self.bridge
-            
+        Uses lock consistently (no unlocked outer read) so this is safe
+        under free-threaded Python (--disable-gil) and PyPy.
+        """
         with self._lock:
-            # Double check locking
             if self.bridge is None:
                 # Import here to avoid circular imports
                 from illustrator_mcp.websocket_bridge import WebSocketBridge
@@ -39,9 +37,6 @@ class RuntimeContext:
     
     def get_proxy(self) -> 'IllustratorProxy':
         """Get or create the IllustratorProxy singleton."""
-        if self.proxy:
-            return self.proxy
-            
         with self._lock:
             if self.proxy is None:
                 from illustrator_mcp.proxy_client import IllustratorProxy

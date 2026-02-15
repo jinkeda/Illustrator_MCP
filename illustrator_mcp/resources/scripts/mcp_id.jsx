@@ -6,7 +6,6 @@
  * - Extracting IDs from item notes
  * - Setting IDs in item notes
  * - Removing IDs from notes
- * - Targeted ID index removal (O(1) per item)
  *
  * CONVENTION
  *   IDs are stored in item.note as: @mcp:id=<id>
@@ -58,22 +57,4 @@ function setMcpId(item, id) {
 function removeIdFromNote(note) {
     if (!note) return "";
     return note.replace(/@mcp:id=[^\s@]+/, "").replace(/\s{2,}/g, " ").replace(/^\s+|\s+$/g, "");
-}
-
-/**
- * Remove a specific ID from the global ID index.
- * O(1) operation — does NOT rebuild the entire index.
- *
- * @param {string} id - The MCP ID to remove
- * @returns {boolean} True if the ID was found and removed
- */
-function removeFromIdIndex(id) {
-    if (!id) return false;
-    if ($.global.mcpIdIndex && $.global.mcpIdIndex.index) {
-        if ($.global.mcpIdIndex.index[id]) {
-            delete $.global.mcpIdIndex.index[id];
-            return true;
-        }
-    }
-    return false;
 }

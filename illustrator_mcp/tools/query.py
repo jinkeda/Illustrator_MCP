@@ -6,7 +6,7 @@ for more structured, observable, and debuggable operations.
 """
 
 import json
-from typing import Dict, Any, List
+from typing import Dict, Any, List, Optional
 from pydantic import Field
 
 import logging
@@ -116,7 +116,7 @@ if (typeof executeTask !== "function" || typeof validatePayload !== "function") 
         ok: false,
         errors: [{{
             code: "LIB_NOT_LOADED",
-            message: "task_executor.jsx library not properly loaded",
+            message: "task_pipeline.jsx library not properly loaded",
             stage: "preflight",
             details: _libraryCheck
         }}],
@@ -165,7 +165,7 @@ if (typeof executeTask !== "function" || typeof validatePayload !== "function") 
 """
     
     # Get canonicalized includes metadata for diagnostics
-    meta = get_injection_metadata(["task_executor"])
+    meta = get_injection_metadata(["task_pipeline"])
     diagnostics = {
         "targets": params.targets,
         "includes": meta["includes_canonical"],
@@ -177,7 +177,7 @@ if (typeof executeTask !== "function" || typeof validatePayload !== "function") 
         command_type="query_items",
         tool_name="illustrator_query_items",
         params=params.model_dump(),
-        includes=["task_executor"]
+        includes=["task_pipeline"]
     )
 
     # Check for pipeline-level errors (connection, library injection, etc.)
@@ -258,7 +258,7 @@ if (typeof executeTask !== "function" || typeof validatePayload !== "function") 
 class PreflightCheckInput(ToolInputBase):
     """Input for preflight document validation."""
 
-    artboard_index: int = Field(
+    artboard_index: Optional[int] = Field(
         default=None,
         description="Artboard index to check (None = active artboard)"
     )

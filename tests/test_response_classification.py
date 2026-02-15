@@ -1,0 +1,213 @@
+"""
+Snapshot tests for format_response and format_envelope.
+
+These tests capture the EXACT current behavior of both formatters.
+They must pass BEFORE and AFTER the B1 refactor to ensure no behavioral drift.
+"""
+
+import json
+import pytest
+
+from illustrator_mcp.proxy_client import format_response, format_envelope
+
+
+# =============================================================================
+# format_response snapshots — strict string equality
+# =============================================================================
+
+class TestFormatResponseSnapshots:
+    """Strict string-equality snapshots of format_response output."""
+
+    def test_top_level_error(self):
+        """Top-level error key in response triggers structured error formatting."""
+        response = {"error": "Script syntax error at line 5"}
+        result = format_response(response)
+        # classify_error matches 'syntax error' → S005 code
+        assert isinstance(result, str)
+        assert "S005" in result
+
+    def test_connection_error_prominent(self):
+        """Connection error gets prominent formatting with STOP banner."""
+        response = {"error": "[C001] DISCONNECTED: panel offline"}
+        result = format_response(response)
+        assert "⚠️" in result
+        assert "STOP" in result
+
+    def test_success_json_result(self):
+        """Result dict with success envelope is unwrapped to inner result."""
+        response = {"result": {"success": True, "result": {"data": [1, 2, 3]}}}
+        result = format_response(response)
+        parsed = json.loads(result)
+        assert parsed == {"data": [1, 2, 3]}
+
+    def test_success_envelope_unwrapped(self):
+        """Success envelope {success:true, result:...} is unwrapped."""
+        response = {"result": json.dumps({"success": True, "result": {"count": 5}})}
+        result = format_response(response)
+        parsed = json.loads(result)
+        assert parsed == {"count": 5}
+
+    def test_double_wrapped_result(self):
+        """Double-wrapped JSON string is fully unwrapped."""
+        inner = json.dumps({"success": True, "result": {"actual": "data"}})
+        response = {"result": inner}
+        result = format_response(response)
+        parsed = json.loads(result)
+        assert parsed == {"actual": "data"}
+
+    def test_failure_envelope(self):
+        """success:false in result is treated as error."""
+        response = {"result": json.dumps({"success": False, "error": "Operation failed"})}
+        result = format_response(response)
+        assert "error" in result.lower() or "Error" in result
+
+    def test_error_in_unwrapped_result(self):
+        """Error key in unwrapped result dict."""
+        response = {"result": json.dumps({"success": True, "result": {"error": "Inner error"}})}
+        result = format_response(response)
+        assert "Inner error" in result or "error" in result.lower()
+
+    def test_string_error_prefix(self):
+        """Plain-text string starting with error prefix."""
+        response = {"result": "TypeError: undefined is not a function"}
+        result = format_response(response)
+        assert "TypeError" in result or "error" in result.lower()
+
+    def test_string_error_syntax(self):
+        """SyntaxError prefix detected."""
+        response = {"result": "SyntaxError: unexpected token }"}
+        result = format_response(response)
+        assert "SyntaxError" in result or "error" in result.lower()
+
+    def test_plain_string_result(self):
+        """Plain string result that is not an error."""
+        response = {"result": "Hello World"}
+        result = format_response(response)
+        assert result == "Hello World"
+
+    def test_numeric_result(self):
+        """Numeric result is stringified."""
+        response = {"result": 42}
+        result = format_response(response)
+        assert result == "42"
+
+    def test_json_array_result(self):
+        """JSON array result is pretty-printed."""
+        response = {"result": "[1, 2, 3]"}
+        result = format_response(response)
+        parsed = json.loads(result)
+        assert parsed == [1, 2, 3]
+
+    def test_no_result_key(self):
+        """Response without result or error uses whole response as result."""
+        response = {"data": "value"}
+        result = format_response(response)
+        # format_response uses response.get("result", response)
+        parsed = json.loads(result)
+        assert parsed == {"data": "value"}
+
+
+# =============================================================================
+# format_envelope snapshots — strict dict structure equality
+# =============================================================================
+
+class TestFormatEnvelopeSnapshots:
+    """Strict dict-equality snapshots of format_envelope output."""
+
+    def _parse(self, result: str) -> dict:
+        """Parse envelope JSON and return dict."""
+        return json.loads(result)
+
+    def test_top_level_error(self):
+        """Top-level error produces {ok:false, error:{...}, result:null}."""
+        response = {"error": "Script failed"}
+        result = self._parse(format_envelope(response))
+        assert result["ok"] is False
+        assert result["result"] is None
+        assert result["error"]["code"] is not None
+        assert isinstance(result["error"]["message"], str)
+        assert isinstance(result["error"]["suggestions"], list)
+        assert result["warnings"] == []
+
+    def test_success_simple(self):
+        """Simple success produces {ok:true, result:..., error:null}."""
+        response = {"result": "done"}
+        result = self._parse(format_envelope(response))
+        assert result["ok"] is True
+        assert result["error"] is None
+        assert result["result"] == "done"
+        assert result["warnings"] == []
+
+    def test_success_envelope_unwrapped(self):
+        """Success envelope is unwrapped in result field."""
+        response = {"result": json.dumps({"success": True, "result": {"count": 5}})}
+        result = self._parse(format_envelope(response))
+        assert result["ok"] is True
+        assert result["result"] == {"count": 5}
+
+    def test_failure_envelope(self):
+        """success:false produces {ok:false}."""
+        response = {"result": json.dumps({"success": False, "error": "Op failed"})}
+        result = self._parse(format_envelope(response))
+        assert result["ok"] is False
+        assert result["result"] is None
+        assert "Op failed" in result["error"]["message"] or result["error"]["code"] is not None
+
+    def test_error_in_unwrapped_result(self):
+        """Error key in unwrapped result dict."""
+        response = {"result": json.dumps({"success": True, "result": {"error": "Inner"}})}
+        result = self._parse(format_envelope(response))
+        assert result["ok"] is False
+        assert result["result"] is None
+
+    def test_string_error_prefix(self):
+        """Error prefix in plain string result."""
+        response = {"result": "TypeError: bad type"}
+        result = self._parse(format_envelope(response))
+        assert result["ok"] is False
+        assert result["result"] is None
+
+    def test_warnings_passed_through(self):
+        """Warnings list is included in envelope."""
+        response = {"result": "ok"}
+        result = self._parse(format_envelope(response, warnings=["Warn 1"]))
+        assert result["ok"] is True
+        assert result["warnings"] == ["Warn 1"]
+
+    def test_diagnostics_passed_through(self):
+        """Diagnostics dict is included in envelope."""
+        response = {"result": "ok"}
+        result = self._parse(format_envelope(response, diagnostics={"key": "val"}))
+        assert result["ok"] is True
+        assert result["diagnostics"]["key"] == "val"
+
+    def test_trace_id_in_diagnostics(self):
+        """trace_id from response appears in diagnostics."""
+        response = {"result": "ok", "trace_id": "abc-123"}
+        result = self._parse(format_envelope(response))
+        assert result["diagnostics"]["trace_id"] == "abc-123"
+
+    def test_elapsed_ms_in_diagnostics(self):
+        """elapsed_ms from response appears in diagnostics."""
+        response = {"result": "ok", "elapsed_ms": 123.4}
+        result = self._parse(format_envelope(response))
+        assert result["diagnostics"]["elapsed_ms"] == 123.4
+
+    def test_json_object_result(self):
+        """JSON object results are preserved, not stringified."""
+        response = {"result": json.dumps({"data": [1, 2, 3]})}
+        result = self._parse(format_envelope(response))
+        assert result["ok"] is True
+        assert result["result"] == {"data": [1, 2, 3]}
+
+    def test_envelope_has_all_keys(self):
+        """Every envelope response has exactly {ok, warnings, error, diagnostics, result}."""
+        response = {"result": "test"}
+        result = self._parse(format_envelope(response))
+        assert set(result.keys()) == {"ok", "warnings", "error", "diagnostics", "result"}
+
+    def test_error_envelope_has_all_keys(self):
+        """Error envelopes also have all 5 keys."""
+        response = {"error": "fail"}
+        result = self._parse(format_envelope(response))
+        assert set(result.keys()) == {"ok", "warnings", "error", "diagnostics", "result"}

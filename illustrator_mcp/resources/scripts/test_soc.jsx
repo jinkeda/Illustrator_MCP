@@ -856,6 +856,96 @@ function runSOCTests() {
         }
     })();
 
+    // --------------------------------------------------
+    // Group 28: Template instancing — ellipse scatter
+    // --------------------------------------------------
+    (function () {
+        executeOpBatch([{ task: 'layer_create', params: { name: 'G28_Template' } }]);
+        var r = executeOpBatch([
+            {
+                task: 'element_create_batch',
+                params: {
+                    template: { type: 'ellipse', r: 5, fill: { r: 255, g: 100, b: 0 }, stroke: false },
+                    instances: [
+                        { x: 50, y: 50 },
+                        { x: 100, y: 80, fill: { r: 0, g: 200, b: 100 } },
+                        { x: 150, y: 120, scale: 200 },
+                        { x: 200, y: 160, opacity: 50 },
+                        { x: 250, y: 200 }
+                    ],
+                    layer: 'G28_Template',
+                    name: 'dot'
+                }
+            }
+        ]);
+        var data = r.ops && r.ops[0] && r.ops[0].data;
+        results.push(_socAssert("G28 template ok", r.ok));
+        results.push(_socAssert("G28 created=5",
+            data && data.created === 5,
+            "created=" + (data ? data.created : "?")));
+        results.push(_socAssert("G28 ids.length=5",
+            data && data.ids && data.ids.length === 5,
+            "ids=" + (data && data.ids ? data.ids.length : "?")));
+        results.push(_socAssert("G28 mode=template",
+            data && data.mode === "template"));
+
+        // Verify items exist on canvas
+        var found = 0;
+        for (var i = 0; i < doc.layers.length; i++) {
+            if (doc.layers[i].name !== 'G28_Template') continue;
+            for (var j = 0; j < doc.layers[i].pageItems.length; j++) {
+                if ((doc.layers[i].pageItems[j].name || "").indexOf("dot_") >= 0) found++;
+            }
+        }
+        results.push(_socAssert("G28 5 items on canvas",
+            found === 5, "found=" + found));
+    })();
+    // Cleanup G28
+    try { doc.layers.getByName('G28_Template').remove(); } catch (e) { }
+    doc.selection = null;
+
+    // --------------------------------------------------
+    // Group 29: Template instancing — mutual exclusion guard
+    // --------------------------------------------------
+    (function () {
+        var r = executeOpBatch([
+            {
+                task: 'element_create_batch',
+                params: {
+                    template: { type: 'ellipse', r: 5 },
+                    items: [{ type: 'rect', x: 0, y: 0, w: 10, h: 10 }],
+                    instances: [{ x: 10, y: 10 }]
+                }
+            }
+        ]);
+        results.push(_socAssert("G29 template+items → fails",
+            r.ok === false));
+        var errStr = JSON.stringify(r);
+        results.push(_socAssert("G29 error mentions both",
+            errStr.indexOf("template") >= 0 && errStr.indexOf("items") >= 0,
+            errStr.substring(0, 100)));
+    })();
+
+    // --------------------------------------------------
+    // Group 30: Template instancing — missing instances → fails
+    // --------------------------------------------------
+    (function () {
+        var r = executeOpBatch([
+            {
+                task: 'element_create_batch',
+                params: {
+                    template: { type: 'ellipse', r: 5 }
+                }
+            }
+        ]);
+        results.push(_socAssert("G30 template no instances → fails",
+            r.ok === false));
+        var errStr = JSON.stringify(r);
+        results.push(_socAssert("G30 error mentions instances",
+            errStr.indexOf("instances") >= 0,
+            errStr.substring(0, 100)));
+    })();
+
     // === Summary ===
     doc.close(SaveOptions.DONOTSAVECHANGES);
 

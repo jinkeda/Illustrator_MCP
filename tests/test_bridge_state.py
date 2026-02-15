@@ -116,17 +116,32 @@ class TestDisconnectCancel:
 
         req_id, future = registry.create_request(loop, "s1")
 
-        # Cancel first
+        # Cancel first — cancel_all pops all entries
         registry.cancel_all("CEP panel disconnected")
         assert future.done()
 
-        # Late result arrives — must be rejected
+        # Late result arrives — must be rejected (entry already popped by cancel_all)
         accepted = registry.complete_request(req_id, {"result": "late_data"})
         assert accepted is False
 
         # Future still has the ConnectionError, not the late result
         with pytest.raises(ConnectionError, match="CEP panel disconnected"):
             future.result()
+
+        loop.close()
+
+    def test_complete_request_always_pops(self):
+        """complete_request always removes entry, even if future is already done."""
+        registry = RequestRegistry()
+        loop = asyncio.new_event_loop()
+
+        req_id, future = registry.create_request(loop, "s1")
+        future.cancel()  # Mark future as done (cancelled)
+
+        # complete_request should pop the entry and return False
+        accepted = registry.complete_request(req_id, {"result": "late"})
+        assert accepted is False
+        assert req_id not in registry._pending
 
         loop.close()
 

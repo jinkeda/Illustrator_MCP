@@ -1,0 +1,37 @@
+
+> illustrator-mcp-panel@1.0.1 build
+> vite build
+
+[36mvite v6.3.5 [32mbuilding for production...[36m[39m
+node.exe : <script src
+="./CSInterface.js"> 
+in "/index.html" 
+can't be bundled 
+without type="module" 
+attribute
+At line:1 char:1
++ & "C:\Program Files\
+nodejs/node.exe" "C:\U
+sers\k.jin\AppData\Roa
+ming\ ...
++ ~~~~~~~~~~~~~~~~~~~~
+~~~~~~~~~~~~~~~~~~~~~~
+~~~~~~~~~~~~~~~~~~~~~~
+~~~~~
+    + CategoryInfo    
+          : NotSpeci  
+  fied: (<script sr   
+ c="./...dule" att    
+ribute:String) []    
+, RemoteException
+    + FullyQualifiedE 
+   rrorId : NativeCo  
+  mmandError
+ 
+transforming...
+[32m???[39m 1599 modules transformed.
+rendering chunks...
+computing gzip size...
+[2mdist/[22m[32mindex.html       [39m[1m[2m  1.24 kB[22m[1m[22m[2m ??? gzip:  0.63 kB[22m
+[2mdist/[22m[36massets/index.js  [39m[1m[2m155.39 kB[22m[1m[22m[2m ??? gzip: 50.19 kB[22m
+[32m??? built in 6.93s[39m

@@ -40,7 +40,7 @@ class TestStreamingRace:
         req_id = _create_streaming(registry)
         assert registry.complete_streaming(req_id, {"result": "done"})
 
-        # Retrieve from queue — should have the sentinel
+        # Entry remains in _streaming (cleanup by stream_updates)
         streaming = registry._streaming.get(req_id)
         assert streaming is not None
         msg = streaming.queue.get_nowait()
@@ -140,19 +140,11 @@ class TestStreamingRace:
         assert req_id not in registry._streaming
 
     @pytest.mark.asyncio
-    async def test_multiple_complete_calls_idempotent(self, registry):
-        """Calling complete_streaming twice puts two sentinels in queue."""
+    async def test_multiple_complete_calls_not_idempotent(self, registry):
+        """Second complete_streaming returns False due to _completed flag."""
         req_id = _create_streaming(registry)
 
-        # First complete succeeds
+        # First complete succeeds and sets _completed flag
         assert registry.complete_streaming(req_id, {"result": "first"})
-        # Second complete also succeeds (no `completed` flag to block it)
-        assert registry.complete_streaming(req_id, {"result": "second"})
-
-        # Queue should have both sentinels
-        streaming = registry._streaming.get(req_id)
-        assert streaming is not None
-        msg1 = streaming.queue.get_nowait()
-        assert msg1["type"] == "complete"
-        msg2 = streaming.queue.get_nowait()
-        assert msg2["type"] == "complete"
+        # Second complete returns False (_completed flag blocks it)
+        assert not registry.complete_streaming(req_id, {"result": "second"})

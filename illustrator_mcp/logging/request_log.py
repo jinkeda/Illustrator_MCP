@@ -50,9 +50,66 @@ class RequestLog:
             self.scripts_dir.mkdir(parents=True, exist_ok=True)
             self.session_file = self.log_dir / f"session_{self.session_id}.jsonl"
             logger.info(f"Request logging enabled: {self.session_file}")
+            self._cleanup_old_sessions()
         except Exception as e:
             logger.warning(f"Failed to initialize request logging: {e}")
             self.enabled = False
+    
+    def _cleanup_old_sessions(self) -> None:
+        """Remove old session logs by age and count.
+
+        Uses max_log_age_days and max_log_sessions from config.
+        Runs once at session init — errors are logged and swallowed.
+        """
+        try:
+            from illustrator_mcp.config import config
+            import time
+
+            max_age_seconds = config.max_log_age_days * 86400
+            now = time.time()
+            session_files = sorted(
+                self.log_dir.glob("session_*.jsonl"),
+                key=lambda f: f.stat().st_mtime,
+            )
+
+            removed = 0
+
+            # Pass 1: remove files older than max_age_days
+            remaining = []
+            for f in session_files:
+                if (now - f.stat().st_mtime) > max_age_seconds:
+                    self._remove_session_file(f)
+                    removed += 1
+                else:
+                    remaining.append(f)
+
+            # Pass 2: trim to max_log_sessions (keep newest)
+            while len(remaining) > config.max_log_sessions:
+                oldest = remaining.pop(0)
+                self._remove_session_file(oldest)
+                removed += 1
+
+            if removed:
+                logger.info(f"Log cleanup: removed {removed} old session(s)")
+
+        except Exception as e:
+            logger.debug(f"Log cleanup skipped: {e}")
+
+    def _remove_session_file(self, session_file: Path) -> None:
+        """Remove a session .jsonl file and its associated script files."""
+        # Extract session_id from filename: session_YYYYMMDD_HHMMSS.jsonl
+        stem = session_file.stem  # e.g. "session_20260214_112300"
+        session_prefix = stem.replace("session_", "") + "_"
+        # Remove matching script files
+        for script_file in self.scripts_dir.glob(f"{session_prefix}*"):
+            try:
+                script_file.unlink()
+            except OSError:
+                pass
+        try:
+            session_file.unlink()
+        except OSError:
+            pass
     
     def log_request(
         self,

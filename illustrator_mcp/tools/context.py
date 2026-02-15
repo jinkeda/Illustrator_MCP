@@ -247,34 +247,4 @@ async def illustrator_get_scripting_reference() -> str:
     return _get_scripting_reference()
 
 
-@mcp.tool(
-    name="illustrator_get_connection_info",
-    annotations={
-        "title": "Get Connection Info",
-        "readOnlyHint": True,
-        "destructiveHint": False,
-        "idempotentHint": True,
-        "openWorldHint": False
-    }
-)
-async def illustrator_get_connection_info() -> dict:
-    """
-    Get the current Illustrator MCP connection status.
-    
-    Useful for debugging connection issues when multiple clients are involved.
-    Use this tool to check if another MCP client is already connected.
-    
-    Returns:
-        Dictionary with:
-        - is_connected: Whether the CEP panel is connected
-        - port: WebSocket port number
-        - state: Current connection state
-        - is_running: Whether the bridge thread is running
-        - client_info: Details about the connected client (if any)
-    """
-    from illustrator_mcp.runtime import get_runtime
-    bridge = get_runtime().get_bridge()
-    info = bridge.get_connection_info()
-    info["panel_health"] = bridge.get_panel_health()
-    return info
 

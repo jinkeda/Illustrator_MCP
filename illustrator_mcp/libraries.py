@@ -13,7 +13,7 @@ import json
 import logging
 import threading
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 logger = logging.getLogger(__name__)
 
@@ -34,7 +34,7 @@ class LibraryResolver:
         self._manifest_cache: Optional[dict] = None
         self._manifest_stamp: Optional[tuple] = None  # (mtime_ns, size)
         self._manifest_lock = threading.Lock()
-        self._file_cache: Dict[Path, str] = {}
+        self._file_cache: Dict[Path, Tuple[str, float]] = {}
         self._file_lock = threading.Lock()
 
     def _load_manifest(self) -> dict:
@@ -70,11 +70,12 @@ class LibraryResolver:
             try:
                 with open(manifest_path, encoding="utf-8") as f:
                     loaded = json.load(f)
+                old_stamp = self._manifest_stamp
                 self._manifest_cache = loaded
                 self._manifest_stamp = current_stamp
                 lib_keys = list(loaded.get("libraries", {}).keys())
                 logger.info(f"Manifest loaded from {manifest_path} (mtime_ns={current_stamp[0]}, size={current_stamp[1]}): {len(lib_keys)} libs: {lib_keys}")
-                if self._manifest_stamp is not None:
+                if old_stamp is not None:
                     logger.debug("Manifest reloaded (stamp changed)")
             except Exception as e:
                 if self._manifest_cache is not None:
@@ -87,26 +88,37 @@ class LibraryResolver:
             return self._manifest_cache
 
     def _read_library_file(self, path: Path) -> str:
-        """Read library file with mtime-based cache invalidation."""
+        """Read library file with mtime-based cache invalidation.
+
+        Uses double-stat (before + after read) to detect concurrent
+        modifications and ensure stored mtime matches stored content.
+        """
         try:
-            current_mtime = path.stat().st_mtime
+            mtime_before = path.stat().st_mtime
         except OSError:
             raise ValueError(f"Library file not found: {path.name}")
 
         with self._file_lock:
-            if path in self._file_cache:
-                cached_content, cached_mtime = self._file_cache[path]
-                if cached_mtime == current_mtime:
-                    return cached_content
+            cached = self._file_cache.get(path)
+            if cached and cached[1] == mtime_before:
+                return cached[0]
 
         content = path.read_text(encoding="utf-8")
+        try:
+            mtime_after = path.stat().st_mtime
+        except OSError:
+            raise ValueError(f"Library file disappeared: {path.name}")
+
+        if mtime_after != mtime_before:
+            # File changed during read — re-read once
+            content = path.read_text(encoding="utf-8")
+            mtime_after = path.stat().st_mtime
 
         with self._file_lock:
-            self._file_cache[path] = (content, current_mtime)
-
+            self._file_cache[path] = (content, mtime_after)
         return content
 
-    def resolve(self, includes: List[str]) -> str:
+    def resolve(self, includes: List[str], *, skip_collision_check: bool = False) -> str:
         """
         Resolve libraries with transitive dependencies.
         
@@ -147,18 +159,29 @@ class LibraryResolver:
             
             lib = manifest["libraries"][lib_name]
             
+            # Warn on deprecated libraries
+            if lib.get("deprecated"):
+                desc = lib.get("description", "")
+                logger.warning(
+                    f"Library '{lib_name}' is deprecated. {desc}"
+                )
+            
+            # Mark seen BEFORE recursing to break mutual dependencies
+            seen.add(lib_name)
+            
             # Resolve dependencies first (recursive)
             for dep in lib.get("dependencies", []):
                 resolve_one(dep)
             
-            # Check for symbol collisions
-            for symbol in lib.get("exports", []):
-                if symbol in all_exports:
-                    raise ValueError(
-                        f"Symbol collision: '{symbol}' defined in both "
-                        f"'{all_exports[symbol]}' and '{lib_name}'"
-                    )
-                all_exports[symbol] = lib_name
+            # Check for symbol collisions (unless explicitly skipped)
+            if not skip_collision_check:
+                for symbol in lib.get("exports", []):
+                    if symbol in all_exports:
+                        raise ValueError(
+                            f"Symbol collision: '{symbol}' defined in both "
+                            f"'{all_exports[symbol]}' and '{lib_name}'"
+                        )
+                    all_exports[symbol] = lib_name
             
             # Load content
             lib_path = self.resources_dir / lib["file"]
@@ -167,8 +190,6 @@ class LibraryResolver:
                 resolved.append(content)
             except ValueError as e:
                 raise ValueError(f"Library file not found: {lib['file']}") from e
-            
-            seen.add(lib_name)
         
         for lib_name in includes:
             resolve_one(lib_name)
@@ -198,6 +219,60 @@ class LibraryResolver:
         with self._file_lock:
             self._file_cache.clear()
 
+    def build_sentinel_script(self, preload_version: str) -> str:
+        """Build JS that verifies preloaded libraries match expected version.
+
+        Returns ExtendScript that checks $.global.__mcp.version against
+        preload_version. On mismatch, throws an error containing the
+        MCP_LIBS_NOT_READY sentinel which response_classification.py catches.
+        """
+        return (
+            'if (typeof $.global.__mcp === "undefined"'
+            f' || $.global.__mcp.version !== "{preload_version}") {{\n'
+            f'  throw new Error("MCP_LIBS_NOT_READY:{preload_version}");\n'
+            '}\n'
+        )
+
+    def get_all_library_names(self) -> List[str]:
+        """Return all library names from the manifest.
+
+        Used by build_preload_bundle to resolve the full library set.
+        """
+        manifest = self._load_manifest()
+        if not manifest or not manifest.get("libraries"):
+            return []
+        return list(manifest["libraries"].keys())
+
+    def build_preload_bundle(self) -> Tuple[str, str]:
+        """Build a preload script that persists all libraries in global scope.
+
+        Resolves ALL libraries from the manifest in dependency order,
+        concatenates them, and appends a version marker to
+        ``$.global.__mcp.version``. The resulting script is eval'd once;
+        subsequent calls use sentinel-only injection.
+
+        Returns:
+            Tuple of (preload_script, version_hash) where version_hash
+            is an 8-char MD5 prefix of the concatenated library code.
+        """
+        all_libs = self.get_all_library_names()
+        if not all_libs:
+            return ("", "")
+
+        library_code = self.resolve(all_libs, skip_collision_check=True)
+        version_hash = hashlib.md5(library_code.encode("utf-8")).hexdigest()[:8]
+
+        # Append version marker so sentinel checks can verify preload state
+        preload_script = (
+            library_code + "\n\n"
+            "// === MCP Preload Version Marker ===\n"
+            "$.global.__mcp = $.global.__mcp || {};\n"
+            f'$.global.__mcp.version = "{version_hash}";\n'
+        )
+
+        return (preload_script, version_hash)
+
+
     def _resolve_dependency_order(self, includes: List[str]) -> List[str]:
         """Resolve libraries with transitive dependencies, returning load order.
 
@@ -221,9 +296,10 @@ class LibraryResolver:
                 if lib_name not in manifest["libraries"]:
                     return  # skip unknown, resolve() will raise
             lib = manifest["libraries"][lib_name]
+            # Mark seen BEFORE recursing to break mutual dependencies
+            seen.add(lib_name)
             for dep in lib.get("dependencies", []):
                 walk(dep)
-            seen.add(lib_name)
             resolved.append(lib_name)
 
         for lib_name in includes:
@@ -318,19 +394,25 @@ def get_injection_metadata(includes: List[str]) -> Dict[str, Any]:
 INJECTION_SENTINEL = "/* @ILLUSTRATOR_MCP_INJECTED */"
 
 
-def inject_libraries(script: str, includes: List[str]) -> str:
+def inject_libraries(
+    script: str,
+    includes: List[str],
+    preload_version: Optional[str] = None,
+) -> str:
     """Prepend standard library code to a script using manifest-driven resolution.
     
-    Features (v2.3):
+    Features (v2.4):
     - Automatic transitive dependency resolution
     - Deduplication (each library loaded exactly once)
     - Symbol collision detection
     - Library content caching
     - Sentinel marker for double-injection prevention
+    - Preload-aware: sentinel-only injection when libraries are preloaded (C1)
     
     Args:
         script: The user's ExtendScript code.
         includes: List of library names (e.g., ["geometry", "selection", "layout"]).
+        preload_version: If set, libraries are preloaded; inject sentinel check only.
     
     Returns:
         Combined script with libraries prepended and sentinel marker.
@@ -341,6 +423,23 @@ def inject_libraries(script: str, includes: List[str]) -> str:
     if not includes:
         return script
     
-    library_code = get_resolver().resolve(includes)
-    return INJECTION_SENTINEL + "\n" + library_code + "\n\n// === User Script ===\n" + script
-
+    resolver = get_resolver()
+    
+    if preload_version:
+        # C1: Sentinel-only injection — libraries already in $.global.__mcp
+        sentinel_script = resolver.build_sentinel_script(preload_version)
+        return (
+            INJECTION_SENTINEL + "\n"
+            + sentinel_script + "\n\n"
+            + "// === MCP user script ===\n"
+            + script
+        )
+    
+    # Full injection — resolve and prepend all library code
+    library_code = resolver.resolve(includes)
+    return (
+        INJECTION_SENTINEL + "\n"
+        + library_code + "\n\n"
+        + "// === MCP user script ===\n"
+        + script
+    )

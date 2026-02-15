@@ -155,7 +155,7 @@ ERROR_SUGGESTIONS: Dict[str, Dict[str, Any]] = {
         "message": "Requested library not found",
         "recoverable": False,
         "suggestions": [
-            "Check library name spelling (available: geometry, layout, selection, task_executor)",
+            "Check library name spelling (available: polyfills, contracts, targets, task_pipeline, geometry)",
             "Ensure the library file exists in resources/scripts/",
         ],
     },
@@ -197,7 +197,7 @@ ERROR_SUGGESTIONS: Dict[str, Dict[str, Any]] = {
         "suggestions": [
             "Wait for the current operation to finish before sending another",
             "Increase timeout if the operation is expected to take long",
-            "Check panel health via illustrator_get_connection_info",
+            "Check server logs for panel health details",
         ],
     },
 
@@ -412,9 +412,16 @@ def create_structured_error(
     # Get suggestions from database
     if code and code.value in ERROR_SUGGESTIONS:
         info = ERROR_SUGGESTIONS[code.value]
+        # For script errors, preserve the original message as detail
+        # so callers see "Type error in script: X is not a function"
+        # instead of losing the actual error text.
+        message = info.get("message", error_message)
+        _SCRIPT_CODES = {"S005", "S006", "S007", "S008"}
+        if code.value in _SCRIPT_CODES and error_message and error_message != message:
+            message = f"{message}: {error_message}"
         return StructuredError(
             code=code.value,
-            message=info.get("message", error_message),
+            message=message,
             recoverable=info.get("recoverable", True),
             context=context,
             suggestions=info.get("suggestions", []),

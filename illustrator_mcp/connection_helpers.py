@@ -56,7 +56,7 @@ def create_duplicate_connection_error(port: int) -> ExecutionResponse:
             "Quick Fixes:\n"
             "1. Close other Claude Code instances using Illustrator MCP\n"
             "2. Restart Illustrator if the connection seems stuck\n"
-            "3. Use 'illustrator_get_connection_info' tool to check connection status")
+            "3. Check server logs for connection details")
     }
 
 
@@ -64,7 +64,6 @@ def check_connection_or_error(
     bridge_accessor: Callable,
     port: int,
     context: str = "",
-    health_check: bool = False
 ) -> Tuple[bool, Optional[ExecutionResponse]]:
     """
     Check bridge connection and return error response if disconnected.
@@ -76,7 +75,6 @@ def check_connection_or_error(
         bridge_accessor: Callable that returns the WebSocketBridge instance.
         port: The WebSocket port number.
         context: Optional context string for error message.
-        health_check: Reserved for future use. Currently does nothing.
         
     Returns:
         Tuple of (is_connected, error_response_or_none).
@@ -87,8 +85,5 @@ def check_connection_or_error(
     
     if not bridge.is_connected():
         return False, create_connection_error(port, context)
-    
-    # TODO: Implement proper async health_check using bridge.execute_script_async()
-    # when needed for stale connection detection.
     
     return True, None

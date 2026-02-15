@@ -213,7 +213,7 @@
             "version": "1.0.0",
             "deprecated": true,
             "dependencies": [
-                "task_executor",
+                "contracts",
                 "field_eval"
             ],
             "exports": [
@@ -312,10 +312,13 @@
             "file": "ops_core.jsx",
             "version": "1.2.0",
             "dependencies": [
-                "task_executor",
+                "polyfills",
+                "task_pipeline",
+                "contracts",
+                "item_ref",
+                "targets",
                 "mcp_id",
                 "heap",
-                "contracts",
                 "snapshot",
                 "ops_journal",
                 "field_eval"
@@ -326,21 +329,19 @@
                 "OP_HANDLERS",
                 "registerOpHandler",
                 "validateOp",
-                "resolveById",
                 "resolveTargets",
                 "executeOpBatch",
-                "profileOp",
-                "invalidateIdIndex",
-                "registerIdInIndex"
+                "profileOp"
             ],
-            "description": "SOC operation batch executor with ID-based targeting, validation, and global index caching"
+            "description": "SOC operation batch executor with heap-based ID targeting, validation, and transactional index lifecycle"
         },
         "ops_element": {
             "file": "ops_element.jsx",
             "version": "1.0.0",
             "dependencies": [
                 "ops_core",
-                "task_executor",
+                "contracts",
+                "targets",
                 "geo_ir",
                 "session",
                 "generative"
@@ -353,7 +354,7 @@
             "version": "1.0.0",
             "dependencies": [
                 "ops_core",
-                "task_executor"
+                "contracts"
             ],
             "exports": [],
             "description": "Group operations (create, ungroup, z-order)"
@@ -363,7 +364,8 @@
             "version": "1.0.0",
             "dependencies": [
                 "ops_core",
-                "task_executor"
+                "contracts",
+                "targets"
             ],
             "exports": [],
             "description": "Layer operations (create, activate, lock, visible, delete)"
@@ -373,7 +375,7 @@
             "version": "1.0.0",
             "dependencies": [
                 "ops_core",
-                "task_executor"
+                "contracts"
             ],
             "exports": [],
             "description": "Style operations (fill, stroke, opacity)"
@@ -383,7 +385,7 @@
             "version": "1.0.0",
             "dependencies": [
                 "ops_core",
-                "task_executor"
+                "contracts"
             ],
             "exports": [],
             "description": "Text operations (create, set content, set style)"
@@ -393,7 +395,7 @@
             "version": "1.0.0",
             "dependencies": [
                 "ops_core",
-                "task_executor"
+                "contracts"
             ],
             "exports": [],
             "description": "Alignment and distribution operations"
@@ -403,7 +405,7 @@
             "version": "1.2.0",
             "dependencies": [
                 "ops_core",
-                "task_executor"
+                "contracts"
             ],
             "exports": [],
             "description": "Measurement and assertion operations (assert_count, assert_bounds, assert_exists, assert_style, assert_text, assert_alignment, assert_z_order)"
@@ -488,17 +490,33 @@
             ],
             "description": "Session-scoped key-value stash for multi-call IR handoff. Keys namespaced by document name. stashPutIR validates IR schema before storing."
         },
+        "ops_compound": {
+            "file": "ops_compound.jsx",
+            "version": "1.0.0",
+            "dependencies": [
+                "ops_core",
+                "contracts"
+            ],
+            "exports": [
+                "resolvePrevTokens"
+            ],
+            "description": "Compound meta-op: sequences sub-ops with $prev/$prevAll ID forwarding"
+        },
         "test_soc": {
             "file": "test_soc.jsx",
             "version": "1.1.0",
             "dependencies": [
-                "task_executor",
+                "polyfills",
+                "contracts",
+                "targets",
+                "task_pipeline",
                 "ops_core",
                 "ops_layer",
                 "ops_element",
                 "ops_measure",
                 "ops_style",
                 "ops_journal",
+                "ops_compound",
                 "session",
                 "geo_ir",
                 "generative"

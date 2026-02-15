@@ -469,7 +469,7 @@ class ExecuteTaskInput(ToolInputBase):
     
     includes: List[str] = Field(
         default_factory=list,
-        description="Additional library includes (e.g. ['ops_core', 'ops_element']). task_executor is always included."
+        description="Additional library includes (e.g. ['ops_core', 'ops_element']). polyfills is always included."
     )
     
     collect_fn: str = Field(
@@ -554,9 +554,9 @@ var report = executeTask(
 JSON.stringify(report);
 """
     
-    # Dedup + stable-order: task_executor first, then user includes
-    seen = {"task_executor"}
-    all_includes = ["task_executor"]
+    # Dedup + stable-order: polyfills first, then user includes
+    seen = {"polyfills"}
+    all_includes = ["polyfills"]
     for inc in params.includes:
         if inc not in seen:
             seen.add(inc)

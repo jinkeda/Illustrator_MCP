@@ -19,6 +19,7 @@ from illustrator_mcp.types import (
     CommandMetadata,
     ExecutionResponse,
 )
+from illustrator_mcp.errors import ErrorCode, format_code
 from illustrator_mcp.connection_helpers import create_connection_error
 from illustrator_mcp.bridge.server import WebSocketServer
 from illustrator_mcp.bridge.request_registry import RequestRegistry
@@ -68,10 +69,32 @@ class WebSocketBridge:
             on_disconnect=self._handle_disconnect
         )
 
+        # Library preload state (C1)
+        self._preload_version: Optional[str] = None
+
+        # E1: Panel health watchdog
+        self._watchdog_task: Optional[asyncio.Task] = None
+
         # Heartbeat tracking
         self._last_heartbeat: float = 0.0
         self._panel_busy: bool = False
         self._panel_active_request: Optional[int] = None
+
+    # --- Library preload accessors ---
+
+    @property
+    def preload_version(self) -> Optional[str]:
+        """Current preload version hash, or None if not preloaded."""
+        return self._preload_version
+
+    def set_preload_version(self, version: str) -> None:
+        """Set the preload version after successful preload."""
+        self._preload_version = version
+
+    def clear_preload(self) -> None:
+        """Invalidate preload state (e.g., CEP reloaded)."""
+        self._preload_version = None
+
 
     def _transition(self, new_state: ConnectionState, reason: str = "") -> bool:
         """Thread-safe state transition with validation and side-effect dispatch.
@@ -121,6 +144,8 @@ class WebSocketBridge:
         self._last_heartbeat = 0.0
         self._panel_busy = False
         self._panel_active_request = None
+        # Invalidate preload cache — panel JS globals are lost on reconnect
+        self.clear_preload()
         # State stays LISTENING (server running, no client) — no transition needed
         # since we're already LISTENING
 
@@ -221,6 +246,10 @@ class WebSocketBridge:
 
     def stop(self):
         """Stop the WebSocket server."""
+        if self._watchdog_task and not self._watchdog_task.done():
+            self._watchdog_task.cancel()
+            self._watchdog_task = None
+
         if self.loop and self.server:
             # Signal server specific shutdown event on the loop
             self.loop.call_soon_threadsafe(self.server.stop)
@@ -274,6 +303,10 @@ class WebSocketBridge:
             f"active={self._panel_active_request}, "
             f"uptime={data.get('uptimeMs', 0)}ms"
         )
+        # E1: Start watchdog on first heartbeat if not already running
+        if self._watchdog_task is None or self._watchdog_task.done():
+            self._watchdog_task = asyncio.create_task(self._watchdog_loop())
+            logger.debug("Panel watchdog started")
 
     def get_panel_health(self) -> dict:
         """Get panel health status based on heartbeats.
@@ -283,7 +316,7 @@ class WebSocketBridge:
             - last_heartbeat_ago_ms: ms since last heartbeat (None if never)
             - busy: whether panel reported busy
             - active_request_id: ID of script being executed (if busy)
-            - stale: True if no heartbeat in 15s (3× interval)
+            - stale: True if no heartbeat within watchdog_stale_threshold
         """
         if self._last_heartbeat == 0.0:
             return {
@@ -293,12 +326,53 @@ class WebSocketBridge:
                 "stale": True,
             }
         ago_ms = (time.time() - self._last_heartbeat) * 1000
+        threshold_ms = config.watchdog_stale_threshold * 1000
         return {
             "last_heartbeat_ago_ms": round(ago_ms),
             "busy": self._panel_busy,
             "active_request_id": self._panel_active_request,
-            "stale": ago_ms > 15000,
+            "stale": ago_ms > threshold_ms,
         }
+
+    async def _watchdog_loop(self) -> None:
+        """E1: Periodically check panel health and disconnect if stale.
+
+        Fires _handle_disconnect if the panel has sent no heartbeat for
+        longer than watchdog_stale_threshold AND there is no active request
+        (to avoid killing long-running scripts).
+        """
+        interval = config.watchdog_interval
+        while True:
+            await asyncio.sleep(interval)
+            if await self._watchdog_tick():
+                break  # stop watchdog; will restart on next heartbeat
+
+    async def _watchdog_tick(self) -> bool:
+        """Single watchdog check iteration.
+
+        Returns True if disconnect was triggered (caller should stop loop).
+        Extracted for deterministic unit testing.
+        """
+        health = self.get_panel_health()
+        if (
+            health["stale"]
+            and not health["busy"]
+            and self.is_connected()
+        ):
+            ago_s = health["last_heartbeat_ago_ms"]
+            if ago_s is not None:
+                ago_s = round(ago_s / 1000, 1)
+            logger.warning(
+                f"PANEL_WATCHDOG_STALE: no heartbeat for {ago_s}s "
+                f"(threshold={config.watchdog_stale_threshold}s) — "
+                f"forcing disconnect"
+            )
+            try:
+                await self._handle_disconnect()
+            except asyncio.CancelledError:
+                pass
+            return True
+        return False
 
     async def execute_script_async(
         self, 
@@ -354,12 +428,14 @@ class WebSocketBridge:
         except asyncio.TimeoutError:
             self.registry.fail_request(request_id, TimeoutError("Timeout"))
             cmd_ctx = f" [{command.command_type}]" if command else ""
-            return {"error": f"TIMEOUT{cmd_ctx}: Script execution timed out after {timeout}s"}
+            return {"error": format_code(ErrorCode.R_TIMEOUT,
+                f"Script execution timed out after {timeout}s{cmd_ctx}")}
 
         except Exception as e:
             self.registry.fail_request(request_id, e)
             cmd_ctx = f" [{command.command_type}]" if command else ""
-            return {"error": f"EXECUTION_ERROR{cmd_ctx}: {str(e)}"}
+            return {"error": format_code(ErrorCode.R_UNKNOWN,
+                f"Script execution failed{cmd_ctx}: {str(e)}")}
 
     async def execute_script_streaming(
         self, 
@@ -427,7 +503,11 @@ class WebSocketBridge:
 
         except Exception as e:
             cmd_ctx = f" [{command.command_type}]" if command else ""
-            yield {"error": f"STREAMING_ERROR{cmd_ctx}: {str(e)}", "type": "error"}
+            yield {
+                "error": format_code(ErrorCode.R_UNKNOWN,
+                    f"Streaming execution failed{cmd_ctx}: {str(e)}"),
+                "type": "error"
+            }
 
 
 # NOTE: Use get_runtime().get_bridge() directly.

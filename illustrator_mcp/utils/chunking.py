@@ -157,11 +157,12 @@ def merge_chunk_results(
         if not result.get("ok", True):
             all_ok = False
         
-        # Collect errors with chunk index
+        # Collect errors with chunk index (copy to avoid mutating input)
         for err in result.get("errors", []):
             if isinstance(err, dict):
-                err["chunk"] = i
-            all_errors.append(err)
+                all_errors.append({**err, "chunk": i})
+            else:
+                all_errors.append(err)
         
         # Collect warnings
         all_warnings.extend(result.get("warnings", []))

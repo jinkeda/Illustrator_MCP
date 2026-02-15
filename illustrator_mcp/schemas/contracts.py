@@ -27,6 +27,7 @@ class ErrorCode(str, Enum):
     V_MISSING_REQUIRED_PARAM = "V006"
     V_INVALID_PARAM_TYPE = "V007"
     V_SCHEMA_MISMATCH = "V008"
+    V_INVALID_PARAM_VALUE = "V009"
 
     # Runtime (R) - fail during execution
     R_COLLECT_FAILED = "R001"
@@ -44,6 +45,22 @@ class ErrorCode(str, Enum):
     S_SCRIPT_ERROR = "S002"
     S_IO_ERROR = "S003"
     S_MEMORY_ERROR = "S004"
+
+    # Compound (C) - compound op issues
+    C_NESTING_NOT_ALLOWED = "C001"
+    C_PREV_UNAVAILABLE = "C002"
+    C_INVALID_TOKEN_POSITION = "C003"
+    C_UNKNOWN_TOKEN = "C004"
+
+    # Guard (G) - conditional op guard issues
+    G_UNKNOWN_PROPERTY = "G001"
+    G_INVALID_COMPARATOR = "G002"
+    G_MALFORMED = "G003"
+
+    # Spatial (SP) - spatial target issues
+    SP_MISSING_PREDICATE = "SP01"
+    SP_INVALID_RECT = "SP02"
+    SP_REF_NOT_FOUND = "SP03"
 
     # Retryable codes (collect/compute only, NOT apply)
     @classmethod
@@ -278,6 +295,12 @@ OP_SCHEMAS: List[OpSchema] = [
         "includeItems": _p(B),
     }),
     OpSchema(name="hash_structure", description="Hash document structure"),
+
+    # --- Compound ops ---
+    OpSchema(name="compound", description="Sequence sub-ops with $prev ID forwarding", params={
+        "ops":    _p(A, required=True),
+        "atomic": _p(B),
+    }),
 ]
 
 # Build lookup dict

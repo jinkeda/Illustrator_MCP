@@ -31,6 +31,7 @@ from illustrator_mcp.utils.chunking import (
     should_chunk,
     estimate_chunk_count,
 )
+from illustrator_mcp.utils.response import try_parse_json, unwrap_result
 
 # Configure logging
 logger = logging.getLogger(__name__)
@@ -121,12 +122,11 @@ async def _execute_via_bridge(
     context = command.command_type if command else "execute_script"
     
     # ===== TIER 1: Connection Check =====
-    # Uses health-check to detect stale connections
+    # Check bridge connection before executing
     is_connected, error_response = check_connection_or_error(
         _get_bridge,
         config.ws_port, 
         context,
-        health_check=False  # Skip health-check here, done at higher level
     )
     if not is_connected:
         # Connection errors: C001 (disconnected), C002 (refused), C003 (timeout on connect)
@@ -215,6 +215,72 @@ async def execute_script(script: str) -> ExecutionResponse:
     return await get_proxy().execute_script(script)
 
 
+def _is_preload_stale(response: ExecutionResponse) -> bool:
+    """Check if a response indicates stale preload (MCP_LIBS_NOT_READY)."""
+    error = response.get("error", "")
+    result = response.get("result", "")
+    for val in (error, result):
+        if isinstance(val, str) and "MCP_LIBS_NOT_READY" in val:
+            return True
+    return False
+
+
+async def _ensure_preloaded() -> Optional[str]:
+    """Lazy-preload all libraries into CEP's global scope.
+
+    On first call, builds a preload bundle containing ALL library code
+    with a version marker, sends it to CEP via _execute_via_bridge, and
+    stores the version hash on the bridge. Subsequent calls return the
+    cached version immediately.
+
+    Returns:
+        Version hash string if preload succeeded, None if failed
+        (caller should fall back to full per-call injection).
+    """
+    bridge = _get_bridge()
+    if bridge.preload_version:
+        return bridge.preload_version
+
+    from illustrator_mcp.libraries import get_resolver
+    resolver = get_resolver()
+
+    try:
+        preload_script, version_hash = resolver.build_preload_bundle()
+    except Exception as e:
+        logger.warning(f"Failed to build preload bundle: {e}")
+        return None
+
+    if not preload_script:
+        return None
+
+    logger.info(
+        f"Preloading libraries (version={version_hash}, "
+        f"size={len(preload_script)} bytes)"
+    )
+
+    response = await _execute_via_bridge(
+        script=preload_script,
+        timeout=30.0,
+        command=CommandMetadata(
+            command_type="library_preload",
+            tool_name="_internal",
+            params={"version": version_hash},
+            trace_id=generate_trace_id(),
+        ),
+    )
+
+    if response.get("error"):
+        logger.warning(
+            f"Library preload failed (will fall back to per-call injection): "
+            f"{response['error']}"
+        )
+        return None
+
+    bridge.set_preload_version(version_hash)
+    logger.info(f"Library preload succeeded (version={version_hash})")
+    return version_hash
+
+
 async def execute_script_with_context(
     script: str,
     command_type: str,
@@ -262,6 +328,8 @@ async def execute_script_with_context(
     
     # --- Library injection (centralized) ---
     injection_meta = None
+    preload_version = None
+    original_script = script  # preserve for stale-preload retry
     if includes:
         # Sentinel guard: detect already-injected scripts
         if INJECTION_SENTINEL in script:
@@ -271,7 +339,13 @@ async def execute_script_with_context(
             )
         else:
             try:
-                script = inject_libraries(script, includes)
+                # NOTE: Preload disabled — ExtendScript's evalScript does NOT
+                # persist function declarations between calls; only $.global
+                # properties survive.  Full injection (prepending library code
+                # to every script) is the only reliable path.
+                # preload_version = await _ensure_preloaded()
+                preload_version = None
+                script = inject_libraries(script, includes, preload_version=preload_version)
                 injection_meta = get_injection_metadata(includes)
             except ValueError as e:
                 err_msg = str(e)
@@ -322,6 +396,34 @@ async def execute_script_with_context(
     )
     
     duration_ms = (time.time() - start_time) * 1000
+
+    # --- Stale-preload retry ---
+    # If sentinel check failed (CEP was reloaded), clear preload state
+    # and retry with full library injection.
+    if includes and preload_version and _is_preload_stale(response):
+        logger.warning(
+            f"[{tid}] Preload stale (MCP_LIBS_NOT_READY) — "
+            f"retrying with full injection"
+        )
+        bridge = _get_bridge()
+        bridge.clear_preload()
+        try:
+            script = inject_libraries(original_script, includes)
+        except Exception as e:
+            logger.error(f"[{tid}] Full injection fallback failed: {e}")
+            return {
+                "ok": False,
+                "error": format_code(ErrorCode.R_INJECTION_FAILED, str(e)),
+                "trace_id": tid,
+            }
+        start_time = time.time()
+        response = await _execute_via_bridge(
+            script=script,
+            timeout=timeout or config.timeout,
+            command=command,
+            trace_id=tid
+        )
+        duration_ms = (time.time() - start_time) * 1000
     
     # Log success/error with timing
     if response.get("error"):
@@ -430,7 +532,7 @@ async def execute_op_batch_chunked(
             continue
         
         # Parse result and accumulate created IDs
-        result = _unwrap_result(response.get("result", response))
+        result = unwrap_result(response.get("result", response))
         if isinstance(result, dict):
             results.append(result)
             created_ids.extend(result.get("createdIds", []))
@@ -442,46 +544,7 @@ async def execute_op_batch_chunked(
     return merge_chunk_results(results, created_ids)
 
 
-def _try_parse_json(value: Any) -> Any:
-    """Attempt JSON parse, return original on failure."""
-    if not isinstance(value, str):
-        return value
-    try:
-        return json.loads(value)
-    except json.JSONDecodeError:
-        return value
-
-
-def _unwrap_result(result: Any, _depth: int = 0) -> Any:
-    """
-    Recursively unwrap nested success/result envelopes.
-
-    Handles double-wrapped results like:
-    {success: true, result: "{\"success\": true, \"result\": ...}"}
-
-    Has a depth guard (max 10) to prevent infinite recursion on
-    malformed responses with circular nesting.
-    """
-    if _depth > 10:
-        return result
-
-    if not isinstance(result, dict):
-        return result
-
-    # Check for error in current level
-    if result.get("error"):
-        return result
-    if result.get("success") is False:
-        return result
-
-    # Unwrap success envelope
-    if result.get("success") and "result" in result:
-        inner = result["result"]
-        # Parse if string, then recurse
-        parsed = _try_parse_json(inner) if isinstance(inner, str) else inner
-        return _unwrap_result(parsed, _depth + 1)
-
-    return result
+# _try_parse_json and _unwrap_result moved to illustrator_mcp.utils.response (G2)
 
 
 def format_response(response: dict[str, Any], context: str = "") -> str:
@@ -520,10 +583,10 @@ def format_response(response: dict[str, Any], context: str = "") -> str:
 
     # Parse string results
     if isinstance(result, str):
-        result = _try_parse_json(result)
+        result = try_parse_json(result)
 
     # Unwrap nested envelopes
-    result = _unwrap_result(result)
+    result = unwrap_result(result)
 
     # Check for errors in unwrapped result
     if isinstance(result, dict):
@@ -605,10 +668,10 @@ def format_envelope(
 
     # Parse string results
     if isinstance(result, str):
-        result = _try_parse_json(result)
+        result = try_parse_json(result)
 
     # Unwrap nested envelopes
-    result = _unwrap_result(result)
+    result = unwrap_result(result)
 
     # Check for errors in unwrapped result
     if isinstance(result, dict):

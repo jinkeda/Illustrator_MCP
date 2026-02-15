@@ -74,7 +74,7 @@ async def _place_item_impl(
     error_prefix: str = "File",
     embed_editable: bool = False
 ) -> str:
-    """Shared implementation for import_image and place_file operations.
+    """Shared implementation for placing files (images, EPS, AI, PDF) into the document.
     
     Args:
         embed_editable: If True, opens the file (PDF) and copies content as editable vectors
@@ -414,34 +414,6 @@ async def illustrator_close_document(params: CloseDocumentInput) -> str:
     )
 
 
-# Pydantic model for import
-class ImportImageInput(ToolInputBase):
-    """Input for importing an image."""
-    file_path: str = Field(..., description="Full path to the image file (PNG, JPG, etc.)", min_length=1)
-    x: float = Field(default=0, description="X position to place the image")
-    y: float = Field(default=0, description="Y position to place the image")
-    link: bool = Field(default=True, description="Link the image (True) or embed it (False)")
-
-
-@mcp.tool(
-    name="illustrator_import_image",
-    annotations={"title": "Import Image", "readOnlyHint": False, "destructiveHint": False}
-)
-async def illustrator_import_image(params: ImportImageInput) -> str:
-    """Import a PNG, JPG, or other image file into the document.
-    
-    Places the image at the specified position. By default, images are linked
-    (referenced from the file). Set link=False to embed the image data.
-    """
-    return await _place_item_impl(
-        file_path=params.file_path,
-        x=params.x,
-        y=params.y,
-        linked=params.link,
-        command_type="import_image",
-        tool_name="illustrator_import_image",
-        error_prefix="Image file"
-    )
 
 
 # Combined Undo/Redo tool
@@ -503,6 +475,9 @@ class PlaceFileInput(ToolInputBase):
 )
 async def illustrator_place_file(params: PlaceFileInput) -> str:
     """Place an external file (EPS, AI, PDF, image) into the document.
+    
+    Supports all placeable formats: PNG, JPG, EPS, AI, PDF, SVG, etc.
+    For raster images (PNG, JPG), this is the standard way to import them.
     
     Workflow:
     - linked=True (drafting): File updates automatically when source changes

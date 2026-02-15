@@ -13,13 +13,11 @@ from illustrator_mcp.tools.documents import (
     illustrator_save_document,
     illustrator_export_document,
     illustrator_close_document,
-    illustrator_import_image,
     CreateDocumentInput,
     OpenDocumentInput,
     SaveDocumentInput,
     ExportDocumentInput,
     CloseDocumentInput,
-    ImportImageInput,
     ExportFormat
 )
 
@@ -175,31 +173,6 @@ class TestExportDocument:
         script = mock_esc.call_args.kwargs['script']
         assert "horizontalScale = 200" in script
 
-
-class TestImportImage:
-    """Tests for illustrator_import_image tool."""
-    
-    @pytest.mark.asyncio
-    async def test_import_image_linked(self, mock_execute_script):
-        """Test importing image as linked."""
-        params = ImportImageInput(file_path="C:/images/photo.jpg", x=100, y=200, link=True)
-        await illustrator_import_image(params)
-        
-        script = mock_execute_script.call_args.kwargs['script']
-        assert "placedItems.add()" in script
-        assert "placed.file = file" in script
-        assert "placed.left = 100" in script
-        # Should NOT contain embed() for linked images
-        assert "embed()" not in script
-    
-    @pytest.mark.asyncio
-    async def test_import_image_embedded(self, mock_execute_script):
-        """Test importing image as embedded."""
-        params = ImportImageInput(file_path="C:/images/photo.jpg", link=False)
-        await illustrator_import_image(params)
-        
-        script = mock_execute_script.call_args.kwargs['script']
-        assert "placed.embed();" in script
 
 
 class TestCloseDocument:

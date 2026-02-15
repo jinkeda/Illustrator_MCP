@@ -140,6 +140,11 @@ class WebSocketServer:
         if self.client is None:
             return False
         try:
+            # websockets 16+: use state enum (client.open is deprecated)
+            if hasattr(self.client, 'state'):
+                from websockets.protocol import State
+                return self.client.state == State.OPEN
+            # Fallback for older websockets versions
             if hasattr(self.client, 'open'):
                 return self.client.open
             if hasattr(self.client, 'closed'):
