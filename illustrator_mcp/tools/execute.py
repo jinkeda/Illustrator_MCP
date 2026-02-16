@@ -22,6 +22,22 @@ from mcp.types import ImageContent, TextContent
 # Set up logging for telemetry
 logger = logging.getLogger("illustrator_mcp")
 
+# ── VLM QA Cadence ──────────────────────────────────────────────────
+# Auto-inject annotated preview every N execute_script calls.
+# The counter is module-level and resets on server restart.
+VLM_QA_CADENCE: int = 5
+_mutation_count: int = 0
+
+
+def get_mutation_count() -> int:
+    """Return the current mutation counter value."""
+    return _mutation_count
+
+
+def reset_mutation_count() -> None:
+    """Reset the mutation counter to 0."""
+    global _mutation_count
+    _mutation_count = 0
 
 
 
@@ -140,9 +156,13 @@ class ExecuteScriptInput(ToolInputBase):
     )
 
     # Preview fields (P4)
-    return_preview: bool = Field(
-        default=False,
-        description="After execution, auto-export a thumbnail and return as ImageContent."
+    # None = not specified (VLM cadence will auto-inject at checkpoints)
+    # True = explicitly requested
+    # False = explicitly declined (cadence will skip with warning)
+    return_preview: Optional[bool] = Field(
+        default=None,
+        description="After execution, auto-export a thumbnail and return as ImageContent. "
+                    "Leave unset to allow VLM QA cadence to auto-inject at checkpoints."
     )
 
     preview_mode: Literal["artboard", "bounds", "annotated"] = Field(
@@ -173,6 +193,12 @@ class ExecuteScriptInput(ToolInputBase):
     preview_format: Literal["png", "jpg"] = Field(
         default="png",
         description="Preview image format."
+    )
+
+    final_step: bool = Field(
+        default=False,
+        description="Set to True on the last mutation to force an annotated VLM QA preview, "
+                    "regardless of the cadence counter."
     )
 
 
@@ -565,6 +591,23 @@ async def illustrator_execute_script(params: ExecuteScriptInput) -> Union[str, l
         var c = new RGBColor(); c.red = 255; c.green = 0; c.blue = 0;
         rect.fillColor = c;
     
+    KNOWN LIMITATIONS:
+    
+    Boolean path ops (subtract/unite/intersect):
+      Not available via ExtendScript. Use these patterns instead:
+      - Crescent moon: Compute arc points on two offset circles, filter by angle
+      - Donut/ring: Create two circles, select both, Object > Compound Path > Make
+      - Cutout: Use clipping mask (group + clip path) to simulate subtraction
+      - app.executeMenuCommand("pathfinder") exists but is fragile and UI-dependent
+    
+    Bézier curves:
+      setEntirePath() creates corner points only. For smooth curves, use extended
+      point format in element_create: [x, y, leftDirX, leftDirY, rightDirX, rightDirY]
+      Or manually set handles after path creation:
+        path.pathPoints[0].leftDirection = [lx0, -ly0];
+        path.pathPoints[0].rightDirection = [rx0, -ry0];
+      Handle coordinates are absolute, not relative to the anchor.
+    
     IMPORTANT: Always use -y for Y coordinates when positioning objects.
     Call get_scripting_reference for more detailed syntax examples.
     """
@@ -574,6 +617,28 @@ async def illustrator_execute_script(params: ExecuteScriptInput) -> Union[str, l
     desc = params.description.strip() if params.description else None
 
     warnings = []
+
+    # ── VLM QA Cadence: auto-inject annotated preview ──────────
+    global _mutation_count
+    _mutation_count += 1
+    is_checkpoint = (_mutation_count % VLM_QA_CADENCE == 0) or params.final_step
+
+    if is_checkpoint:
+        if params.return_preview is False and not params.final_step:
+            # AI explicitly disabled preview — soft override: warn but respect
+            warnings.append(
+                f"VLM QA checkpoint skipped (mutation #{_mutation_count}). "
+                "Consider using return_preview=True, preview_mode='annotated' "
+                "to visually verify the document state."
+            )
+        else:
+            # Auto-inject annotated preview
+            params.return_preview = True
+            params.preview_mode = "annotated"
+            logger.info(
+                f"VLM QA cadence: auto-injecting annotated preview "
+                f"(mutation #{_mutation_count}, final_step={params.final_step})"
+            )
 
     # Get canonicalized includes metadata
     if params.includes:
@@ -678,6 +743,15 @@ async def illustrator_execute_script(params: ExecuteScriptInput) -> Union[str, l
             warnings=warnings,
             diagnostics=diagnostics
         )
+
+        # Inject preview_state into diagnostics
+        try:
+            envelope_obj = json.loads(envelope)
+            preview_state = "post_execution" if envelope_obj.get("ok") else "pre_execution"
+            envelope_obj.setdefault("diagnostics", {})["preview_state"] = preview_state
+            envelope = json.dumps(envelope_obj)
+        except (json.JSONDecodeError, TypeError):
+            pass
 
         # Auto-preview: export thumbnail and return as ImageContent
         if params.return_preview:
@@ -883,6 +957,15 @@ JSON.stringify(report);
                 "result": {"formatted": formatted, "report": report_data}
             })
 
+            # Inject preview_state into diagnostics
+            try:
+                envelope_obj = json.loads(envelope)
+                preview_state = "post_execution" if envelope_obj.get("ok") else "pre_execution"
+                envelope_obj.setdefault("diagnostics", {})["preview_state"] = preview_state
+                envelope = json.dumps(envelope_obj)
+            except (json.JSONDecodeError, TypeError):
+                pass
+
             # ── Auto-Grounding: forcibly inject annotated preview ──
             # The LLM doesn't choose this — every SOC report comes with
             # a visual map so the agent can't skip spatial verification.
@@ -927,3 +1010,296 @@ JSON.stringify(report);
         logger.error(f"Task execution failed: {str(e)}")
         raise
 
+
+# ==================== Path Boolean Tool ====================
+
+
+class PathBooleanInput(ToolInputBase):
+    """Input for path boolean operations via Python Clipper engine."""
+    operation: Literal["subtract", "unite", "intersect", "xor"] = Field(
+        ..., description="Boolean operation type"
+    )
+    subject: str = Field(
+        ..., description="MCP ID of subject path (the 'kept' shape)"
+    )
+    clip: Union[str, List[str]] = Field(
+        ..., description="MCP ID(s) of clip path(s) (the 'cutting' shape(s))"
+    )
+    flatten_tolerance: float = Field(
+        default=0.5,
+        description="Bézier flatten precision in points (default 0.5pt)"
+    )
+    max_segments: int = Field(
+        default=500,
+        description="Max polyline segments per curve (safety cap)"
+    )
+    delete_originals: bool = Field(
+        default=True,
+        description="Remove input paths after successful boolean"
+    )
+    style: str = Field(
+        default="subject",
+        description="Style transfer: 'subject' (copy from subject), 'none' (no fill/stroke)"
+    )
+    layer: Optional[str] = Field(
+        default=None,
+        description="Target layer for result path"
+    )
+    name: Optional[str] = Field(
+        default=None,
+        description="Name for result item(s)"
+    )
+
+
+@mcp.tool()
+async def illustrator_path_boolean(params: PathBooleanInput) -> str:
+    """
+    Perform boolean operations (subtract, unite, intersect, xor) on paths.
+
+    Uses Python Clipper (pyclipper) for boolean computation.
+    Operates on fill geometry only — strokes are ignored (warning emitted).
+
+    Pipeline:
+    1. Extract geometry from Illustrator paths (ExtendScript)
+    2. Flatten Bézier curves if present (Python)
+    3. Run boolean operation via Clipper (Python)
+    4. Reconstruct result as PathItem or CompoundPathItem (ExtendScript)
+    5. Delete originals on success (if delete_originals=True)
+
+    Result types:
+    - Simple shapes → PathItem
+    - Shapes with holes (e.g., donut from subtract) → CompoundPathItem
+
+    Args:
+        operation: "subtract", "unite", "intersect", or "xor"
+        subject: MCP ID of the subject (kept) path
+        clip: MCP ID(s) of the clip (cutting) path(s)
+        flatten_tolerance: Bézier flattening precision (points)
+        delete_originals: Whether to remove input paths after boolean
+        style: "subject" (copy subject's style) or "none"
+    """
+    # ── Step 0: Import guard ────────────────────────────────────
+    try:
+        from illustrator_mcp.geometry import (
+            path_boolean, flatten_path, Region,
+        )
+    except ImportError as e:
+        return json.dumps({
+            "ok": False,
+            "error": str(e),
+            "diagnostics": {"tool": "path_boolean", "hint": "pip install illustrator-mcp[geometry]"}
+        })
+
+    context = f"path_boolean: {params.operation}"
+    diagnostics: Dict[str, Any] = {"operation": params.operation, "tool": "path_boolean"}
+
+    # Normalize clip to list
+    clip_ids = params.clip if isinstance(params.clip, list) else [params.clip]
+    all_ids = [params.subject] + clip_ids
+    diagnostics["subject"] = params.subject
+    diagnostics["clips"] = clip_ids
+
+    # ── Step 1: Extract geometry via ExtendScript ───────────────
+    extract_script = f"extractPathGeometry({json.dumps(all_ids)})"
+    try:
+        extract_response = await execute_script_with_context(
+            script=extract_script,
+            command_type="path_boolean:extract",
+            tool_name="illustrator_path_boolean",
+            includes=["geo_boolean"],
+        )
+    except Exception as e:
+        return json.dumps({
+            "ok": False,
+            "error": f"Geometry extraction failed: {e}",
+            "diagnostics": diagnostics,
+        })
+
+    # Parse extraction result
+    extract_result = extract_response.get("result", "{}")
+    if isinstance(extract_result, str):
+        try:
+            geo_data = json.loads(extract_result)
+        except json.JSONDecodeError:
+            return json.dumps({
+                "ok": False,
+                "error": f"Failed to parse geometry: {extract_result[:200]}",
+                "diagnostics": diagnostics,
+            })
+    else:
+        geo_data = extract_result
+
+    if geo_data.get("error"):
+        return json.dumps({
+            "ok": False,
+            "error": geo_data.get("message", "Geometry extraction error"),
+            "errorCode": geo_data.get("errorCode"),
+            "diagnostics": diagnostics,
+        })
+
+    warnings = geo_data.get("warnings", [])
+    paths = geo_data.get("paths", [])
+
+    if len(paths) < 2:
+        return json.dumps({
+            "ok": False,
+            "error": f"Need at least 2 paths (subject + clip), got {len(paths)}",
+            "diagnostics": diagnostics,
+        })
+
+    # ── Step 2: Flatten Bézier curves if needed ─────────────────
+    subject_geo = paths[0]
+    clip_geos = paths[1:]
+    subject_style = subject_geo.get("style", {})
+
+    def _to_contour(path_data):
+        """Convert extracted path data to a flat contour for Clipper."""
+        points = [tuple(p) for p in path_data["points"]]
+        if path_data.get("hasHandles"):
+            in_handles = [tuple(h) for h in path_data["inHandles"]]
+            out_handles = [tuple(h) for h in path_data["outHandles"]]
+            points = flatten_path(
+                anchors=points,
+                in_handles=in_handles,
+                out_handles=out_handles,
+                closed=path_data.get("closed", True),
+                tolerance=params.flatten_tolerance,
+                max_segments=params.max_segments,
+            )
+            warnings.append(
+                f"Path '{path_data.get('name', path_data.get('mcpId', '?'))}' "
+                f"had curves — flattened to {len(points)} points (tolerance={params.flatten_tolerance}pt)"
+            )
+        return points
+
+    try:
+        subject_contour = _to_contour(subject_geo)
+        clip_contours = [_to_contour(cg) for cg in clip_geos]
+    except ValueError as e:
+        return json.dumps({
+            "ok": False,
+            "error": str(e),
+            "diagnostics": diagnostics,
+        })
+
+    # ── Step 3: Run Clipper boolean ─────────────────────────────
+    try:
+        regions: list[Region] = path_boolean(
+            subject=subject_contour,
+            clips=clip_contours,
+            operation=params.operation,
+        )
+    except Exception as e:
+        return json.dumps({
+            "ok": False,
+            "error": f"Boolean operation failed: {e}",
+            "diagnostics": diagnostics,
+        })
+
+    if not regions:
+        # Empty result (e.g., subtracting identical shapes)
+        if params.delete_originals:
+            delete_script = f"deleteByMcpIds({json.dumps(all_ids)})"
+            await execute_script_with_context(
+                script=delete_script,
+                command_type="path_boolean:delete",
+                tool_name="illustrator_path_boolean",
+                includes=["geo_boolean"],
+            )
+        return json.dumps({
+            "ok": True,
+            "result": {"ids": [], "regionCount": 0, "message": "Boolean result is empty"},
+            "warnings": warnings,
+            "diagnostics": diagnostics,
+        })
+
+    # ── Step 4: Reconstruct result in Illustrator ───────────────
+    # Convert Region objects to JSON-serializable dicts
+    regions_data = []
+    for r in regions:
+        rd = {"outer": [list(pt) for pt in r.outer]}
+        if r.holes:
+            rd["holes"] = [[list(pt) for pt in h] for h in r.holes]
+        regions_data.append(rd)
+
+    # Determine style to apply
+    style_def = {}
+    if params.style == "subject":
+        style_def = subject_style
+    # "none" → empty style_def (Illustrator defaults)
+
+    reconstruct_params = {
+        "regions": regions_data,
+        "style": style_def,
+    }
+    if params.layer:
+        reconstruct_params["layer"] = params.layer
+    if params.name:
+        reconstruct_params["name"] = params.name
+
+    reconstruct_script = f"reconstructRegions({json.dumps(reconstruct_params)})"
+    try:
+        reconstruct_response = await execute_script_with_context(
+            script=reconstruct_script,
+            command_type="path_boolean:reconstruct",
+            tool_name="illustrator_path_boolean",
+            includes=["geo_boolean"],
+        )
+    except Exception as e:
+        return json.dumps({
+            "ok": False,
+            "error": f"Reconstruction failed: {e}",
+            "warnings": warnings + ["WARNING: Original paths were NOT deleted (reconstruct failed)"],
+            "diagnostics": diagnostics,
+        })
+
+    # Parse reconstruction result
+    recon_result = reconstruct_response.get("result", "{}")
+    if isinstance(recon_result, str):
+        try:
+            recon_data = json.loads(recon_result)
+        except json.JSONDecodeError:
+            return json.dumps({
+                "ok": False,
+                "error": f"Failed to parse reconstruction result: {recon_result[:200]}",
+                "warnings": warnings + ["WARNING: Original paths were NOT deleted"],
+                "diagnostics": diagnostics,
+            })
+    else:
+        recon_data = recon_result
+
+    if recon_data.get("error"):
+        return json.dumps({
+            "ok": False,
+            "error": recon_data.get("message", "Reconstruction error"),
+            "warnings": warnings + ["WARNING: Original paths were NOT deleted"],
+            "diagnostics": diagnostics,
+        })
+
+    # ── Step 5: Delete originals (only on success) ──────────────
+    if params.delete_originals:
+        delete_script = f"deleteByMcpIds({json.dumps(all_ids)})"
+        try:
+            delete_response = await execute_script_with_context(
+                script=delete_script,
+                command_type="path_boolean:delete",
+                tool_name="illustrator_path_boolean",
+                includes=["geo_boolean"],
+            )
+            delete_result = delete_response.get("result", "{}")
+            if isinstance(delete_result, str):
+                try:
+                    del_data = json.loads(delete_result)
+                    del_warnings = del_data.get("warnings", [])
+                    warnings.extend(del_warnings)
+                except json.JSONDecodeError:
+                    warnings.append("Could not parse deletion result")
+        except Exception as e:
+            warnings.append(f"Deletion of originals failed: {e}")
+
+    return json.dumps({
+        "ok": True,
+        "result": recon_data,
+        "warnings": warnings,
+        "diagnostics": diagnostics,
+    })

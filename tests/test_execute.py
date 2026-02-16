@@ -9,8 +9,17 @@ from unittest.mock import AsyncMock, patch
 
 from illustrator_mcp.tools.execute import (
     illustrator_execute_script,
-    ExecuteScriptInput
+    ExecuteScriptInput,
+    reset_mutation_count,
 )
+
+
+@pytest.fixture(autouse=True)
+def _reset_vlm_counter():
+    """Reset VLM cadence counter before each test to prevent cross-test pollution."""
+    reset_mutation_count()
+    yield
+    reset_mutation_count()
 
 
 @pytest.fixture
