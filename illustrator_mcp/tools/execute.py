@@ -27,6 +27,26 @@ logger = logging.getLogger("illustrator_mcp")
 # The counter is module-level and resets on server restart.
 VLM_QA_CADENCE: int = 5
 _mutation_count: int = 0
+# TODO: scope to connection/session if scaling to multi-agent SSE/HTTP.
+# CONTRACT: any new mutating tool MUST increment this counter.
+
+# Cognitive Forcing Function: injected as the LAST TextContent element
+# when cadence fires, forcing the AI to produce reasoning tokens about
+# the visual state before it can formulate its next action.
+VLM_CHECKPOINT_INSTRUCTION: str = (
+    "⚠️ VLM QA CHECKPOINT (mutation #{count})\n"
+    "An annotated preview was auto-injected by the VLM QA cadence system.\n"
+    "Before proceeding with further edits OR concluding your workflow, you MUST:\n"
+    "1. Describe what you see in the preview image (layout, colors, positions)\n"
+    "2. Compare against the intended design — note any discrepancies\n"
+    "3. List corrections needed (if any) for the next step\n"
+    "\n"
+    "If no annotated preview image is attached above, proceed using the textual "
+    "report and request a manual preview via return_preview=True on your next call.\n"
+    "\n"
+    "In your immediate next response, DO NOT call any tools. "
+    "You must output ONLY your text analysis."
+)
 
 
 def get_mutation_count() -> int:
@@ -224,6 +244,7 @@ async def _capture_artboard_png(
     var abW = abRect[2] - abRect[0];
     var abH = Math.abs(abRect[3] - abRect[1]);
     var maxDim = Math.max(abW, abH);
+    if (maxDim < 1) maxDim = 1;
     var scale = Math.min({max_dim} / maxDim * 100, 100);
 
     var opts = new ExportOptionsPNG24();
@@ -292,6 +313,7 @@ async def _generate_preview(
     var abW = abRect[2] - abRect[0];
     var abH = Math.abs(abRect[3] - abRect[1]);
     var maxDim = Math.max(abW, abH);
+    if (maxDim < 1) maxDim = 1;
     var scale = Math.min({max_dim} / maxDim * 100, 100);
     var opts = new {opts_class}();
     opts.horizontalScale = scale;
@@ -399,7 +421,8 @@ def _filter_items(items: list, artboard_rect: list) -> tuple:
             continue
 
         # Rule 2: Thin stroke — TextFrames are immune
-        if typ != "TextFrame" and (w < 5 or h < 5):
+        min_dim = min(10.0, max(2.0, min(ab_w, ab_h) * 0.005))
+        if typ != "TextFrame" and (w < min_dim or h < min_dim):
             continue
 
         kept.append(item)
@@ -591,6 +614,16 @@ async def illustrator_execute_script(params: ExecuteScriptInput) -> Union[str, l
         var c = new RGBColor(); c.red = 255; c.green = 0; c.blue = 0;
         rect.fillColor = c;
     
+    ELEMENT DISCOVERY:
+    Use grid helpers to locate items on the artboard:
+    - artboardGrid(cols, rows) — divide artboard into labeled cells (A1, B2, ...)
+    - itemsInCell(cell, mode) — find items in a grid cell ("containsCenter" or "intersects")
+    
+    MUTATION SAFETY:
+    Every execute_script call increments a mutation counter. An annotated preview
+    is auto-injected every VLM_QA_CADENCE calls for visual verification.
+    Set final_step=true on the last mutation to force a checkpoint.
+    
     KNOWN LIMITATIONS:
     
     Boolean path ops (subtract/unite/intersect):
@@ -622,6 +655,7 @@ async def illustrator_execute_script(params: ExecuteScriptInput) -> Union[str, l
     global _mutation_count
     _mutation_count += 1
     is_checkpoint = (_mutation_count % VLM_QA_CADENCE == 0) or params.final_step
+    is_vlm_checkpoint = False  # True only when cadence auto-injects
 
     if is_checkpoint:
         if params.return_preview is False and not params.final_step:
@@ -635,6 +669,7 @@ async def illustrator_execute_script(params: ExecuteScriptInput) -> Union[str, l
             # Auto-inject annotated preview
             params.return_preview = True
             params.preview_mode = "annotated"
+            is_vlm_checkpoint = True
             logger.info(
                 f"VLM QA cadence: auto-injecting annotated preview "
                 f"(mutation #{_mutation_count}, final_step={params.final_step})"
@@ -656,7 +691,8 @@ async def illustrator_execute_script(params: ExecuteScriptInput) -> Union[str, l
         "bounds_type": params.bounds_type,
         "bounds_source": params.bounds_source,
         "bounds_scope": params.bounds_scope,
-        "artboard_index": params.artboard_index
+        "artboard_index": params.artboard_index,
+        "is_vlm_checkpoint": is_vlm_checkpoint,
     }
 
     # Create a descriptive command_type for CEP panel
@@ -771,7 +807,7 @@ async def illustrator_execute_script(params: ExecuteScriptInput) -> Union[str, l
                             timeout=params.timeout,
                         )
                         ann_b64 = _b64.b64encode(annotated_bytes).decode('utf-8')
-                        return [
+                        result_parts = [
                             TextContent(type="text", text=envelope),
                             ImageContent(
                                 type="image",
@@ -783,27 +819,50 @@ async def illustrator_execute_script(params: ExecuteScriptInput) -> Union[str, l
                                 text=json.dumps(annotation_result, indent=2),
                             ),
                         ]
+                        # Cognitive Forcing Function: append checkpoint
+                        # instruction as absolute LAST element so it has
+                        # maximum recency weight in the LLM's attention.
+                        if is_vlm_checkpoint:
+                            result_parts.append(TextContent(
+                                type="text",
+                                text=VLM_CHECKPOINT_INSTRUCTION.format(
+                                    count=_mutation_count
+                                ),
+                            ))
+                        return result_parts
                     else:
                         return [
-                            {"type": "text", "text": envelope},
+                            TextContent(type="text", text=envelope),
                             preview_result
                         ]
                 else:
                     warnings.append("Preview generation returned empty")
-                    return format_envelope(
+                    env_text = format_envelope(
                         response=response,
                         context=context,
                         warnings=warnings,
                         diagnostics=diagnostics
                     )
+                    if is_vlm_checkpoint:
+                        return [
+                            TextContent(type="text", text=env_text),
+                            TextContent(type="text", text=VLM_CHECKPOINT_INSTRUCTION.format(count=_mutation_count)),
+                        ]
+                    return env_text
             except Exception as e:
                 warnings.append(f"Preview failed: {e}")
-                return format_envelope(
+                env_text = format_envelope(
                     response=response,
                     context=context,
                     warnings=warnings,
                     diagnostics=diagnostics
                 )
+                if is_vlm_checkpoint:
+                    return [
+                        TextContent(type="text", text=env_text),
+                        TextContent(type="text", text=VLM_CHECKPOINT_INSTRUCTION.format(count=_mutation_count)),
+                    ]
+                return env_text
 
         return envelope
 
@@ -838,6 +897,19 @@ class ExecuteTaskInput(ToolInputBase):
     apply_fn: str = Field(
         ...,
         description="JSX code for apply logic. Receives (actions, report), modifies items."
+    )
+
+    return_preview: Optional[bool] = Field(
+        default=None,
+        description="Request a visual preview. Leave unset to use VLM QA cadence."
+    )
+    preview_mode: Literal["artboard", "annotated"] = Field(
+        default="annotated",
+        description="'artboard': raw preview. 'annotated': numbered bounding boxes + annotation map."
+    )
+    final_step: bool = Field(
+        default=False,
+        description="Force annotated preview on last SOC task, regardless of cadence. Does NOT override dryRun."
     )
 
 
@@ -881,6 +953,60 @@ async def illustrator_execute_task(params: ExecuteTaskInput) -> Union[str, list]
             "options": {"trace": true}
         }
     """
+    # ── SVG d-param preprocessing ────────────────────────────────
+    payload = params.payload
+    if payload.task == "element_create" and "d" in payload.params:
+        from illustrator_mcp.svgd import parse_svg_d
+
+        d_str = payload.params.pop("d")
+        multi_mode = payload.params.pop("multi_mode", None)
+
+        try:
+            ir = parse_svg_d(d_str)
+        except ValueError as e:
+            return json.dumps({
+                "ok": False,
+                "error": f"SVG path parse error: {e}",
+                "diagnostics": {"task": payload.task},
+            })
+
+        if ir.get("ir") == "multi":
+            # Multi-subpath cannot be handled by single execute_task
+            # Reject closed override for multi-subpath
+            if "closed" in payload.params:
+                return json.dumps({
+                    "ok": False,
+                    "error": (
+                        "closed override not supported for multi-subpath SVG. "
+                        "Per-subpath closed state is inferred from Z commands."
+                    ),
+                    "diagnostics": {"task": payload.task},
+                })
+            # Return error directing to multi-op flow
+            n_sub = len(ir.get("subpaths", []))
+            return json.dumps({
+                "ok": False,
+                "error": (
+                    f"SVG path contains {n_sub} subpaths. "
+                    "Multi-subpath requires compound path creation. "
+                    "Use illustrator_execute_script with the compound path "
+                    "helper, or call element_create per subpath and then "
+                    "clip_create/group_create to combine them."
+                ),
+                "diagnostics": {
+                    "task": payload.task,
+                    "subpath_count": n_sub,
+                    "all_closed": ir.get("all_closed", False),
+                    "multi_mode": multi_mode or ("compound" if ir.get("all_closed") else "group"),
+                },
+            })
+        else:
+            # Single subpath — inject geometry IR
+            payload.params["geometry"] = ir
+            # Closed precedence: explicit > Z-inferred > default False
+            if "closed" not in payload.params:
+                payload.params["closed"] = bool(ir.get("closed", False))
+
     # Build the execution script
     payload_json = json.dumps(params.payload.model_dump())
     
@@ -915,9 +1041,15 @@ JSON.stringify(report);
             seen.add(inc)
             all_includes.append(inc)
     
+    # ── VLM QA Cadence: track mutations for execute_task too ──
+    global _mutation_count
+    _mutation_count += 1
+    is_task_checkpoint = (_mutation_count % VLM_QA_CADENCE == 0) or params.final_step
+
     diagnostics = {
         "task": params.payload.task,
-        "includes": all_includes
+        "includes": all_includes,
+        "is_vlm_checkpoint": is_task_checkpoint,
     }
 
     logger.info(f"execute_task: {params.payload.task}")
@@ -949,6 +1081,11 @@ JSON.stringify(report);
             formatted = format_task_report(report, params.payload.task)
 
             # Return envelope with formatted report as result
+            is_dry_run = params.payload.options.dryRun if params.payload.options else False
+            if is_dry_run:
+                diagnostics["preview_state"] = "pre_execution"
+            else:
+                diagnostics["preview_state"] = "post_execution" if report.ok else "error"
             envelope = json.dumps({
                 "ok": True,
                 "warnings": [],
@@ -957,44 +1094,49 @@ JSON.stringify(report);
                 "result": {"formatted": formatted, "report": report_data}
             })
 
-            # Inject preview_state into diagnostics
-            try:
-                envelope_obj = json.loads(envelope)
-                preview_state = "post_execution" if envelope_obj.get("ok") else "pre_execution"
-                envelope_obj.setdefault("diagnostics", {})["preview_state"] = preview_state
-                envelope = json.dumps(envelope_obj)
-            except (json.JSONDecodeError, TypeError):
-                pass
+            # ── Auto-Grounding: preview at cadence, manual request, or final_step ──
+            should_preview = (is_task_checkpoint or params.return_preview) and not is_dry_run
+            if should_preview:
+                try:
+                    import base64 as _b64
+                    raw_png = await _capture_artboard_png(max_dim=1024, timeout=30.0)
+                    if raw_png:
+                        annotated_bytes, annotation_result = await _annotate_preview(
+                            img_bytes=raw_png,
+                            max_items=200,
+                            timeout=30.0,
+                        )
+                        ann_b64 = _b64.b64encode(annotated_bytes).decode('utf-8')
+                        result_parts = [
+                            TextContent(type="text", text=envelope),
+                            ImageContent(
+                                type="image",
+                                data=ann_b64,
+                                mimeType="image/png",
+                            ),
+                            TextContent(
+                                type="text",
+                                text=json.dumps(annotation_result, indent=2),
+                            ),
+                        ]
+                        # Cognitive Forcing Function for SOC tasks too
+                        if is_task_checkpoint:
+                            result_parts.append(TextContent(
+                                type="text",
+                                text=VLM_CHECKPOINT_INSTRUCTION.format(
+                                    count=_mutation_count
+                                ),
+                            ))
+                        return result_parts
+                except Exception as e:
+                    logger.warning(f"Auto-grounding overlay failed (non-fatal): {e}")
 
-            # ── Auto-Grounding: forcibly inject annotated preview ──
-            # The LLM doesn't choose this — every SOC report comes with
-            # a visual map so the agent can't skip spatial verification.
-            try:
-                import base64 as _b64
-                raw_png = await _capture_artboard_png(max_dim=1024, timeout=30.0)
-                if raw_png:
-                    annotated_bytes, annotation_result = await _annotate_preview(
-                        img_bytes=raw_png,
-                        max_items=200,
-                        timeout=30.0,
-                    )
-                    ann_b64 = _b64.b64encode(annotated_bytes).decode('utf-8')
-                    return [
-                        TextContent(type="text", text=envelope),
-                        ImageContent(
-                            type="image",
-                            data=ann_b64,
-                            mimeType="image/png",
-                        ),
-                        TextContent(
-                            type="text",
-                            text=json.dumps(annotation_result, indent=2),
-                        ),
-                    ]
-            except Exception as e:
-                logger.warning(f"Auto-grounding overlay failed (non-fatal): {e}")
-
-            # Fallback: return text-only envelope if overlay failed
+            # Fallback: text-only envelope (+ checkpoint instruction if cadence)
+            if is_task_checkpoint:
+                return [
+                    TextContent(type="text", text=envelope),
+                    TextContent(type="text", text=VLM_CHECKPOINT_INSTRUCTION.format(count=_mutation_count)),
+                ]
             return envelope
 
         except (json.JSONDecodeError, Exception) as parse_error:
@@ -1078,6 +1220,10 @@ async def illustrator_path_boolean(params: PathBooleanInput) -> str:
         delete_originals: Whether to remove input paths after boolean
         style: "subject" (copy subject's style) or "none"
     """
+    # ── Track mutation cadence before any early return ──────────
+    global _mutation_count
+    _mutation_count += 1
+
     # ── Step 0: Import guard ────────────────────────────────────
     try:
         from illustrator_mcp.geometry import (

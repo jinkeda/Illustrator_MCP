@@ -256,8 +256,8 @@ illustrator_execute_script(
 | Library | Purpose |
 |---|---|
 | `ops_core` | Batch executor, global ID index, journal integration |
-| `ops_element` | Create / modify / delete shapes (rect, ellipse, line, polygon, star, text) |
-| `ops_group` | Group / ungroup, z-order |
+| `ops_element` | Create / modify / delete shapes (rect, ellipse, line, polygon, star, text, SVG d-path) |
+| `ops_group` | Group / ungroup, z-order, clipping masks |
 | `ops_layer` | Layer CRUD |
 | `ops_style` | Fill, stroke, opacity |
 | `ops_text` | Text frame creation and styling |
@@ -309,6 +309,10 @@ var report = executeOpBatch(ops, {strict: true, trace: true});
 ```
 
 Key capabilities: stable ID targeting (`@mcp:id=` in item.note), strict/continue error modes, `summaryOnly` for large batches, snapshot rollback, Python-side chunking for WebSocket limits, field evaluators for dynamic params, and op journaling for replay.
+
+**SVG path import:** `element_create` accepts an SVG `d` attribute for `type: "path"`. The path string is parsed Python-side into geometry IR (supports M/L/H/V/C/S/Q/T/Z commands). Multi-subpath paths are detected and reported with guidance for compound path creation.
+
+**Clipping masks:** `clip_create` creates a clipping mask group from a mask path and content items referenced by MCP ID. Supports `dryRun` mode for validation without mutation, parent-aware placement, and mask type validation.
 
 **Conditional operations:** `when` / `unless` guards filter targets by property predicates before execution (e.g., `when: {property: 'width', gt: 100}`).
 
@@ -362,6 +366,26 @@ execute_task return shape:
 This closes the visual loop: the agent sees overlapping elements, abandoned text frames, or off-artboard items before deciding its next action. If the overlay fails (Pillow missing, export error), the response degrades gracefully to the text-only SOC report.
 
 > **Requires:** `pip install -e ".[overlay]"` for Pillow. Without it, previews return without annotations.
+
+### VLM QA Cadence
+
+The server automatically injects an annotated preview every **5th** `execute_script` call, even if the caller didn't request one. This forces the AI to periodically *see* the canvas and catch visual defects (broken glyphs, overlaps, misaligned items) before they accumulate.
+
+| Trigger | Behavior |
+|---|---|
+| Every 5th call | Auto-inject `return_preview=True, preview_mode="annotated"` |
+| `final_step=True` | Force annotated preview on the last mutation |
+| AI sets `return_preview=False` | Respected, but a skip warning is added to the envelope |
+
+```python
+# Final mutation — forces VLM QA regardless of cadence count
+execute_script(
+    script="...",
+    final_step=True  # → annotated preview returned automatically
+)
+```
+
+The cadence counter is module-level and resets on server restart. Configurable via `VLM_QA_CADENCE` in `execute.py`.
 
 ---
 
@@ -520,6 +544,8 @@ Illustrator_MCP/
 │   ├── errors.py                 # Structured error codes + suggestions
 │   ├── templates.py              # Reusable ExtendScript templates
 │   ├── response_models.py        # Pydantic models for responses
+│   ├── svgd.py                   # SVG path data parser (d attribute → geometry IR)
+│   ├── curves.py                 # Bézier curve helpers (rounded polygon, arc points)
 │   ├── utils.py                  # Path escaping, validation helpers
 │   ├── log_config.py             # Structured logging config
 │   ├── bridge/
@@ -538,7 +564,7 @@ Illustrator_MCP/
 │   │   ├── context.py            # State inspection tools
 │   │   ├── query.py              # query_items + preflight_check
 │   │   └── archive/              # Disabled legacy tools (reference only)
-│   ├── overlay.py                # VLM annotated overlay (Pillow compositing + coordinate mapping)
+│   ├── overlay.py                # VLM overlay (bounding boxes + grid overlay + coordinate mapping)
 │   └── resources/
 │       ├── docs/
 │       │   └── extendscript_reference.md
@@ -557,8 +583,8 @@ Illustrator_MCP/
 │   │   ├── components/MCPControlPanel.tsx
 │   │   └── hooks/useMCP.ts       # WebSocket connection hook
 │   └── vite.config.ts
-├── tests/                        # Unit tests (pytest)
-│   ├── conftest.py               # Shared fixtures
+├── tests/                        # Unit tests (pytest, 734 tests)
+│   ├── conftest.py               # Shared fixtures + collection-error guard
 │   ├── test_execute.py
 │   ├── test_documents.py
 │   ├── test_context.py
@@ -570,6 +596,9 @@ Illustrator_MCP/
 │   ├── test_proxy_client.py
 │   ├── test_websocket_bridge.py
 │   ├── test_overlay.py
+│   ├── test_svgd.py              # SVG path parser tests (24 tests)
+│   ├── test_clip_ops.py          # Clipping mask schema + handler guard tests
+│   ├── test_grid_helper.py       # Grid discovery tests
 │   └── test_brand_social_kit_fixes.py
 ├── scripts/
 │   └── gen_schemas.py            # Schema codegen (Python -> JSX)
@@ -618,6 +647,7 @@ python -m scripts.gen_schemas
 5. **Standardized Envelope** -- All tools return `{ok, warnings, error, diagnostics, result}` for consistent downstream handling.
 6. **Fail Fast with Structured Errors** -- Typed error codes (V/R/S/C categories) with actionable recovery suggestions.
 7. **Auto-Grounding** -- SOC task results always include an annotated artboard preview, forcing the AI to see the visual state before its next action. No opt-in required.
+8. **VLM QA Cadence** -- Every 5th `execute_script` call auto-injects an annotated preview. Combined with `final_step=True`, the AI is periodically forced to visually verify and catch defects.
 
 ---
 

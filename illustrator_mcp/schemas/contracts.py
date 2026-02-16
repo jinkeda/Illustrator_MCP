@@ -6,6 +6,8 @@ The ES3 compiler (compile_contracts.py) reads this module and emits
 contracts.jsx for the JSX runtime.
 
 DO NOT define schemas in JSX files directly. This is the SSOT.
+
+Schema version: 1.5 — added Bézier control points for path/polyline
 """
 
 from enum import Enum
@@ -147,6 +149,10 @@ OP_SCHEMAS: List[OpSchema] = [
         "fill":         _p(O),
         "stroke":       _p(O),
         "points":       _p(A),
+        "geometry":     _p(O, desc="Geometry IR (auto-injected by SVG d parser)"),
+        "d":            _p(S, desc="SVG path d attribute (parsed Python-side to geometry IR)"),
+        "multi_mode":   _p(S, enum=["compound", "group", "explode"],
+                            desc="Multi-subpath handling: compound (default closed), group (default open), explode"),
         "sides":        _p(N),
         "radius":       _p(N),
         "outerRadius":  _p(N),
@@ -171,6 +177,33 @@ OP_SCHEMAS: List[OpSchema] = [
         "name":     _p(S),
     }),
     OpSchema(name="element_delete", description="Delete targeted elements"),
+    OpSchema(name="element_replace", description="Atomically replace a single target element", params={
+        "type":             _p(S, required=True, enum=["rect", "ellipse", "line", "path",
+                                "polyline", "polygon", "star", "roundedRect", "text"]),
+        "id":               _p(S),
+        "x":                _p(N),
+        "y":                _p(N),
+        "width":            _p(N),
+        "height":           _p(N),
+        "name":             _p(S),
+        "fill":             _p(O),
+        "stroke":           _p(O),
+        "points":           _p(A),
+        "sides":            _p(N),
+        "radius":           _p(N),
+        "outerRadius":      _p(N),
+        "innerRadius":      _p(N),
+        "cornerRadius":     _p(N),
+        "closed":           _p(B),
+        "x2":               _p(N),
+        "y2":               _p(N),
+        "contents":         _p(S),
+        "text":             _p(S),
+        "fontSize":         _p(N),
+        "fontName":         _p(S),
+        "opacity":          _p(N),
+        "inheritPosition":  _p(B),
+    }),
 
     # --- Layer ops ---
     OpSchema(name="layer_create", description="Create a new layer", params={
@@ -211,12 +244,32 @@ OP_SCHEMAS: List[OpSchema] = [
     }),
     OpSchema(name="style_remove_fill", description="Remove fill"),
     OpSchema(name="style_remove_stroke", description="Remove stroke"),
+    OpSchema(name="style_snapshot", description="Read computed style from targets"),
+    OpSchema(name="style_clone", description="Copy style from source to targets", params={
+        "from":       _p(S, required=True),
+        "properties": _p(A),
+    }),
+    OpSchema(name="style_set_gradient", description="Apply gradient fill", params={
+        "type":   _p(S, required=True),
+        "stops":  _p(A, required=True),
+        "angle":  _p(N),
+        "origin": _p(O),
+        "length": _p(N),
+        "name":   _p(S),
+    }),
 
     # --- Group ops ---
     OpSchema(name="group_create", description="Group targeted items", params={
         "name": _p(S),
     }),
     OpSchema(name="group_ungroup", description="Ungroup targeted groups"),
+    OpSchema(name="clip_create", description="Create clipping mask group", params={
+        "mask":     _p(S, required=True, desc="MCP ID of the clipping path"),
+        "contents": _p(A, required=True, desc="Array of MCP IDs to clip"),
+        "id":       _p(S, desc="ID for the clipping group"),
+        "name":     _p(S, desc="Name for the clipping group"),
+        "dryRun":   _p(B, desc="Preview without mutation"),
+    }),
 
     # --- Z-order ops ---
     OpSchema(name="zorder_front", description="Bring to front"),
@@ -230,6 +283,8 @@ OP_SCHEMAS: List[OpSchema] = [
         "id":       _p(S),
         "x":        _p(N),
         "y":        _p(N),
+        "layer":    _p(S),
+        "name":     _p(S),
         "fontSize": _p(N),
         "fontName": _p(S),
         "r":        _p(N),
@@ -300,6 +355,19 @@ OP_SCHEMAS: List[OpSchema] = [
     OpSchema(name="compound", description="Sequence sub-ops with $prev ID forwarding", params={
         "ops":    _p(A, required=True),
         "atomic": _p(B),
+    }),
+
+    # --- Boolean ops ---
+    OpSchema(name="path_boolean", description="Boolean op on paths (via Python Clipper engine)", params={
+        "operation":         _p(S, required=True, enum=["subtract", "unite", "intersect", "xor"]),
+        "subject":           _p(S, required=True),
+        "clip":              _p(A, required=True),
+        "flatten_tolerance": _p(N),
+        "max_segments":      _p(N),
+        "delete_originals":  _p(B),
+        "style":             _p(S),
+        "layer":             _p(S),
+        "name":              _p(S),
     }),
 ]
 

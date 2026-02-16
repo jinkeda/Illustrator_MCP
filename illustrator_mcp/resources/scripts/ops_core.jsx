@@ -294,6 +294,40 @@ function rollbackBatch(doc, preSnapshot, createdIds, undoCount, useSnapshot, tra
     return rolledBack;
 }
 
+// ==================== Transaction Helper ====================
+
+/**
+ * Execute a function within a snapshot-based transaction.
+ * On success: returns {ok: true, result: fn(doc), rolledBack: false}.
+ * On failure: restores snapshot, returns {ok: false, error: ..., rolledBack: true}.
+ *
+ * Usage from execute_script:
+ *   var txResult = withTransaction(doc, function(doc) {
+ *       // ... multi-step mutations ...
+ *       return someValue;
+ *   });
+ *
+ * @param {Document} doc - Explicit document reference (multi-doc safe)
+ * @param {Function} fn - Mutation function: (doc) => result
+ * @param {Object} [opts] - Options: {mcpOnly: boolean} — default true (fast)
+ * @returns {Object} {ok, result?, error?, rolledBack}
+ */
+function withTransaction(doc, fn, opts) {
+    opts = opts || {};
+    var snap = captureSnapshot(doc, { mcpOnly: opts.mcpOnly !== false });
+    try {
+        var result = fn(doc);
+        return { ok: true, result: result, rolledBack: false };
+    } catch (e) {
+        restoreSnapshot(doc, snap, { geometry: true, style: true });
+        return {
+            ok: false,
+            error: makeError(ErrorCodes.R_APPLY_FAILED, e.message, "apply").error,
+            rolledBack: true
+        };
+    }
+}
+
 // ==================== Guard Evaluation (C2) ====================
 
 /**
@@ -469,8 +503,10 @@ function executeSubOps(ops, ctx, mode) {
 
     var MUTATING_OPS = {
         "element_create": true, "element_modify": true, "element_delete": true,
+        "element_replace": true,
         "style_set_fill": true, "style_set_stroke": true, "style_set_opacity": true,
         "style_remove_fill": true, "style_remove_stroke": true,
+        "style_clone": true, "style_set_gradient": true,
         "layer_create": true, "layer_delete": true, "layer_lock": true, "layer_visible": true,
         "group_create": true, "group_ungroup": true,
         "zorder_front": true, "zorder_back": true, "zorder_forward": true, "zorder_backward": true,
@@ -784,6 +820,8 @@ function executeOpBatch(ops, options) {
         validationCache: {},
         options: options,
         space: options.space || { units: "pt", origin: "document", yAxis: "down" },
+        defaultLayer: options.defaultLayer || null,
+        warnings: [],
         // Diagnostics counters
         diagnostics: {
             cacheHits: 0,
@@ -794,6 +832,7 @@ function executeOpBatch(ops, options) {
         },
         compoundDepth: 0
     };
+    ctx.warn = function (msg) { ctx.warnings.push(msg); };
 
     // Begin heap transaction for this batch
     var heapBatchId = generateUUID();
@@ -921,8 +960,8 @@ function executeOpBatch(ops, options) {
     var allOk = failed === 0;
     var totalMs = results.reduce(function (sum, r) { return sum + r.duration_ms; }, 0);
 
-    // P1: Add deprecation warning to report if selection targeting was used
-    var reportWarnings = [];
+    // P1: Surface handler warnings + deprecation warnings in report
+    var reportWarnings = ctx.warnings ? ctx.warnings.slice() : [];
     if (ctx.diagnostics.selectionWarnings > 0) {
         reportWarnings.push("DEPRECATED: 'selection' targeting used " + ctx.diagnostics.selectionWarnings + "x. Use 'id' targeting. Removal at v2.0.");
     }

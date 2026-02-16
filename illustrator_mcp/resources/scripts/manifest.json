@@ -343,11 +343,12 @@
                 "contracts",
                 "targets",
                 "geo_ir",
+                "curves",
                 "session",
                 "generative"
             ],
             "exports": [],
-            "description": "Element CRUD operations (create, modify, delete)"
+            "description": "Element CRUD operations (create, modify, delete). Supports polyline and bezier path IR."
         },
         "ops_group": {
             "file": "ops_group.jsx",
@@ -382,10 +383,11 @@
         },
         "ops_text": {
             "file": "ops_text.jsx",
-            "version": "1.0.0",
+            "version": "1.1.0",
             "dependencies": [
                 "ops_core",
-                "contracts"
+                "contracts",
+                "targets"
             ],
             "exports": [],
             "description": "Text operations (create, set content, set style)"
@@ -412,13 +414,14 @@
         },
         "geo_ir": {
             "file": "geo_ir.jsx",
-            "version": "1.1.0",
+            "version": "1.2.0",
             "dependencies": [],
             "exports": [
                 "GEO_IR_VERSION",
                 "GEO_IR_TYPES",
                 "GEO_IR_KINDS",
                 "irPath",
+                "irBezierPath",
                 "irMulti",
                 "irPoints",
                 "isIR",
@@ -428,7 +431,7 @@
                 "irPointCount",
                 "irMapPoints"
             ],
-            "description": "Geometry Intermediate Representation: versioned schema, factories, validation, and point mapping utilities"
+            "description": "Geometry Intermediate Representation: versioned schema, factories (polyline + bezier), validation, and point mapping utilities"
         },
         "mcp_id": {
             "file": "mcp_id.jsx",
@@ -490,6 +493,21 @@
             ],
             "description": "Session-scoped key-value stash for multi-call IR handoff. Keys namespaced by document name. stashPutIR validates IR schema before storing."
         },
+        "curves": {
+            "file": "curves.jsx",
+            "version": "1.0.0",
+            "dependencies": [
+                "geo_ir"
+            ],
+            "exports": [
+                "smoothCurve",
+                "naturalSpline",
+                "circularArc",
+                "ellipticalArc",
+                "roundedPolygon"
+            ],
+            "description": "Bézier curve helpers: Catmull-Rom, natural spline, circular/elliptical arcs, rounded polygon. All output irBezierPath IR."
+        },
         "ops_compound": {
             "file": "ops_compound.jsx",
             "version": "1.0.0",
@@ -501,6 +519,31 @@
                 "resolvePrevTokens"
             ],
             "description": "Compound meta-op: sequences sub-ops with $prev/$prevAll ID forwarding"
+        },
+        "grid_helper": {
+            "file": "grid_helper.jsx",
+            "version": "1.0.0",
+            "dependencies": [
+                "polyfills"
+            ],
+            "exports": [
+                "artboardGrid",
+                "itemsInCell"
+            ],
+            "description": "Grid-based element discovery: divides artboard into labeled cells (A1, B2…) for spatial targeting of unnamed items"
+        },
+        "geo_boolean": {
+            "file": "geo_boolean.jsx",
+            "version": "1.0.0",
+            "dependencies": [
+                "ops_core"
+            ],
+            "exports": [
+                "extractPathGeometry",
+                "reconstructRegions",
+                "deleteByMcpIds"
+            ],
+            "description": "Boolean geometry helpers: extract path geometry, reconstruct regions (with CompoundPathItem for holes), and safe cleanup"
         },
         "test_soc": {
             "file": "test_soc.jsx",

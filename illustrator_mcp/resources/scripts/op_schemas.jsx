@@ -3,7 +3,7 @@
  * Part of Illustrator MCP SOC Framework
  * 
  * AUTO-GENERATED - DO NOT EDIT MANUALLY
- * Generated: 2026-02-09T11:28:10.207489
+ * Generated: 2026-02-15T15:10:49.585531
  * Source: scripts/gen_schemas.py
  * 
  * To regenerate: python -m scripts.gen_schemas
@@ -25,6 +25,7 @@ var OP_PARAM_SCHEMAS = {
             "fill",
             "stroke",
             "points",
+            "geometry",
             "sides",
             "radius",
             "outerRadius",
@@ -52,6 +53,7 @@ var OP_PARAM_SCHEMAS = {
             "fill": "object",
             "stroke": "object",
             "points": "array",
+            "geometry": "object",
             "sides": "number",
             "radius": "number",
             "outerRadius": "number",
@@ -75,6 +77,24 @@ var OP_PARAM_SCHEMAS = {
                 "roundedRect",
                 "text"
             ]
+        }
+    },
+    "element_create_multi": {
+        "required": [
+            "geometry"
+        ],
+        "optional": [
+            "layer",
+            "name",
+            "fill",
+            "stroke"
+        ],
+        "types": {
+            "geometry": "object",
+            "layer": "string",
+            "name": "string",
+            "fill": "object",
+            "stroke": "object"
         }
     },
     "element_modify": {
@@ -506,9 +526,6 @@ function validateOpParams(task, params) {
     if (schema.types) {
         for (var key in params) {
             if (params.hasOwnProperty(key) && schema.types[key]) {
-                // Skip type check for $field descriptors — they'll be resolved
-                // to the correct type by field_eval.jsx before handlers see them
-                if (typeof isField === "function" && isField(params[key])) continue;
                 var expected = schema.types[key];
                 var actual = getValueType(params[key]);
                 if (actual !== "null" && actual !== expected) {

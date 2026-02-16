@@ -209,6 +209,53 @@ app.executeMenuCommand('compoundPath');
 app.executeMenuCommand('noCompoundPath');
 ```
 
+## Z-Order (Stacking Order)
+
+Illustrator uses **index-based z-order**: index 0 = topmost (drawn last), highest index = bottommost (drawn first).
+
+### ElementPlacement Constants
+| Constant | Visual Effect | Mnemonic |
+|----------|--------------|----------|
+| `PLACEBEFORE` | **In front of** reference (lower index) | "before" = closer to viewer |
+| `PLACEAFTER` | **Behind** reference (higher index) | "after" = further from viewer |
+| `PLACEATBEGINNING` | **Topmost** in container (index 0) | front of stack |
+| `PLACEATEND` | **Bottommost** in container (last index) | back of stack |
+
+### Common Patterns
+```javascript
+// Move item to front of layer (visually on top of everything)
+item.move(layer, ElementPlacement.PLACEATBEGINNING);
+
+// Move item to back of layer (visually behind everything)
+item.move(layer, ElementPlacement.PLACEATEND);
+
+// Stack A in front of B (A will visually cover B)
+itemA.move(itemB, ElementPlacement.PLACEBEFORE);
+
+// Stack A behind B (B will visually cover A)
+itemA.move(itemB, ElementPlacement.PLACEAFTER);
+```
+
+### Card Recipe (background + content)
+When building layered structures (cards with backgrounds), create content **first**, then background **last**, and move the background behind everything:
+```javascript
+// 1. Create content items first (they get low indices = on top)
+var title = layer.textFrames.add();
+var dot = layer.pathItems.ellipse(...);
+
+// 2. Create background card LAST
+var cardBg = layer.pathItems.rectangle(...);
+
+// 3. cardBg is already at the front (lowest index) — move it behind content
+cardBg.move(layer, ElementPlacement.PLACEATEND);
+
+// OR: create bg first, then move each content item in front of it
+var cardBg = layer.pathItems.rectangle(...);
+title.move(cardBg, ElementPlacement.PLACEBEFORE);  // title in front of bg
+```
+
+⚠️ **Common mistake**: Using `PLACEATEND` thinking it means "last created" — it actually means **bottommost z-order** (visually behind everything). Similarly, `PLACEBEFORE` means **visually in front of** the reference item, not "before" in creation order.
+
 ## Common Mistakes to Avoid
 - Using positive Y for downward (should be negative)
 - Using ctx.rect() instead of pathItems.rectangle()

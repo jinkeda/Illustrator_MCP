@@ -547,6 +547,49 @@ async def execute_op_batch_chunked(
 # _try_parse_json and _unwrap_result moved to illustrator_mcp.utils.response (G2)
 
 
+# ==================== Shared Result Extraction ====================
+
+# Error prefixes detected in plain-text results
+_ERROR_PREFIXES = ("Error:", "error:", "ERROR:", "ReferenceError:", "TypeError:", "SyntaxError:")
+
+
+def _extract_result(response: Dict[str, Any]) -> tuple:
+    """Parse, unwrap, and classify a response into (result, error_str | None).
+
+    Centralizes the result-extraction logic shared by format_response and
+    format_envelope:
+    1. Read ``response["result"]`` (fall back to response itself)
+    2. Parse JSON strings via ``try_parse_json``
+    3. Unwrap nested envelopes via ``unwrap_result``
+    4. Detect errors: ``result.error``, ``success: False``, error prefixes
+
+    Returns:
+        (result, None) on success, or (None, error_string) on detected error.
+    """
+    from illustrator_mcp.errors import classify_error
+
+    result = response.get("result", response)
+
+    if isinstance(result, str):
+        result = try_parse_json(result)
+
+    result = unwrap_result(result)
+
+    # Dict-level error detection
+    if isinstance(result, dict):
+        if result.get("error"):
+            return None, str(result["error"])
+        if result.get("success") is False:
+            return None, str(result.get("error", "Operation failed"))
+
+    # String-level error detection (skip JSON payloads)
+    if isinstance(result, str) and not result.lstrip().startswith(("{", "[")):
+        if result.startswith(_ERROR_PREFIXES) or classify_error(result) is not None:
+            return None, result
+
+    return result, None
+
+
 def format_response(response: dict[str, Any], context: str = "") -> str:
     """
     Format the response from Illustrator for MCP output.
@@ -563,7 +606,6 @@ def format_response(response: dict[str, Any], context: str = "") -> str:
     from illustrator_mcp.errors import (
         format_error_response,
         is_connection_error,
-        classify_error,
     )
 
     # Handle top-level errors with structured formatting
@@ -578,30 +620,10 @@ def format_response(response: dict[str, Any], context: str = "") -> str:
         # Format other errors with suggestions
         return format_error_response(error, context)
 
-    # Get and unwrap result
-    result = response.get("result", response)
-
-    # Parse string results
-    if isinstance(result, str):
-        result = try_parse_json(result)
-
-    # Unwrap nested envelopes
-    result = unwrap_result(result)
-
-    # Check for errors in unwrapped result
-    if isinstance(result, dict):
-        if result.get("error"):
-            return format_error_response(result['error'], context)
-        if result.get("success") is False:
-            error_msg = result.get('error', 'Operation failed')
-            return format_error_response(error_msg, context)
-
-    # Check for error patterns in string results (skip JSON payloads)
-    if isinstance(result, str) and not result.lstrip().startswith(("{", "[")):
-        # Detect common error patterns in plain-text result strings
-        error_prefixes = ("Error:", "error:", "ERROR:", "ReferenceError:", "TypeError:", "SyntaxError:")
-        if result.startswith(error_prefixes) or classify_error(result) is not None:
-            return format_error_response(result, context)
+    # Extract and classify result
+    result, error_str = _extract_result(response)
+    if error_str is not None:
+        return format_error_response(error_str, context)
 
     # Format output
     if isinstance(result, (dict, list)):
@@ -636,7 +658,7 @@ def format_envelope(
     Returns:
         JSON string with standardized envelope
     """
-    from illustrator_mcp.errors import create_structured_error, classify_error
+    from illustrator_mcp.errors import create_structured_error
 
     warnings = warnings or []
     diagnostics = diagnostics or {}
@@ -647,9 +669,7 @@ def format_envelope(
     if response.get("elapsed_ms"):
         diagnostics["elapsed_ms"] = response["elapsed_ms"]
 
-    # Handle errors
-    if response.get("error"):
-        error_msg = response["error"]
+    def _error_envelope(error_msg: str) -> str:
         structured = create_structured_error(error_msg, context)
         return json.dumps({
             "ok": False,
@@ -663,62 +683,14 @@ def format_envelope(
             "result": None
         })
 
-    # Get and unwrap result
-    result = response.get("result", response)
+    # Handle top-level errors
+    if response.get("error"):
+        return _error_envelope(response["error"])
 
-    # Parse string results
-    if isinstance(result, str):
-        result = try_parse_json(result)
-
-    # Unwrap nested envelopes
-    result = unwrap_result(result)
-
-    # Check for errors in unwrapped result
-    if isinstance(result, dict):
-        if result.get("error"):
-            structured = create_structured_error(str(result["error"]), context)
-            return json.dumps({
-                "ok": False,
-                "warnings": warnings,
-                "error": {
-                    "code": structured.code,
-                    "message": structured.message,
-                    "suggestions": structured.suggestions
-                },
-                "diagnostics": diagnostics,
-                "result": None
-            })
-        if result.get("success") is False:
-            error_msg = result.get("error", "Operation failed")
-            structured = create_structured_error(str(error_msg), context)
-            return json.dumps({
-                "ok": False,
-                "warnings": warnings,
-                "error": {
-                    "code": structured.code,
-                    "message": structured.message,
-                    "suggestions": structured.suggestions
-                },
-                "diagnostics": diagnostics,
-                "result": None
-            })
-
-    # Check for error patterns in string results (skip JSON payloads)
-    if isinstance(result, str) and not result.lstrip().startswith(("{", "[")):
-        error_prefixes = ("Error:", "error:", "ERROR:", "ReferenceError:", "TypeError:", "SyntaxError:")
-        if result.startswith(error_prefixes) or classify_error(result) is not None:
-            structured = create_structured_error(result, context)
-            return json.dumps({
-                "ok": False,
-                "warnings": warnings,
-                "error": {
-                    "code": structured.code,
-                    "message": structured.message,
-                    "suggestions": structured.suggestions
-                },
-                "diagnostics": diagnostics,
-                "result": None
-            })
+    # Extract and classify result
+    result, error_str = _extract_result(response)
+    if error_str is not None:
+        return _error_envelope(error_str)
 
     # Success case
     return json.dumps({

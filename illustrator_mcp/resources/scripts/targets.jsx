@@ -287,8 +287,9 @@ function normalizeRect(rect, doc, coord) {
         return { ok: true, L: L, T: T, R: R, B: B };
     }
 
-    // User coords (default): artboard-relative, y-down from top-left
-    // Convert: aiX = abLeft + x,  aiY = abTop - y  (flip y-down → y-up)
+    // User coords (default): artboard-relative, origin at top-left, y-down.
+    // This is the canonical basis for all user-facing rects (grid cells, spatial queries).
+    // Convert to AI-space: aiX = abLeft + x,  aiY = abTop - y  (flip y-down → y-up)
     var abT = 0, abL = 0;
     try {
         var idx = doc.artboards.getActiveArtboardIndex();
@@ -513,6 +514,27 @@ function collectTargets(doc, target) {
                 if (dx * dx + dy * dy <= r2) items.push(candidates[ni]);
             }
         }
+    }
+    else if (type === "grid") {
+        // Grid target: maps cell label (A1, B2) to spatial within rect.
+        // Delegates to spatial — no recursion back to grid.
+        var cellLabel = (target.cell || "").toUpperCase();
+        if (!cellLabel) {
+            throwStructured(makeError(ErrorCodes.V_MISSING_REQUIRED_PARAM,
+                "grid target requires 'cell' param", "collect"));
+        }
+        var grid = artboardGrid(target.cols || 4, target.rows || 4);
+        var cell = grid.cells[cellLabel];
+        if (!cell) {
+            throwStructured(makeError(ErrorCodes.V_INVALID_PARAM_VALUE,
+                "Unknown grid cell: " + cellLabel + ". Valid: A1.." +
+                String.fromCharCode(64 + (target.rows || 4)) + (target.cols || 4),
+                "collect"));
+        }
+        return collectTargets(doc, {
+            type: "spatial", within: cell, coord: "user",
+            layer: target.layer  // optional layer filter passthrough
+        });
     }
     else if (type === "compound") {
         if (target.anyOf) {

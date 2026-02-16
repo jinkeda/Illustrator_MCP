@@ -59,6 +59,123 @@ function _artboardLeft(doc) {
     }
 }
 
+// ==================== Deterministic Layer Resolution ====================
+
+/**
+ * Resolve the target layer with deterministic fallback.
+ * Priority: params.layer > ctx.defaultLayer > doc.activeLayer (warn).
+ *
+ * @param {Document} doc
+ * @param {Object} params - Must have optional .layer string
+ * @param {Object} ctx - Execution context (may have .defaultLayer, .warn)
+ * @returns {Object} {ok: true, layer: Layer} or {ok: false, error: ...}
+ */
+function _resolveTargetLayer(doc, params, ctx) {
+    if (params.layer) {
+        var found = findLayer(doc, params.layer);
+        if (!found) {
+            return makeError(ErrorCodes.V_INVALID_PARAM_TYPE, "Layer not found: " + params.layer, "apply");
+        }
+        return { ok: true, layer: found };
+    }
+    if (ctx && ctx.defaultLayer) {
+        var defLayer = findLayer(doc, ctx.defaultLayer);
+        if (defLayer) return { ok: true, layer: defLayer };
+    }
+    // Final fallback — nondeterministic, warn caller
+    var fallback = doc.activeLayer;
+    if (ctx && ctx.warn) ctx.warn("No layer specified; using activeLayer '" + fallback.name + "'");
+    return { ok: true, layer: fallback };
+}
+
+// ==================== Bézier Path Helper ====================
+
+/**
+ * Create a path with optional Bézier control point handles.
+ *
+ * Accepts mixed point formats:
+ *   [x, y]                              → anchor-only (straight corner)
+ *   [[ax,ay], [inX,inY], [outX,outY]]   → anchor + in-handle + out-handle
+ *   [[ax,ay], null, [outX,outY]]         → anchor + smooth start (no in-handle)
+ *   [[ax,ay], [inX,inY], null]           → anchor + smooth end (no out-handle)
+ *
+ * If ALL points are simple [x,y], uses fast setEntirePath().
+ * If ANY point has handles, uses pathPoints API for full Bézier control.
+ *
+ * @param {PathItem} item - PathItem to set points on (already added to layer)
+ * @param {Array} points - Mixed array of simple or control-point structures
+ * @param {number} abLeft - Artboard left X for coordinate transform
+ * @param {number} abTop - Artboard top Y for coordinate transform
+ * @returns {boolean} true if handles were used (Bézier path), false if simple
+ */
+function _createPathWithHandles(item, points, abLeft, abTop) {
+    // Detect if any point has handle syntax: [[ax,ay], inH, outH]
+    var hasHandles = false;
+    for (var ci = 0; ci < points.length; ci++) {
+        var pt = points[ci];
+        if (pt.length === 3 && pt[0] instanceof Array) {
+            hasHandles = true;
+            break;
+        }
+    }
+
+    if (!hasHandles) {
+        // Fast path: all simple anchors → use setEntirePath
+        var aiPts = [];
+        for (var si = 0; si < points.length; si++) {
+            aiPts.push([abLeft + points[si][0], abTop - points[si][1]]);
+        }
+        item.setEntirePath(aiPts);
+        return false;
+    }
+
+    // Bézier path: use pathPoints API for individual anchor/handle control
+    // First set a dummy path so pathPoints can be populated
+    var dummyPts = [];
+    for (var di = 0; di < points.length; di++) {
+        var dp = points[di];
+        if (dp.length === 3 && dp[0] instanceof Array) {
+            dummyPts.push([abLeft + dp[0][0], abTop - dp[0][1]]);
+        } else {
+            dummyPts.push([abLeft + dp[0], abTop - dp[1]]);
+        }
+    }
+    item.setEntirePath(dummyPts);
+
+    // Now set handles on each pathPoint
+    for (var hi = 0; hi < points.length; hi++) {
+        var src = points[hi];
+        var pp = item.pathPoints[hi];
+
+        if (src.length === 3 && src[0] instanceof Array) {
+            // Control point tuple: [anchor, inHandle, outHandle]
+            var anchor = [abLeft + src[0][0], abTop - src[0][1]];
+            pp.anchor = anchor;
+
+            // In-handle (leftDirection): where previous segment arrives
+            if (src[1] && src[1] instanceof Array) {
+                pp.leftDirection = [abLeft + src[1][0], abTop - src[1][1]];
+            } else {
+                pp.leftDirection = anchor; // coincident = sharp corner
+            }
+
+            // Out-handle (rightDirection): where next segment departs
+            if (src[2] && src[2] instanceof Array) {
+                pp.rightDirection = [abLeft + src[2][0], abTop - src[2][1]];
+            } else {
+                pp.rightDirection = anchor; // coincident = sharp corner
+            }
+        } else {
+            // Simple anchor: handles coincident (sharp corner)
+            var simpleAnchor = [abLeft + src[0], abTop - src[1]];
+            pp.anchor = simpleAnchor;
+            pp.leftDirection = simpleAnchor;
+            pp.rightDirection = simpleAnchor;
+        }
+    }
+    return true;
+}
+
 // ==================== Element Create ====================
 
 registerOpHandler("element_create", function (params, targets, ctx) {
@@ -79,19 +196,12 @@ registerOpHandler("element_create", function (params, targets, ctx) {
         x = params.x || 0;
         y = params.y || 0;
     }
-    var layer = params.layer || null;
     var name = params.name || null;
 
-    // Resolve target layer
-    var targetLayer = doc.activeLayer;
-    if (layer) {
-        for (var i = 0; i < doc.layers.length; i++) {
-            if (doc.layers[i].name === layer) {
-                targetLayer = doc.layers[i];
-                break;
-            }
-        }
-    }
+    // Resolve target layer (deterministic: params.layer > ctx.defaultLayer > activeLayer)
+    var layerResult = _resolveTargetLayer(doc, params, ctx);
+    if (!layerResult.ok) return layerResult;
+    var targetLayer = layerResult.layer;
 
     var item = null;
 
@@ -224,18 +334,53 @@ registerOpHandler("element_create", function (params, targets, ctx) {
                 pathPoints = decimated;
                 pathWarnings.push("Path decimated from " + origLen + " to " + pathPoints.length + " points");
             }
-            // Y-flip via irMapPoints if IR, otherwise manual
+            // Y-flip via irMapPoints if IR, otherwise use Bézier-aware helper
             item = targetLayer.pathItems.add();
             if (isIR(geoInput)) {
                 var abT = abTop, abL = abLeft;
                 var flipped = irMapPoints(geoInput, function (pt) { return [abL + pt[0], abT - pt[1]]; });
-                item.setEntirePath(flipped.points);
-            } else {
-                var aiPoints = [];
-                for (var pi = 0; pi < pathPoints.length; pi++) {
-                    aiPoints.push([abLeft + pathPoints[pi][0], abTop - pathPoints[pi][1]]);
+
+                if (flipped.kind === "bezier" && flipped.handles) {
+                    // Bézier IR: use pathPoints API with handles
+                    // irMapPoints already transformed both anchors and handles
+                    var bPts = flipped.points;
+                    var bH = flipped.handles;
+
+                    // Set anchors first via setEntirePath (creates pathPoints)
+                    item.setEntirePath(bPts);
+
+                    // Apply handles and pointType — single transform (already flipped)
+                    for (var bi = 0; bi < bPts.length; bi++) {
+                        var pp = item.pathPoints[bi];
+                        var hEntry = bH[bi];
+
+                        // In-handle (leftDirection)
+                        if (hEntry["in"] != null) {
+                            pp.leftDirection = hEntry["in"];
+                        } else {
+                            pp.leftDirection = bPts[bi]; // coincident = sharp
+                        }
+
+                        // Out-handle (rightDirection)
+                        if (hEntry.out != null) {
+                            pp.rightDirection = hEntry.out;
+                        } else {
+                            pp.rightDirection = bPts[bi]; // coincident = sharp
+                        }
+
+                        // PointType: smooth vs corner
+                        if (hEntry.type === "corner") {
+                            pp.pointType = PointType.CORNER;
+                        } else {
+                            pp.pointType = PointType.SMOOTH;
+                        }
+                    }
+                } else {
+                    // Polyline IR: fast path — corner-only anchors
+                    item.setEntirePath(flipped.points);
                 }
-                item.setEntirePath(aiPoints);
+            } else {
+                _createPathWithHandles(item, pathPoints, abLeft, abTop);
             }
             item.closed = params.closed !== false; // Default to closed
             // Emit collected warnings
@@ -367,11 +512,10 @@ registerOpHandler("element_create_multi", function (params, targets, ctx) {
     var end = Math.min(offset + limit, totalPaths);
     var pathsArr = (offset > 0 || end < totalPaths) ? fullPaths.slice(offset, end) : fullPaths;
 
-    // Resolve layer ONCE (Hole B optimization)
-    var targetLayer = params.layer ? findLayer(doc, params.layer) : doc.activeLayer;
-    if (!targetLayer) {
-        return makeError(ErrorCodes.V_INVALID_PARAM_TYPE, "Layer not found: " + params.layer, "apply");
-    }
+    // Resolve layer ONCE (Hole B optimization + deterministic fallback)
+    var layerResult = _resolveTargetLayer(doc, params, ctx);
+    if (!layerResult.ok) return layerResult;
+    var targetLayer = layerResult.layer;
 
     // Styling modes — slice in sync with pathsArr when chunked
     var styles = params.styles || null;       // Mode 1: explicit per-path
@@ -656,21 +800,10 @@ function _createFromTemplate(params, doc, abTop, abLeft, ctx) {
     var tmpl = params.template;
     var instances = params.instances;
 
-    // Resolve target layer
-    var targetLayer = doc.activeLayer;
-    if (params.layer) {
-        var found = false;
-        for (var li = 0; li < doc.layers.length; li++) {
-            if (doc.layers[li].name === params.layer) {
-                targetLayer = doc.layers[li];
-                found = true;
-                break;
-            }
-        }
-        if (!found) {
-            return makeError(ErrorCodes.V_INVALID_PARAM_TYPE, "Layer not found: " + params.layer, "apply");
-        }
-    }
+    // Resolve target layer (deterministic: params.layer > ctx.defaultLayer > activeLayer)
+    var layerResult = _resolveTargetLayer(doc, params, ctx);
+    if (!layerResult.ok) return layerResult;
+    var targetLayer = layerResult.layer;
 
     // Color cache
     var colorCache = {};
@@ -732,11 +865,7 @@ function _createFromTemplate(params, doc, abTop, abLeft, ctx) {
                     return makeError(ErrorCodes.V_INVALID_PARAM_TYPE, "template path needs >=2 points", "validate");
                 }
                 master = targetLayer.pathItems.add();
-                var aiPts = [];
-                for (var pi = 0; pi < pp.length; pi++) {
-                    aiPts.push([abLeft + pp[pi][0], abTop - pp[pi][1]]);
-                }
-                master.setEntirePath(aiPts);
+                _createPathWithHandles(master, pp, abLeft, abTop);
                 master.closed = tmpl.closed === true;
                 if (!tmpl.closed) master.filled = false;
                 break;
@@ -914,21 +1043,10 @@ registerOpHandler("element_create_batch", function (params, targets, ctx) {
         return makeError(ErrorCodes.V_MISSING_REQUIRED_PARAM, "items array is required", "apply");
     }
 
-    // Resolve target layer
-    var targetLayer = doc.activeLayer;
-    if (params.layer) {
-        var found = false;
-        for (var li = 0; li < doc.layers.length; li++) {
-            if (doc.layers[li].name === params.layer) {
-                targetLayer = doc.layers[li];
-                found = true;
-                break;
-            }
-        }
-        if (!found) {
-            return makeError(ErrorCodes.V_INVALID_PARAM_TYPE, "Layer not found: " + params.layer, "apply");
-        }
-    }
+    // Resolve target layer (deterministic: params.layer > ctx.defaultLayer > activeLayer)
+    var layerResult = _resolveTargetLayer(doc, params, ctx);
+    if (!layerResult.ok) return layerResult;
+    var targetLayer = layerResult.layer;
 
     var defaultStyle = params.defaultStyle || {};
 
@@ -1007,12 +1125,12 @@ registerOpHandler("element_create_batch", function (params, targets, ctx) {
                     if (!pp || pp.length < 2) { skipped++; warnings.push("items[" + i + "] skipped: path needs >=2 points"); continue; }
                     if (pp.length > 8000) { skipped++; warnings.push("items[" + i + "] skipped: >8000 points"); continue; }
                     item = targetLayer.pathItems.add();
-                    var aiPts = [];
+                    _createPathWithHandles(item, pp, abLeft, abTop);
+                    // Track bounds using anchor coordinates
                     for (var pi = 0; pi < pp.length; pi++) {
-                        aiPts.push([abLeft + pp[pi][0], abTop - pp[pi][1]]);
-                        trackBounds(pp[pi][0], pp[pi][1]);
+                        var bpt = (pp[pi].length === 3 && pp[pi][0] instanceof Array) ? pp[pi][0] : pp[pi];
+                        trackBounds(bpt[0], bpt[1]);
                     }
-                    item.setEntirePath(aiPts);
                     item.closed = spec.closed === true;
                     if (!spec.closed) item.filled = false;
                     break;
@@ -1242,4 +1360,228 @@ registerOpHandler("element_delete", function (params, targets, ctx) {
         data: { deleted: deleted, total: targets.length, failed: targets.length - deleted },
         warnings: warnings
     };
+});
+
+// ==================== Element Replace (Atomic Swap) ====================
+
+/**
+ * Atomically replace a single element with new content.
+ * Uses a sandbox group pattern:
+ *   1. Capture old item metadata (bounds, layer, z-order, visibility, locked)
+ *   2. Create new content inside a temporary sandbox group
+ *   3. Move sandbox next to old item, unpack children, remove old item + sandbox
+ *   4. On failure: sandbox.remove() in catch — old item untouched
+ *
+ * @param {Object} params - element_create params + inheritPosition
+ * @param {Array} targets - Must resolve to exactly 1 item
+ * @param {Object} ctx - Execution context
+ */
+registerOpHandler("element_replace", function (params, targets, ctx) {
+    // --- Validate: exactly 1 target ---
+    if (!targets || targets.length !== 1) {
+        return makeError(ErrorCodes.V_INVALID_TARGETS,
+            "element_replace requires exactly 1 target, got " + (targets ? targets.length : 0),
+            "validate");
+    }
+
+    var doc = ctx.doc;
+    var oldItem = targets[0];
+
+    // --- Capture metadata from old item ---
+    var oldBounds = oldItem.geometricBounds; // [left, top, right, bottom]
+    var oldLayer = oldItem.layer;
+    var oldVisible = oldItem.hidden === false;
+    var oldLocked = oldItem.locked;
+    var abTop = _artboardTop(doc);
+    var abLeft = _artboardLeft(doc);
+
+    // Extract old MCP ID for tombstoning
+    var oldId = null;
+    if (typeof extractMcpId === "function") {
+        oldId = extractMcpId(oldItem.note);
+    }
+
+    // Unlock old item if locked (required for removal)
+    if (oldLocked) {
+        oldItem.locked = false;
+    }
+
+    // --- Create sandbox group on same layer ---
+    var sandbox = null;
+    var newItem = null;
+
+    try {
+        sandbox = oldLayer.groupItems.add();
+        sandbox.name = "__mcp_replace_sandbox__";
+
+        // --- Build replacement inside sandbox using element_create params ---
+        var type = params.type || "rect";
+        var newId = params.id || generateUUID();
+        var width = params.width || params.w || 100;
+        var height = params.height || params.h || 100;
+
+        // Position: inherit from old item unless overridden
+        var inheritPosition = params.inheritPosition !== false; // default true
+        var x, y;
+        if (inheritPosition && params.x === undefined && params.y === undefined) {
+            // Convert old item position to user coords (artboard-relative)
+            x = oldBounds[0] - abLeft;
+            y = abTop - oldBounds[1];
+        } else {
+            x = params.x || 0;
+            y = params.y || 0;
+        }
+
+        var aiTop = abTop - y;
+        var aiLeft = abLeft + x;
+
+        // Create element inside sandbox
+        switch (type) {
+            case "rect":
+                newItem = sandbox.pathItems.rectangle(aiTop, aiLeft, width, height);
+                break;
+            case "ellipse":
+                newItem = sandbox.pathItems.ellipse(aiTop, aiLeft, width, height);
+                break;
+            case "line":
+                var x2 = params.x2 || (x + width);
+                var y2 = params.y2 || y;
+                newItem = sandbox.pathItems.add();
+                newItem.setEntirePath([[aiLeft, aiTop], [abLeft + x2, abTop - y2]]);
+                newItem.closed = false;
+                newItem.filled = false;
+                break;
+            case "polygon":
+                var sides = params.sides || 6;
+                var radius = params.radius || 50;
+                newItem = sandbox.pathItems.polygon(aiLeft, aiTop, radius, sides);
+                break;
+            case "star":
+                var points = params.points || 5;
+                var outerRadius = params.outerRadius || 50;
+                var innerRadius = params.innerRadius || 25;
+                newItem = sandbox.pathItems.star(aiLeft, aiTop, outerRadius, innerRadius, points);
+                break;
+            case "roundedRect":
+                var cornerRadius = params.cornerRadius || 10;
+                newItem = sandbox.pathItems.roundedRectangle(aiTop, aiLeft, width, height, cornerRadius, cornerRadius);
+                break;
+            case "text":
+                var tf = sandbox.textFrames.add();
+                tf.contents = params.contents || params.text || "";
+                tf.position = [aiLeft, aiTop];
+                if (params.fontSize) tf.textRange.characterAttributes.size = params.fontSize;
+                if (params.fontName) {
+                    try {
+                        tf.textRange.characterAttributes.textFont =
+                            app.textFonts.getByName(params.fontName);
+                    } catch (e) { /* font not found, keep default */ }
+                }
+                newItem = tf;
+                break;
+            case "path":
+            case "polyline":
+                var pathPoints = params.points;
+                if (!pathPoints || pathPoints.length < 2) {
+                    sandbox.remove();
+                    return makeError(ErrorCodes.V_MISSING_REQUIRED_PARAM, "Path requires >= 2 points", "apply");
+                }
+                newItem = sandbox.pathItems.add();
+                _createPathWithHandles(newItem, pathPoints, abLeft, abTop);
+                newItem.closed = (type === "path") ? (params.closed !== false) : (params.closed === true);
+                break;
+            default:
+                sandbox.remove();
+                return makeError(ErrorCodes.V_INVALID_PARAM_TYPE,
+                    "Unknown element type for replace: " + type, "apply");
+        }
+
+        // Assign MCP ID
+        newItem.note = "@mcp:id=" + newId;
+
+        // Set name if provided
+        if (params.name) {
+            newItem.name = params.name;
+        }
+
+        // Apply fill
+        if (params.fill) {
+            var fillColor = new RGBColor();
+            fillColor.red = params.fill.r || 0;
+            fillColor.green = params.fill.g || 0;
+            fillColor.blue = params.fill.b || 0;
+            newItem.fillColor = fillColor;
+        }
+
+        // Apply stroke
+        if (params.stroke) {
+            var strokeColor = new RGBColor();
+            strokeColor.red = params.stroke.r || 0;
+            strokeColor.green = params.stroke.g || 0;
+            strokeColor.blue = params.stroke.b || 0;
+            newItem.strokeColor = strokeColor;
+            newItem.stroked = true;
+            if (params.stroke.width !== undefined) {
+                newItem.strokeWidth = params.stroke.width;
+            }
+        }
+
+        // No stroke option
+        if (params.noStroke || params.stroke === null || params.stroke === false) {
+            newItem.stroked = false;
+        }
+
+        // Opacity
+        if (params.opacity !== undefined) {
+            newItem.opacity = params.opacity;
+        }
+
+        // --- Commit sequence (z-order safe) ---
+
+        // 1. Move sandbox next to oldItem via PLACEAFTER (z-order anchor preserved)
+        sandbox.move(oldItem, ElementPlacement.PLACEAFTER);
+
+        // 2. Move new item out of sandbox to the layer
+        newItem.move(oldLayer, ElementPlacement.PLACEBEFORE);
+
+        // 3. Inherit visibility from old item
+        newItem.hidden = !oldVisible;
+
+        // 4. Tombstone old MCP ID, then remove old item
+        if (oldId && typeof heapTombstone === "function") {
+            heapTombstone(oldId);
+        }
+        oldItem.remove();
+
+        // 5. Remove the now-empty sandbox
+        sandbox.remove();
+        sandbox = null;
+
+        // 6. Apply locked state from old item
+        if (oldLocked) {
+            newItem.locked = true;
+        }
+
+        return {
+            ok: true,
+            id: newId,
+            data: {
+                typename: newItem.typename,
+                bounds: [newItem.left, newItem.top, newItem.width, newItem.height],
+                oldId: oldId
+            }
+        };
+
+    } catch (e) {
+        // --- Failure path: clean up sandbox, old item untouched ---
+        if (sandbox) {
+            try { sandbox.remove(); } catch (ex) { }
+        }
+        // Restore locked state if we unlocked it
+        if (oldLocked) {
+            try { oldItem.locked = true; } catch (ex) { }
+        }
+        return makeError(ErrorCodes.R_APPLY_FAILED,
+            "element_replace failed: " + e.message, "apply");
+    }
 });

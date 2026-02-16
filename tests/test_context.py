@@ -13,6 +13,7 @@ from illustrator_mcp.tools.context import (
     illustrator_get_selection_info,
     illustrator_get_app_info,
     illustrator_get_scripting_reference,
+    GetDocumentInput,
 )
 
 
@@ -35,7 +36,7 @@ class TestGetDocument:
         })
         mock_execute.return_value = mock_result
         
-        result = await illustrator_get_document()
+        result = await illustrator_get_document(params=GetDocumentInput())
         
         mock_execute.assert_called_once()
         call_kwargs = mock_execute.call_args.kwargs
@@ -47,7 +48,7 @@ class TestGetDocument:
         """Test that script iterates over layers."""
         mock_execute.return_value = "{}"
         
-        await illustrator_get_document()
+        await illustrator_get_document(params=GetDocumentInput())
         
         script = mock_execute.call_args.kwargs['script']
         assert "doc.layers" in script or "getLayerInfo" in script

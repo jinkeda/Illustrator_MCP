@@ -8,8 +8,15 @@
  * - text_set_style: Set text styling (font, size, color)
  * 
  * @requires ops_core (for registerOpHandler, generateUUID)
- * @version 1.0.0
+ * @requires targets (for findLayer)
+ * @version 1.1.0
  */
+
+// ==================== Dependency Guard ====================
+
+if (typeof findLayer !== "function") {
+    throw new Error("ops_text.jsx requires targets.jsx (findLayer=" + typeof findLayer + ")");
+}
 
 // ==================== Text Create ====================
 
@@ -22,18 +29,21 @@ registerOpHandler("text_create", function (params, targets, ctx) {
     var contents = params.contents || params.text || "";
     var fontSize = params.fontSize || 12;
     var fontFamily = params.fontFamily || null;
-    var layer = params.layer || null;
     var name = params.name || null;
 
-    // Resolve target layer
-    var targetLayer = doc.activeLayer;
-    if (layer) {
-        for (var i = 0; i < doc.layers.length; i++) {
-            if (doc.layers[i].name === layer) {
-                targetLayer = doc.layers[i];
-                break;
-            }
+    // Resolve target layer (deterministic: params.layer > ctx.defaultLayer > activeLayer)
+    var targetLayer;
+    if (params.layer) {
+        targetLayer = findLayer(doc, params.layer);
+        if (!targetLayer) {
+            return makeError(ErrorCodes.V_INVALID_PARAM_TYPE, "Layer not found: " + params.layer, "apply");
         }
+    } else if (ctx && ctx.defaultLayer) {
+        targetLayer = findLayer(doc, ctx.defaultLayer);
+        if (!targetLayer) targetLayer = doc.activeLayer;
+    } else {
+        targetLayer = doc.activeLayer;
+        if (ctx && ctx.warn) ctx.warn("No layer specified; using activeLayer '" + targetLayer.name + "'");
     }
 
     // Create text frame

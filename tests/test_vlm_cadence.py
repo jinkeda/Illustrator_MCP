@@ -1,18 +1,25 @@
 """
 Tests for VLM QA Cadence — auto-inject annotated preview every N mutations.
 
-Verifies counter, cadence-triggered preview, final_step override, and skip warning.
+Verifies counter, cadence-triggered preview, final_step override, skip warning,
+and Cognitive Forcing Function (checkpoint instruction injection).
 """
 
+import asyncio
+import json
 import unittest
 from unittest.mock import patch, AsyncMock, MagicMock
 
 from illustrator_mcp.tools.execute import (
     VLM_QA_CADENCE,
+    VLM_CHECKPOINT_INSTRUCTION,
     get_mutation_count,
     reset_mutation_count,
     ExecuteScriptInput,
+    ExecuteTaskInput,
+    illustrator_execute_script,
 )
+from mcp.types import TextContent, ImageContent
 
 
 class TestVLMQACadenceConstants(unittest.TestCase):
@@ -153,6 +160,358 @@ class TestCadencePreviewInjection(unittest.TestCase):
                 warnings.append("should not happen")
 
         self.assertEqual(len(warnings), 0, "None should not trigger skip warning")
+
+
+class TestCheckpointInstruction(unittest.TestCase):
+    """Test the Cognitive Forcing Function — checkpoint instruction injection."""
+
+    def setUp(self):
+        reset_mutation_count()
+
+    def tearDown(self):
+        reset_mutation_count()
+
+    def test_checkpoint_instruction_constant_exists(self):
+        """VLM_CHECKPOINT_INSTRUCTION should be a non-empty string with key phrases."""
+        self.assertIsInstance(VLM_CHECKPOINT_INSTRUCTION, str)
+        self.assertGreater(len(VLM_CHECKPOINT_INSTRUCTION), 50)
+        self.assertIn("CHECKPOINT", VLM_CHECKPOINT_INSTRUCTION)
+        self.assertIn("{count}", VLM_CHECKPOINT_INSTRUCTION)
+        # Refinement A: Tool Lockout clause
+        self.assertIn("DO NOT call any tools", VLM_CHECKPOINT_INSTRUCTION)
+        # Refinement C: final_step-safe wording
+        self.assertIn("concluding your workflow", VLM_CHECKPOINT_INSTRUCTION)
+        # Ref-A: Fallback clause for missing preview
+        self.assertIn("proceed using the textual report", VLM_CHECKPOINT_INSTRUCTION)
+
+    def test_checkpoint_instruction_format(self):
+        """VLM_CHECKPOINT_INSTRUCTION.format(count=N) should produce valid text."""
+        formatted = VLM_CHECKPOINT_INSTRUCTION.format(count=10)
+        self.assertIn("mutation #10", formatted)
+        self.assertNotIn("{count}", formatted)
+
+    def test_is_vlm_checkpoint_in_diagnostics(self):
+        """is_vlm_checkpoint flag should be settable and present in diagnostics dict."""
+        # Simulate the diagnostics dict construction from execute_script
+        is_vlm_checkpoint = True
+        diagnostics = {
+            "includes": [],
+            "prelude_hash": None,
+            "validate_bounds": False,
+            "bounds_type": "visible",
+            "bounds_source": "group_visible",
+            "bounds_scope": "document",
+            "artboard_index": None,
+            "is_vlm_checkpoint": is_vlm_checkpoint,
+        }
+        self.assertTrue(diagnostics["is_vlm_checkpoint"])
+
+        # Non-checkpoint case
+        diagnostics["is_vlm_checkpoint"] = False
+        self.assertFalse(diagnostics["is_vlm_checkpoint"])
+
+    def test_checkpoint_instruction_not_on_manual_preview(self):
+        """Manual return_preview=True on a non-cadence step should NOT trigger
+        the checkpoint instruction (is_vlm_checkpoint stays False)."""
+        from illustrator_mcp.tools import execute
+        # Set counter to 3 (not a cadence boundary)
+        execute._mutation_count = 2  # will become 3 after increment
+
+        params = ExecuteScriptInput(script="var x = 1;", return_preview=True)
+
+        # Simulate the cadence logic from execute_script
+        execute._mutation_count += 1
+        count = execute._mutation_count  # 3
+        is_checkpoint = (count % VLM_QA_CADENCE == 0) or params.final_step
+        is_vlm_checkpoint = False
+
+        if is_checkpoint:
+            if params.return_preview is False and not params.final_step:
+                pass
+            else:
+                params.return_preview = True
+                params.preview_mode = "annotated"
+                is_vlm_checkpoint = True
+
+        # count=3, not a cadence boundary, not final_step → NOT a checkpoint
+        self.assertFalse(is_checkpoint)
+        self.assertFalse(is_vlm_checkpoint)
+        # The AI's manual return_preview=True is preserved but no instruction injected
+        self.assertTrue(params.return_preview)
+
+    def test_checkpoint_instruction_injected_on_cadence(self):
+        """Integration test: at cadence boundary, the returned content list should
+        have 4 elements with the checkpoint instruction as the absolute last one."""
+        from illustrator_mcp.tools import execute
+
+        # Set mutation counter to 4 so the next call hits 5 (cadence boundary)
+        execute._mutation_count = 4
+
+        # Create a minimal 1x1 white PNG for the preview mock
+        import base64
+        # Tiny valid PNG (1x1 white pixel)
+        tiny_png = (
+            b'\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR\x00\x00\x00\x01'
+            b'\x00\x00\x00\x01\x08\x02\x00\x00\x00\x90wS\xde\x00'
+            b'\x00\x00\x0cIDATx\x9cc\xf8\x0f\x00\x00\x01\x01\x00'
+            b'\x05\x18\xd8N\x00\x00\x00\x00IEND\xaeB`\x82'
+        )
+
+        # Mock the execution pipeline
+        mock_response = {"result": "'ok'", "error": None}
+        mock_preview = ImageContent(
+            type="image",
+            data=base64.b64encode(tiny_png).decode('utf-8'),
+            mimeType="image/png",
+        )
+        mock_annotation_result = {
+            "meta": {"annotated_count": 0},
+            "annotations": [],
+            "warnings": [],
+        }
+
+        params = ExecuteScriptInput(script="var x = 1;")
+
+        with patch("illustrator_mcp.tools.execute.execute_script_with_context",
+                    new_callable=AsyncMock, return_value=mock_response), \
+             patch("illustrator_mcp.tools.execute._generate_preview",
+                    new_callable=AsyncMock, return_value=mock_preview), \
+             patch("illustrator_mcp.tools.execute._annotate_preview",
+                    new_callable=AsyncMock,
+                    return_value=(tiny_png, mock_annotation_result)):
+
+            result = asyncio.get_event_loop().run_until_complete(
+                illustrator_execute_script(params)
+            )
+
+        # Should be a list (multi-content response)
+        self.assertIsInstance(result, list)
+
+        # Should have 4 elements: envelope, image, annotations, CHECKPOINT
+        self.assertEqual(len(result), 4, f"Expected 4 content items, got {len(result)}")
+
+        # Element order: Text, Image, Text, Text
+        self.assertIsInstance(result[0], TextContent)
+        self.assertIsInstance(result[1], ImageContent)
+        self.assertIsInstance(result[2], TextContent)
+        self.assertIsInstance(result[3], TextContent)
+
+        # The LAST element must be the checkpoint instruction
+        checkpoint_text = result[3].text
+        self.assertIn("VLM QA CHECKPOINT", checkpoint_text)
+        self.assertIn("mutation #5", checkpoint_text)
+        self.assertIn("DO NOT call any tools", checkpoint_text)
+
+        # Verify is_vlm_checkpoint is True in envelope diagnostics
+        envelope = json.loads(result[0].text)
+        self.assertTrue(envelope["diagnostics"]["is_vlm_checkpoint"])
+
+    def test_no_checkpoint_instruction_on_non_cadence(self):
+        """On non-cadence step with manual preview, response should have 3 elements, not 4."""
+        from illustrator_mcp.tools import execute
+        import base64
+
+        # Set to 0 so next call is 1 (NOT a cadence boundary)
+        execute._mutation_count = 0
+
+        tiny_png = (
+            b'\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR\x00\x00\x00\x01'
+            b'\x00\x00\x00\x01\x08\x02\x00\x00\x00\x90wS\xde\x00'
+            b'\x00\x00\x0cIDATx\x9cc\xf8\x0f\x00\x00\x01\x01\x00'
+            b'\x05\x18\xd8N\x00\x00\x00\x00IEND\xaeB`\x82'
+        )
+
+        mock_response = {"result": "'ok'", "error": None}
+        mock_preview = ImageContent(
+            type="image",
+            data=base64.b64encode(tiny_png).decode('utf-8'),
+            mimeType="image/png",
+        )
+        mock_annotation_result = {
+            "meta": {"annotated_count": 0},
+            "annotations": [],
+            "warnings": [],
+        }
+
+        # Manual preview request on non-cadence step
+        params = ExecuteScriptInput(
+            script="var x = 1;",
+            return_preview=True,
+            preview_mode="annotated",
+        )
+
+        with patch("illustrator_mcp.tools.execute.execute_script_with_context",
+                    new_callable=AsyncMock, return_value=mock_response), \
+             patch("illustrator_mcp.tools.execute._generate_preview",
+                    new_callable=AsyncMock, return_value=mock_preview), \
+             patch("illustrator_mcp.tools.execute._annotate_preview",
+                    new_callable=AsyncMock,
+                    return_value=(tiny_png, mock_annotation_result)):
+
+            result = asyncio.get_event_loop().run_until_complete(
+                illustrator_execute_script(params)
+            )
+
+        self.assertIsInstance(result, list)
+        # Should have 3 elements (no checkpoint instruction)
+        self.assertEqual(len(result), 3, f"Expected 3 content items, got {len(result)}")
+
+        # Verify is_vlm_checkpoint is False in envelope diagnostics
+        envelope = json.loads(result[0].text)
+        self.assertFalse(envelope["diagnostics"]["is_vlm_checkpoint"])
+
+
+class TestReviewFixes(unittest.TestCase):
+    """Tests for the review fixes: cadence gating, dryRun, preview failure, path_boolean."""
+
+    def setUp(self):
+        reset_mutation_count()
+
+    def tearDown(self):
+        reset_mutation_count()
+
+    def test_checkpoint_on_preview_failure(self):
+        """When preview generation returns None at a cadence boundary,
+        the checkpoint instruction should still be injected."""
+        from illustrator_mcp.tools import execute
+
+        # Set to 4 so next call hits 5 (cadence boundary)
+        execute._mutation_count = 4
+
+        mock_response = {"result": "'ok'", "error": None}
+        params = ExecuteScriptInput(script="var x = 1;")
+
+        with patch("illustrator_mcp.tools.execute.execute_script_with_context",
+                    new_callable=AsyncMock, return_value=mock_response), \
+             patch("illustrator_mcp.tools.execute._generate_preview",
+                    new_callable=AsyncMock, return_value=None):
+
+            result = asyncio.get_event_loop().run_until_complete(
+                illustrator_execute_script(params)
+            )
+
+        # Preview failed → should still return list with instruction
+        self.assertIsInstance(result, list)
+        self.assertEqual(len(result), 2, "Expected [envelope, checkpoint_instruction]")
+        self.assertIsInstance(result[0], TextContent)
+        self.assertIsInstance(result[1], TextContent)
+        self.assertIn("VLM QA CHECKPOINT", result[1].text)
+        self.assertIn("mutation #5", result[1].text)
+
+    def test_no_preview_on_dry_run(self):
+        """execute_task with dryRun=True should NOT generate a preview,
+        and diagnostics.preview_state should be 'pre_execution'."""
+        from illustrator_mcp.tools import execute
+        from illustrator_mcp.protocol import TaskPayload, TaskOptions
+
+        # Set to 4 so next call hits 5 (cadence boundary)
+        execute._mutation_count = 4
+
+        # Build a dryRun task payload
+        payload = TaskPayload(
+            task="test_task",
+            options=TaskOptions(dryRun=True),
+        )
+        params = ExecuteTaskInput(
+            payload=payload,
+            compute_fn="function(items,params,report){return []}",
+            apply_fn="function(actions,report){}",
+        )
+
+        # Mock report: ok=True, simulated dry run
+        mock_report = {
+            "ok": True,
+            "stats": {"collected": 0, "processed": 0, "modified": 0},
+            "timing": {},
+            "warnings": [],
+            "errors": [],
+        }
+        mock_response = {"result": json.dumps(mock_report), "error": None}
+
+        with patch("illustrator_mcp.tools.execute.execute_script_with_context",
+                    new_callable=AsyncMock, return_value=mock_response), \
+             patch("illustrator_mcp.tools.execute._capture_artboard_png",
+                    new_callable=AsyncMock) as mock_capture:
+
+            result = asyncio.get_event_loop().run_until_complete(
+                execute.illustrator_execute_task(params)
+            )
+
+        # _capture_artboard_png should NOT have been called
+        mock_capture.assert_not_called()
+
+        # Result should be a list (checkpoint instruction still fires)
+        self.assertIsInstance(result, list)
+        # Parse envelope to verify preview_state
+        envelope = json.loads(result[0].text)
+        self.assertEqual(envelope["diagnostics"]["preview_state"], "pre_execution")
+
+    def test_dryrun_overrides_final_step(self):
+        """final_step=True + dryRun=True → NO preview generated.
+        dryRun is a hard skip that takes precedence over final_step."""
+        from illustrator_mcp.tools import execute
+        from illustrator_mcp.protocol import TaskPayload, TaskOptions
+
+        execute._mutation_count = 0  # not a cadence boundary
+
+        payload = TaskPayload(
+            task="test_task",
+            options=TaskOptions(dryRun=True),
+        )
+        params = ExecuteTaskInput(
+            payload=payload,
+            compute_fn="function(items,params,report){return []}",
+            apply_fn="function(actions,report){}",
+            final_step=True,  # would normally force preview
+        )
+
+        mock_report = {
+            "ok": True,
+            "stats": {"collected": 0, "processed": 0, "modified": 0},
+            "timing": {},
+            "warnings": [],
+            "errors": [],
+        }
+        mock_response = {"result": json.dumps(mock_report), "error": None}
+
+        with patch("illustrator_mcp.tools.execute.execute_script_with_context",
+                    new_callable=AsyncMock, return_value=mock_response), \
+             patch("illustrator_mcp.tools.execute._capture_artboard_png",
+                    new_callable=AsyncMock) as mock_capture:
+
+            result = asyncio.get_event_loop().run_until_complete(
+                execute.illustrator_execute_task(params)
+            )
+
+        # _capture_artboard_png should NOT have been called
+        mock_capture.assert_not_called()
+
+    def test_path_boolean_increments_counter(self):
+        """illustrator_path_boolean should increment _mutation_count."""
+        from illustrator_mcp.tools import execute
+
+        execute._mutation_count = 7
+
+        # We only need to verify the counter increment, not the full boolean logic.
+        # Mock the import of geometry module to fail cleanly at import guard.
+        with patch.dict('sys.modules', {'illustrator_mcp.geometry': None}):
+            try:
+                from illustrator_mcp.tools.execute import PathBooleanInput, illustrator_path_boolean
+                params = PathBooleanInput(
+                    operation="unite",
+                    subject="id_A",
+                    clip="id_B",
+                )
+                # This will hit the import guard and return error JSON,
+                # but the counter should already have incremented
+                asyncio.get_event_loop().run_until_complete(
+                    illustrator_path_boolean(params)
+                )
+            except Exception:
+                pass  # Geometry import may fail — that's fine
+
+        # Counter should have been incremented from 7 to 8
+        self.assertEqual(execute._mutation_count, 8)
 
 
 if __name__ == "__main__":

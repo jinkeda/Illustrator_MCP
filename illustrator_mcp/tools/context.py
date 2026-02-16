@@ -8,10 +8,12 @@ Also registers MCP resources for static reference content (Issue #6).
 import json
 import logging
 from pathlib import Path
-from typing import Dict, List
+from typing import Dict, List, Optional
+
+from pydantic import Field
 
 from illustrator_mcp.shared import mcp
-from illustrator_mcp.tools.base import execute_jsx_tool
+from illustrator_mcp.tools.base import ToolInputBase, execute_jsx_tool
 from illustrator_mcp import templates
 
 logger = logging.getLogger(__name__)
@@ -64,7 +66,7 @@ def _generate_library_catalog() -> str:
             categories["SOC Operations"].append(name)
         elif name in ("geometry", "layout", "selection", "presets"):
             categories["Geometry & Layout"].append(name)
-        elif name in ("generative", "geo_ir", "session", "snapshot"):
+        elif name in ("generative", "geo_ir", "session", "snapshot", "curves"):
             categories["Data & Generation"].append(name)
         elif name in ("task_pipeline", "polyfills", "item_ref", "targets",
                        "contracts", "field_eval"):
@@ -121,6 +123,15 @@ def library_catalog_resource() -> str:
     return _generate_library_catalog()
 
 
+class GetDocumentInput(ToolInputBase):
+    """Input parameters for get_document with pagination support."""
+    max_items: int = Field(200, ge=1, le=5000, description="Max items per layer (default 200)")
+    max_layers: int = Field(50, ge=1, le=200, description="Max layers to return (default 50)")
+    offset: int = Field(0, ge=0, description="Skip first N items per layer (for paging)")
+    layer_name: Optional[str] = Field(None, description="Filter to single layer by name")
+    layer_index: Optional[int] = Field(None, ge=0, description="Filter to single layer by index")
+
+
 @mcp.tool(
     name="illustrator_get_document",
     annotations={
@@ -131,27 +142,59 @@ def library_catalog_resource() -> str:
         "openWorldHint": False
     }
 )
-async def illustrator_get_document() -> str:
+async def illustrator_get_document(params: GetDocumentInput) -> str:
     """
     Get complete document information and structure as a JSON tree.
-    
+
     Returns layers, sublayers, and items with their names, types, positions, and properties.
     Essential for understanding canvas state before writing modification scripts.
-    
+
+    PAGINATION:
+    By default returns up to 200 items per layer and 50 layers.
+    If a layer is truncated, the response includes:
+      - truncated: true
+      - totalItems: total item count
+      - nextOffset: use as 'offset' in next call
+    To page through a single layer:
+      get_document({layer_name: "Layer 1", offset: 200, max_items: 200})
+
+    Args:
+        max_items: Max items per layer (1-5000, default 200)
+        max_layers: Max layers to return (1-200, default 50)
+        offset: Skip first N items per layer for paging (default 0)
+        layer_name: Filter to a single layer by name
+        layer_index: Filter to a single layer by index
+
     Returns:
         JSON with:
         - document: name, width, height, colorMode, saved, layerCount, artboards
         - layers: array of layer objects with:
-            - name, visible, locked
+            - name, visible, locked, itemCount, offset, nextOffset
             - items: array of {name, type, position, bounds}
-    
-    Use this before writing scripts that modify existing objects.
     """
+    # Determine layer filter: name takes priority over index
+    if params.layer_name is not None:
+        layer_filter = json.dumps(params.layer_name)  # JS string
+    elif params.layer_index is not None:
+        layer_filter = str(params.layer_index)  # JS number
+    else:
+        layer_filter = "null"  # JS null → show all layers
+
+    script = templates.GET_DOCUMENT_STRUCTURE.substitute(
+        max_items=params.max_items,
+        max_layers=params.max_layers,
+        offset=params.offset,
+        layer_filter=layer_filter,
+    )
     return await execute_jsx_tool(
-        script=templates.GET_DOCUMENT_STRUCTURE,
+        script=script,
         command_type="get_document",
         tool_name="illustrator_get_document",
-        params={}
+        params={
+            "max_items": params.max_items,
+            "offset": params.offset,
+            "layer_filter": layer_filter,
+        }
     )
 
 

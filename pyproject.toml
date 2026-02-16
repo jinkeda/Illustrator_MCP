@@ -38,6 +38,9 @@ dev = [
 overlay = [
     "Pillow>=10.0.0",
 ]
+geometry = [
+    "pyclipper>=1.3.0",
+]
 
 [project.scripts]
 illustrator-mcp = "illustrator_mcp.server:main"

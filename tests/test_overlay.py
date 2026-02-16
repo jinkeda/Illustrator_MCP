@@ -308,11 +308,12 @@ class TestFilterItems(unittest.TestCase):
         self.assertEqual(kept[0]["name"], "card")
 
     def test_filter_thin_path(self):
-        """PathItem with height < 5pt is excluded."""
+        """PathItem with dimension below dynamic threshold is excluded.
+        On 1200x800 artboard: min_dim = min(10, max(2, 800*0.005)) = 4pt."""
         items = [
-            {"name": "accent", "type": "PathItem", "bounds": [40, -120, 300, -124]},  # 4pt tall
-            {"name": "divider", "type": "PathItem", "bounds": [40, -100, 1160, -101]},  # 1pt tall
-            {"name": "bar", "type": "PathItem", "bounds": [80, -400, 140, -640]},  # 240pt tall
+            {"name": "accent", "type": "PathItem", "bounds": [40, -120, 300, -123]},  # 3pt tall → filtered
+            {"name": "divider", "type": "PathItem", "bounds": [40, -100, 1160, -101]},  # 1pt tall → filtered
+            {"name": "bar", "type": "PathItem", "bounds": [80, -400, 140, -640]},  # 240pt tall → kept
         ]
         kept, filtered = _filter_items(items, self.ARTBOARD)
         self.assertEqual(filtered, 2)
@@ -350,17 +351,39 @@ class TestFilterItems(unittest.TestCase):
         self.assertEqual(len(kept), 1)
 
     def test_meta_counts(self):
-        """Verify filtered_count = input - kept."""
+        """Verify filtered_count = input - kept.
+        On 1200x800 artboard: min_dim = 4pt. Items < 4pt are filtered."""
         items = [
-            {"name": "bg", "type": "PathItem", "bounds": [0, 0, 1200, -800]},
-            {"name": "accent", "type": "PathItem", "bounds": [40, -120, 300, -124]},
-            {"name": "card", "type": "PathItem", "bounds": [40, -120, 300, -260]},
-            {"name": "text", "type": "TextFrame", "bounds": [56, -140, 96, -153]},
+            {"name": "bg", "type": "PathItem", "bounds": [0, 0, 1200, -800]},       # canvas-span → filtered
+            {"name": "accent", "type": "PathItem", "bounds": [40, -120, 300, -123]}, # 3pt tall → filtered
+            {"name": "card", "type": "PathItem", "bounds": [40, -120, 300, -260]},   # normal → kept
+            {"name": "text", "type": "TextFrame", "bounds": [56, -140, 96, -153]},   # TextFrame → kept
         ]
         kept, filtered = _filter_items(items, self.ARTBOARD)
         self.assertEqual(filtered, 2)  # bg + accent
         self.assertEqual(len(kept), 2)  # card + text
         self.assertEqual(len(kept) + filtered, len(items))
+
+    def test_filter_large_artboard_cap(self):
+        """On a 10,000pt artboard, min_dim should be capped at 10pt (not 50pt).
+        An 8pt-tall path should be filtered but a 12pt path should be kept."""
+        large_artboard = [0, 0, 10000, -10000]  # 10,000x10,000pt
+        items = [
+            # 8pt tall — below the 10pt cap → should be FILTERED
+            {"name": "thin_line", "type": "PathItem", "bounds": [100, -100, 300, -108]},
+            # 12pt tall — above the 10pt cap → should be KEPT
+            {"name": "small_shape", "type": "PathItem", "bounds": [100, -100, 300, -112]},
+            # 3pt tall TextFrame — IMMUNE to thin filter
+            {"name": "tiny_text", "type": "TextFrame", "bounds": [100, -100, 120, -103]},
+        ]
+        kept, filtered = _filter_items(items, large_artboard)
+        self.assertEqual(filtered, 1)
+        self.assertEqual(len(kept), 2)
+        names = [k["name"] for k in kept]
+        self.assertIn("small_shape", names)
+        self.assertIn("tiny_text", names)
+        self.assertNotIn("thin_line", names)
+
 
 
 @unittest.skipUnless(HAS_PILLOW, "Pillow not installed")

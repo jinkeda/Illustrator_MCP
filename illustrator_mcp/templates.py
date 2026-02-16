@@ -175,9 +175,13 @@ GET_APP_INFO = """
 
 # ==================== Context/Inspection ====================
 
-GET_DOCUMENT_STRUCTURE = """
+GET_DOCUMENT_STRUCTURE = Template("""
 (function() {
     var doc = app.activeDocument;
+    var maxItems = ${max_items};
+    var maxLayers = ${max_layers};
+    var itemOffset = ${offset};
+    var layerFilter = ${layer_filter};
     
     function getItemInfo(item, maxDepth, currentDepth) {
         if (currentDepth > maxDepth) return null;
@@ -206,24 +210,28 @@ GET_DOCUMENT_STRUCTURE = """
         return info;
     }
     
-    function getLayerInfo(layer, maxItems) {
+    function getLayerInfo(layer, maxI, off) {
+        var total = layer.pageItems.length;
         var layerInfo = {
             name: layer.name,
             visible: layer.visible,
             locked: layer.locked,
-            itemCount: layer.pageItems.length,
-            items: []
+            itemCount: total,
+            items: [],
+            offset: off,
+            nextOffset: null
         };
         
-        var itemLimit = Math.min(layer.pageItems.length, maxItems);
-        for (var i = 0; i < itemLimit; i++) {
+        var end = Math.min(total, off + maxI);
+        for (var i = off; i < end; i++) {
             var itemInfo = getItemInfo(layer.pageItems[i], 2, 0);
             if (itemInfo) layerInfo.items.push(itemInfo);
         }
         
-        if (layer.pageItems.length > maxItems) {
+        if (end < total) {
             layerInfo.truncated = true;
-            layerInfo.totalItems = layer.pageItems.length;
+            layerInfo.totalItems = total;
+            layerInfo.nextOffset = end;
         }
         
         layerInfo.sublayers = [];
@@ -260,19 +268,40 @@ GET_DOCUMENT_STRUCTURE = """
         });
     }
     
-    var layerLimit = Math.min(doc.layers.length, 20);
-    for (var i = 0; i < layerLimit; i++) {
-        result.layers.push(getLayerInfo(doc.layers[i], 50));
-    }
-    
-    if (doc.layers.length > 20) {
-        result.layersTruncated = true;
-        result.totalLayers = doc.layers.length;
+    // Layer filter: single layer by name or index
+    if (layerFilter !== null) {
+        var targetLayer = null;
+        if (typeof layerFilter === "number") {
+            if (layerFilter >= 0 && layerFilter < doc.layers.length) {
+                targetLayer = doc.layers[layerFilter];
+            }
+        } else if (typeof layerFilter === "string") {
+            for (var li = 0; li < doc.layers.length; li++) {
+                if (doc.layers[li].name === layerFilter) {
+                    targetLayer = doc.layers[li];
+                    break;
+                }
+            }
+        }
+        if (targetLayer) {
+            result.layers.push(getLayerInfo(targetLayer, maxItems, itemOffset));
+        }
+    } else {
+        // All layers (no offset applied — offset is per-layer paging only)
+        var layerLimit = Math.min(doc.layers.length, maxLayers);
+        for (var i = 0; i < layerLimit; i++) {
+            result.layers.push(getLayerInfo(doc.layers[i], maxItems, 0));
+        }
+        if (doc.layers.length > maxLayers) {
+            result.layersTruncated = true;
+            result.totalLayers = doc.layers.length;
+        }
     }
     
     return JSON.stringify(result);
 })()
-"""
+""")
+
 
 
 GET_SELECTION_INFO = """

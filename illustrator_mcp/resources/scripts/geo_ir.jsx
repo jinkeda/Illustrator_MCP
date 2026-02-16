@@ -15,6 +15,10 @@
  *
  * SCHEMA (v1)
  *   Path:   { v:1, ir:"path",   kind:"polyline", points:[[x,y],...], closed:false, meta:{} }
+ *   Bezier: { v:1, ir:"path",   kind:"bezier",   points:[[x,y],...],
+ *            handleSpace:"absolute",
+ *            handles:[{in:[x,y]|null, out:[x,y]|null, type:"smooth"|"corner"},...],
+ *            closed:false, meta:{} }
  *   Multi:  { v:1, ir:"multi",  paths:[pathIR,...], meta:{} }
  *   Points: { v:1, ir:"points", points:[[x,y],...], meta:{} }
  *
@@ -27,12 +31,12 @@
  *   Callers may add arbitrary keys. Reserved keys may be overwritten
  *   by library wrappers unless explicitly provided by the caller.
  *
- * @version 1.1.0
+ * @version 1.2.0
  */
 
 var GEO_IR_VERSION = 1;
 var GEO_IR_TYPES = ["path", "multi", "points"];
-var GEO_IR_KINDS = ["polyline"]; // future: "bezier"
+var GEO_IR_KINDS = ["polyline", "bezier"];
 
 // ==================== FACTORIES ====================
 
@@ -49,6 +53,40 @@ function irPath(points, closed, meta) {
         ir: "path",
         kind: "polyline",
         points: points || [],
+        closed: closed === true,
+        meta: meta || {}
+    };
+}
+
+/**
+ * Create a Bézier path IR with control handles.
+ * @param {Array<Array<number>>} points - Anchor points [[x,y], ...]
+ * @param {Array<Object>} handles - Parallel handle array, same length as points.
+ *   Each entry: { in: [x,y]|null, out: [x,y]|null, type: "smooth"|"corner" }
+ *   Default type: both null → "corner"; either non-null → "smooth".
+ * @param {boolean} [closed=false]
+ * @param {Object} [meta={}]
+ * @returns {Object} Bézier path IR
+ */
+function irBezierPath(points, handles, closed, meta) {
+    points = points || [];
+    handles = handles || [];
+
+    // Normalize handle entries: apply default type
+    for (var i = 0; i < handles.length; i++) {
+        var h = handles[i];
+        if (h && h.type === undefined) {
+            h.type = (h["in"] == null && h.out == null) ? "corner" : "smooth";
+        }
+    }
+
+    return {
+        v: GEO_IR_VERSION,
+        ir: "path",
+        kind: "bezier",
+        handleSpace: "absolute",
+        points: points,
+        handles: handles,
         closed: closed === true,
         meta: meta || {}
     };
@@ -161,6 +199,66 @@ function irValidate(obj) {
                     errors.push("Unknown kind: '" + obj.kind + "'. Expected: " + GEO_IR_KINDS.join(", "));
                 }
             }
+
+            // Bézier-specific validation
+            if (obj.kind === "bezier") {
+                if (!obj.handles || !(obj.handles instanceof Array)) {
+                    errors.push("'bezier' path requires 'handles' array");
+                } else {
+                    // Parallel array invariant
+                    if (obj.points && obj.handles.length !== obj.points.length) {
+                        errors.push("handles.length (" + obj.handles.length + ") !== points.length (" + obj.points.length + ")");
+                    }
+                    // Validate each handle entry
+                    for (var hi = 0; hi < obj.handles.length; hi++) {
+                        var h = obj.handles[hi];
+                        if (!h || typeof h !== "object") {
+                            errors.push("handles[" + hi + "] is not an object");
+                            break;
+                        }
+                        if (!("in" in h) || !("out" in h)) {
+                            errors.push("handles[" + hi + "] missing 'in' or 'out' key");
+                            break;
+                        }
+                        // Check for NaN in handles (common AI mistake)
+                        if (h["in"] != null) {
+                            if (!(h["in"] instanceof Array) || h["in"].length < 2 ||
+                                !isFinite(h["in"][0]) || !isFinite(h["in"][1])) {
+                                errors.push("handles[" + hi + "].in has NaN/non-finite values");
+                                break;
+                            }
+                        }
+                        if (h.out != null) {
+                            if (!(h.out instanceof Array) || h.out.length < 2 ||
+                                !isFinite(h.out[0]) || !isFinite(h.out[1])) {
+                                errors.push("handles[" + hi + "].out has NaN/non-finite values");
+                                break;
+                            }
+                        }
+                    }
+                }
+                // Minimum point counts
+                if (obj.points) {
+                    if (obj.points.length < 2) {
+                        errors.push("bezier path requires at least 2 points");
+                    } else if (obj.closed === true && obj.points.length < 3) {
+                        errors.push("closed bezier path should have at least 3 points (got " + obj.points.length + ")");
+                    }
+                    // No duplicate last=first anchor for closed paths
+                    if (obj.closed === true && obj.points.length >= 2) {
+                        var first = obj.points[0];
+                        var last = obj.points[obj.points.length - 1];
+                        if (Math.abs(first[0] - last[0]) < 1e-10 &&
+                            Math.abs(first[1] - last[1]) < 1e-10) {
+                            errors.push("closed bezier path must not duplicate first/last anchor");
+                        }
+                    }
+                }
+                // handleSpace must be "absolute" in v1
+                if (obj.handleSpace !== undefined && obj.handleSpace !== "absolute") {
+                    errors.push("v1 only supports handleSpace='absolute', got: '" + obj.handleSpace + "'");
+                }
+            }
         }
     } else if (obj.ir === "multi") {
         if (!obj.paths || !(obj.paths instanceof Array)) {
@@ -246,7 +344,7 @@ function irMapPoints(obj, fn) {
     }
 
     if (obj.ir === "path") {
-        return {
+        var result = {
             v: obj.v || GEO_IR_VERSION,
             ir: "path",
             kind: obj.kind || "polyline",
@@ -254,6 +352,21 @@ function irMapPoints(obj, fn) {
             closed: obj.closed === true,
             meta: obj.meta || {}
         };
+        // Transform Bézier handles alongside anchors
+        if (obj.kind === "bezier" && obj.handles) {
+            result.handleSpace = obj.handleSpace || "absolute";
+            var newHandles = [];
+            for (var hi = 0; hi < obj.handles.length; hi++) {
+                var h = obj.handles[hi];
+                newHandles.push({
+                    "in": h["in"] != null ? fn(h["in"]) : null,
+                    out: h.out != null ? fn(h.out) : null,
+                    type: h.type || "smooth"
+                });
+            }
+            result.handles = newHandles;
+        }
+        return result;
     }
     if (obj.ir === "points") {
         return {

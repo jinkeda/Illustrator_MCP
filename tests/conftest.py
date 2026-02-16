@@ -13,6 +13,41 @@ def pytest_configure(config):
     config.addinivalue_line("markers", "unit: unit tests with mocks only")
 
 
+# ── Collection-error guard ─────────────────────────────────────────
+# Catches import failures that silently block entire test modules.
+# Without this, a test file with a broken import is quietly skipped
+# and only shows as "1 error" in the summary — easy to miss.
+
+_collection_errors: list = []
+
+
+def pytest_collectreport(report):
+    """Record collection errors so we can fail loudly at session end."""
+    if report.outcome == "failed":
+        _collection_errors.append(report)
+
+
+def pytest_sessionfinish(session, exitstatus):
+    """Fail the session if any test modules failed to collect."""
+    if _collection_errors:
+        import sys
+        print("\n" + "=" * 70, file=sys.stderr)
+        print("COLLECTION ERROR GUARD: The following test modules failed to import:",
+              file=sys.stderr)
+        for report in _collection_errors:
+            print(f"  ✗ {report.nodeid}", file=sys.stderr)
+            if report.longrepr:
+                # Print just the last line (the actual ImportError)
+                lines = str(report.longrepr).strip().split("\n")
+                for line in lines[-3:]:
+                    print(f"    {line.strip()}", file=sys.stderr)
+        print("=" * 70, file=sys.stderr)
+        print("Fix these imports or delete the test files. Silent skips are not allowed.",
+              file=sys.stderr)
+        # pytest already sets exitstatus=2 for collection errors,
+        # but this makes the failure message impossible to miss.
+
+
 # Modules that use execute_jsx_tool (from base.py)
 JSX_TOOL_MODULES = [
     'illustrator_mcp.tools.documents',

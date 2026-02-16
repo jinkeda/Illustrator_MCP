@@ -1,0 +1,86 @@
+﻿============================= test session starts =============================
+collecting ... collected 29 items
+
+tests/test_curves.py::TestCatmullRomDegenerate::test_empty PASSED        [  3%]
+tests/test_curves.py::TestCatmullRomDegenerate::test_single_point PASSED [  6%]
+tests/test_curves.py::TestCatmullRomDegenerate::test_two_points_closed PASSED [ 10%]
+tests/test_curves.py::TestCatmullRomDegenerate::test_two_points_straight_line PASSED [ 13%]
+tests/test_curves.py::TestCatmullRomOpen::test_endpoint_duplication_symmetry PASSED [ 17%]
+tests/test_curves.py::TestCatmullRomOpen::test_four_points_interior_handles PASSED [ 20%]
+tests/test_curves.py::TestCatmullRomOpen::test_three_points_endpoints PASSED [ 24%]
+tests/test_curves.py::TestCatmullRomClosed::test_closed_all_handles PASSED [ 27%]
+tests/test_curves.py::TestCatmullRomClosed::test_closed_no_duplicate_anchor PASSED [ 31%]
+tests/test_curves.py::TestCatmullRomTension::test_higher_tension_longer_handles PASSED [ 34%]
+tests/test_curves.py::TestCatmullRomTension::test_zero_tension_straight PASSED [ 37%]
+tests/test_curves.py::TestCircularArc::test_auto_segmentation_180 PASSED [ 41%]
+tests/test_curves.py::TestCircularArc::test_auto_segmentation_full PASSED [ 44%]
+tests/test_curves.py::TestCircularArc::test_quarter_arc_endpoints PASSED [ 48%]
+tests/test_curves.py::TestCircularArc::test_radial_accuracy PASSED       [ 51%]
+tests/test_curves.py::TestCircularArc::test_zero_arc PASSED              [ 55%]
+tests/test_curves.py::TestEllipticalArc::test_explicit_segments_override PASSED [ 58%]
+tests/test_curves.py::TestEllipticalArc::test_quarter_ellipse PASSED     [ 62%]
+tests/test_curves.py::TestRoundedPolygon::test_degenerate_two_points PASSED [ 65%]
+tests/test_curves.py::TestRoundedPolygon::test_hexagon_kappa_accuracy FAILED [ 68%]
+tests/test_curves.py::TestRoundedPolygon::test_open_polygon PASSED       [ 72%]
+tests/test_curves.py::TestRoundedPolygon::test_radius_clamping PASSED    [ 75%]
+tests/test_curves.py::TestRoundedPolygon::test_triangle PASSED           [ 79%]
+tests/test_curves.py::TestIRSerialization::test_handle_entry_keys PASSED [ 82%]
+tests/test_curves.py::TestIRSerialization::test_handles_parallel PASSED  [ 86%]
+tests/test_curves.py::TestIRSerialization::test_ir_structure PASSED      [ 89%]
+tests/test_curves.py::TestIRSerialization::test_null_handles_for_corners PASSED [ 93%]
+tests/test_curves.py::TestGoldenValues::test_catmull_rom_3pt_golden PASSED [ 96%]
+tests/test_curves.py::TestGoldenValues::test_circular_arc_90_golden PASSED [100%]
+
+================================== FAILURES ===================================
+_______________ TestRoundedPolygon.test_hexagon_kappa_accuracy ________________
+tests\test_curves.py:304: in test_hexagon_kappa_accuracy
+    self.assertLess(radial_err, 0.01, f"Radial error {radial_err:.4%} exceeds 1%")
+E   AssertionError: 0.6339745962155613 not less than 0.01 : Radial error 63.3975% exceeds 1%
+=============================== tests coverage ================================
+_______________ coverage: platform win32, python 3.12.8-final-0 _______________
+
+Name                                          Stmts   Miss  Cover
+-----------------------------------------------------------------
+illustrator_mcp\__init__.py                       2      0   100%
+illustrator_mcp\__version__.py                    1      0   100%
+illustrator_mcp\app.py                           40     40     0%
+illustrator_mcp\config.py                        21     21     0%
+illustrator_mcp\connection_helpers.py            15     15     0%
+illustrator_mcp\curves.py                       133      4    97%
+illustrator_mcp\errors.py                       100    100     0%
+illustrator_mcp\geometry.py                     121    121     0%
+illustrator_mcp\libraries.py                    193    193     0%
+illustrator_mcp\log_config.py                    24     24     0%
+illustrator_mcp\logging\__init__.py               2      2     0%
+illustrator_mcp\logging\request_log.py          116    116     0%
+illustrator_mcp\overlay.py                       93     93     0%
+illustrator_mcp\protocol.py                     159    159     0%
+illustrator_mcp\proxy_client.py                 227    227     0%
+illustrator_mcp\response_classification.py       47     47     0%
+illustrator_mcp\runtime.py                       24     24     0%
+illustrator_mcp\schemas\__init__.py              42     42     0%
+illustrator_mcp\schemas\contracts.py             77     77     0%
+illustrator_mcp\schemas\schema_generator.py      22     22     0%
+illustrator_mcp\server.py                        14     14     0%
+illustrator_mcp\shared.py                         9      9     0%
+illustrator_mcp\templates.py                     18     18     0%
+illustrator_mcp\tools\__init__.py                 7      7     0%
+illustrator_mcp\tools\base.py                     9      9     0%
+illustrator_mcp\tools\compile_contracts.py      129    129     0%
+illustrator_mcp\tools\context.py                 94     94     0%
+illustrator_mcp\tools\documents.py              146    146     0%
+illustrator_mcp\tools\execute.py                446    446     0%
+illustrator_mcp\tools\query.py                   85     85     0%
+illustrator_mcp\tools\templates.py                9      9     0%
+illustrator_mcp\types.py                         16     16     0%
+illustrator_mcp\utils\__init__.py                 3      3     0%
+illustrator_mcp\utils\chunking.py                62     62     0%
+illustrator_mcp\utils\response.py                23     23     0%
+illustrator_mcp\utils_funcs.py                    4      4     0%
+illustrator_mcp\websocket_bridge.py             230    230     0%
+-----------------------------------------------------------------
+TOTAL                                          2763   2631     5%
+Coverage HTML written to dir htmlcov
+=========================== short test summary info ===========================
+FAILED tests/test_curves.py::TestRoundedPolygon::test_hexagon_kappa_accuracy
+======================== 1 failed, 28 passed in 2.40s =========================

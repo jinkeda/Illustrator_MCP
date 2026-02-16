@@ -192,3 +192,93 @@ def map_bounds_to_pixels(
     b = max(0, min(b, px_h - 1))
 
     return [l, t, r, b]
+
+
+def draw_grid_overlay(
+    img_bytes: bytes,
+    artboard_rect_pt: List[float],
+    png_size_px: Tuple[int, int],
+    cols: int = 4,
+    rows: int = 4,
+) -> bytes:
+    """Draw an evenly-spaced grid with A1-style cell labels onto a PNG.
+
+    Args:
+        img_bytes: Raw PNG bytes (the base artboard export).
+        artboard_rect_pt: [left, top, right, bottom] artboard rect in points.
+        png_size_px: (width, height) of the exported PNG.
+        cols: Number of grid columns (default 4).
+        rows: Number of grid rows (default 4).
+
+    Returns:
+        Annotated PNG bytes with grid lines and labels. If Pillow is missing
+        or artboard is zero-size, returns original bytes unchanged.
+    """
+    if not HAS_PILLOW:
+        return img_bytes
+
+    ab_l, ab_t, ab_r, ab_b = artboard_rect_pt
+    ab_w = ab_r - ab_l
+    ab_h = ab_t - ab_b  # Illustrator: top > bottom
+
+    if ab_w <= 0 or ab_h <= 0:
+        return img_bytes
+
+    px_w, px_h = png_size_px
+
+    try:
+        base_img = Image.open(io.BytesIO(img_bytes)).convert("RGBA")
+        overlay = Image.new("RGBA", base_img.size, (0, 0, 0, 0))
+        draw = ImageDraw.Draw(overlay)
+
+        grid_color = (100, 100, 255, 120)  # Semi-transparent blue
+        label_bg = (0, 0, 0, 160)
+        label_fg = (255, 255, 255, 255)
+
+        try:
+            font = ImageFont.load_default()
+        except Exception:
+            font = None
+
+        cell_w = px_w / cols
+        cell_h = px_h / rows
+
+        # Draw vertical lines
+        for c in range(1, cols):
+            x = int(round(c * cell_w))
+            draw.line([(x, 0), (x, px_h)], fill=grid_color, width=1)
+
+        # Draw horizontal lines
+        for r in range(1, rows):
+            y = int(round(r * cell_h))
+            draw.line([(0, y), (px_w, y)], fill=grid_color, width=1)
+
+        # Draw cell labels (A1 scheme)
+        for r in range(rows):
+            for c in range(cols):
+                label = chr(65 + r) + str(c + 1)
+                cx = int(round(c * cell_w + cell_w / 2))
+                cy = int(round(r * cell_h + cell_h / 2))
+
+                if font and hasattr(font, "getbbox"):
+                    bbox = font.getbbox(label)
+                    tw = bbox[2] - bbox[0]
+                    th = bbox[3] - bbox[1]
+                else:
+                    tw, th = len(label) * 7, 12
+
+                pad = 2
+                pill = [cx - tw // 2 - pad, cy - th // 2 - pad,
+                        cx + tw // 2 + pad, cy + th // 2 + pad]
+                draw.rectangle(pill, fill=label_bg)
+                draw.text((pill[0] + pad, pill[1] + pad), label,
+                          fill=label_fg, font=font)
+
+        final_img = Image.alpha_composite(base_img, overlay)
+        out_buf = io.BytesIO()
+        final_img.save(out_buf, format="PNG")
+        return out_buf.getvalue()
+
+    except Exception as e:
+        logger.error(f"Grid overlay failed: {e}")
+        return img_bytes
