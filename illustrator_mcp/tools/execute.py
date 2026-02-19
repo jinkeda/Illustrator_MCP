@@ -380,7 +380,7 @@ _COLLECT_ITEMS_JSX = """
         var mcpId = "";
         var note = "";
         try { note = it.note || ""; } catch(e) {}
-        var idx = note.indexOf("@mcp:id:");
+        var idx = note.indexOf("@mcp:id=");
         if (idx >= 0) mcpId = note.substring(idx + 8, idx + 44);
         items.push({
             name: it.name || it.typename,
@@ -421,6 +421,10 @@ def _filter_items(items: list, artboard_rect: list) -> tuple:
             continue
 
         # Rule 2: Thin stroke — TextFrames are immune
+        # Threshold: 0.5% of the smaller artboard dimension, clamped to [2, 10] pt.
+        # - 2 pt floor: prevents filtering of fine but intentional detail
+        # - 10 pt ceiling: avoids over-filtering on very large artboards
+        # - 0.5% scaling: adapts to artboard size (e.g., 4 pt on 800-pt artboard)
         min_dim = min(10.0, max(2.0, min(ab_w, ab_h) * 0.005))
         if typ != "TextFrame" and (w < min_dim or h < min_dim):
             continue
@@ -652,6 +656,7 @@ async def illustrator_execute_script(params: ExecuteScriptInput) -> Union[str, l
     warnings = []
 
     # ── VLM QA Cadence: auto-inject annotated preview ──────────
+    # B3: Increment counter here; decremented in outer except if execution fails
     global _mutation_count
     _mutation_count += 1
     is_checkpoint = (_mutation_count % VLM_QA_CADENCE == 0) or params.final_step
@@ -772,6 +777,11 @@ async def illustrator_execute_script(params: ExecuteScriptInput) -> Union[str, l
         # Log errors for debugging
         context = f"execute_script: {desc}" if desc else "execute_script"
 
+        # B1: Inject preview_state into diagnostics BEFORE serialization
+        # (eliminates the old json.loads→mutate→json.dumps roundtrip)
+        has_error = response.get("error") is not None
+        diagnostics["preview_state"] = "pre_execution" if has_error else "post_execution"
+
         # Return standardized envelope
         envelope = format_envelope(
             response=response,
@@ -779,15 +789,6 @@ async def illustrator_execute_script(params: ExecuteScriptInput) -> Union[str, l
             warnings=warnings,
             diagnostics=diagnostics
         )
-
-        # Inject preview_state into diagnostics
-        try:
-            envelope_obj = json.loads(envelope)
-            preview_state = "post_execution" if envelope_obj.get("ok") else "pre_execution"
-            envelope_obj.setdefault("diagnostics", {})["preview_state"] = preview_state
-            envelope = json.dumps(envelope_obj)
-        except (json.JSONDecodeError, TypeError):
-            pass
 
         # Auto-preview: export thumbnail and return as ImageContent
         if params.return_preview:
@@ -836,6 +837,8 @@ async def illustrator_execute_script(params: ExecuteScriptInput) -> Union[str, l
                             preview_result
                         ]
                 else:
+                    # B2: Rebuild envelope with added warning (reuse diagnostics,
+                    # don't call format_envelope a second time with stale state)
                     warnings.append("Preview generation returned empty")
                     env_text = format_envelope(
                         response=response,
@@ -850,6 +853,7 @@ async def illustrator_execute_script(params: ExecuteScriptInput) -> Union[str, l
                         ]
                     return env_text
             except Exception as e:
+                # B2: Single rebuild with the preview failure warning
                 warnings.append(f"Preview failed: {e}")
                 env_text = format_envelope(
                     response=response,
@@ -867,6 +871,8 @@ async def illustrator_execute_script(params: ExecuteScriptInput) -> Union[str, l
         return envelope
 
     except Exception as e:
+        # B3: Decrement counter so failed executions don't pollute cadence
+        _mutation_count -= 1
         logger.error(f"Script execution failed: {str(e)}")
         raise
 
@@ -1108,6 +1114,8 @@ JSON.stringify(report);
             )
 
     except Exception as e:
+        # B3: Decrement counter so failed tasks don't pollute cadence
+        _mutation_count -= 1
         logger.error(f"Task execution failed: {str(e)}")
         raise
 
@@ -1180,8 +1188,20 @@ async def illustrator_path_boolean(params: PathBooleanInput) -> str:
         style: "subject" (copy subject's style) or "none"
     """
     # ── Track mutation cadence before any early return ──────────
+    # B3: Decremented in except block if execution fails
     global _mutation_count
     _mutation_count += 1
+
+    try:  # B18: ensure _mutation_count is decremented on any early-return error
+        return await _path_boolean_impl(params)
+    except Exception:
+        _mutation_count -= 1
+        raise
+
+
+async def _path_boolean_impl(params: PathBooleanInput) -> str:
+    """Inner implementation of path_boolean, extracted for B18 counter safety."""
+    global _mutation_count
 
     # ── Step 0: Import guard ────────────────────────────────────
     try:
@@ -1189,6 +1209,7 @@ async def illustrator_path_boolean(params: PathBooleanInput) -> str:
             path_boolean, flatten_path, Region,
         )
     except ImportError as e:
+        _mutation_count -= 1
         return json.dumps({
             "ok": False,
             "error": str(e),

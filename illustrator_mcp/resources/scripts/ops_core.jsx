@@ -557,8 +557,9 @@ function executeSubOps(ops, ctx, mode) {
         var guardSkipped = false;
         if (op.when || op.unless) {
             if (op.when && op.unless) {
-                opResult.warnings = opResult.warnings || [];
-                opResult.warnings.push("Op has both 'when' and 'unless'; 'when' takes precedence.");
+                // B15: opResult not yet initialized here (var hoisted as undefined).
+                // Route warning through ctx so it appears in batch report.warnings.
+                ctx.warn("Op has both 'when' and 'unless'; 'when' takes precedence. (op " + i + ")");
             }
             var guard = op.when || op.unless;
             var isUnless = !!op.unless;

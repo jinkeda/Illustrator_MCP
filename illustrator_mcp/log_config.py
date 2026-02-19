@@ -8,6 +8,23 @@ from pathlib import Path
 from typing import Optional
 
 
+class _JsonFormatter(logging.Formatter):
+    """Formatter that emits each record as a valid JSON object.
+
+    Uses json.dumps to safely escape message content (quotes, backslashes,
+    newlines) that would otherwise break the JSON structure.
+    """
+
+    def format(self, record: logging.LogRecord) -> str:
+        import json as _json
+        return _json.dumps({
+            "timestamp": self.formatTime(record),
+            "level": record.levelname,
+            "logger": record.name,
+            "message": super().formatMessage(record),
+        })
+
+
 def configure_logging(
     level: str = "INFO",
     log_file: Optional[Path] = None,
@@ -17,9 +34,6 @@ def configure_logging(
     
     # Base configuration
     log_format = "%(asctime)s [%(levelname)s] %(name)s: %(message)s"
-    if structured:
-        # Use JSON formatting for structured logs
-        log_format = '{"timestamp":"%(asctime)s","level":"%(levelname)s","logger":"%(name)s","message":"%(message)s"}'
     
     handlers = [logging.StreamHandler(sys.stderr)]
     
@@ -48,6 +62,12 @@ def configure_logging(
         handlers=handlers,
         force=True
     )
+
+    # I15: Apply safe JSON formatter when structured logging is requested
+    if structured:
+        json_fmt = _JsonFormatter(log_format)
+        for h in handlers:
+            h.setFormatter(json_fmt)
 
 
 def log_command(

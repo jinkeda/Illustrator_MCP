@@ -151,10 +151,10 @@ class WebSocketBridge:
 
     async def _handle_message(self, message: str) -> None:
         """Callback for incoming WebSocket messages."""
-        # Guard against excessively large messages (10MB limit)
-        MAX_MESSAGE_SIZE = 10 * 1024 * 1024
-        if len(message) > MAX_MESSAGE_SIZE:
-            logger.warning(f"Rejecting oversized message: {len(message)} bytes")
+        # I6: Use configurable limit from config (default: 10 MB)
+        max_msg_bytes = config.max_message_size_mb * 1024 * 1024
+        if len(message) > max_msg_bytes:
+            logger.warning(f"Rejecting oversized message: {len(message)} bytes (limit: {config.max_message_size_mb} MB)")
             return
             
         try:
@@ -276,15 +276,17 @@ class WebSocketBridge:
         Returns:
             Dictionary with connection status, port, state, and client info.
         """
+        # I14: Capture once to avoid TOCTOU between gate and return value
+        connected = self.is_connected()
+        client = self.server.client if connected else None
         client_info = None
-        if self.is_connected() and self.server.client:
-            client = self.server.client
+        if client:
             client_info = {
                 "remote_address": str(getattr(client, 'remote_address', 'unknown')),
             }
         
         return {
-            "is_connected": self.is_connected(),
+            "is_connected": connected,
             "port": self.port,
             "state": self.state.value if hasattr(self.state, 'value') else str(self.state),
             "is_running": self.is_running(),
@@ -503,11 +505,14 @@ class WebSocketBridge:
 
         except Exception as e:
             cmd_ctx = f" [{command.command_type}]" if command else ""
-            yield {
+            error_result = {
                 "error": format_code(ErrorCode.R_UNKNOWN,
                     f"Streaming execution failed{cmd_ctx}: {str(e)}"),
                 "type": "error"
             }
+            # B16: Clean up streaming entry to prevent resource leak
+            self.registry.complete_streaming(request_id, error_result)
+            yield error_result
 
 
 # NOTE: Use get_runtime().get_bridge() directly.
