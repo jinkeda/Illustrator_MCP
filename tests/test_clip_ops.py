@@ -96,15 +96,14 @@ class TestClipCreateStaticGuards:
         assert "contents.length - 1" in self.source
 
 
-# ── element_create schema tests for d param ───────────────────────────
+# ── element_create schema tests (d param removed) ─────────────────────
 
 
 class TestElementCreateDParam:
-    def test_d_param_in_schema(self):
-        """element_create has 'd' param for SVG path data."""
+    def test_d_param_removed_from_schema(self):
+        """element_create no longer has 'd' param (burned escape hatch)."""
         schema = get_op_schema("element_create")
-        assert "d" in schema.params
-        assert schema.params["d"].type.value == "string"
+        assert "d" not in schema.params
 
     def test_geometry_param_in_schema(self):
         """element_create has 'geometry' param for IR input."""
@@ -112,8 +111,8 @@ class TestElementCreateDParam:
         assert "geometry" in schema.params
         assert schema.params["geometry"].type.value == "object"
 
-    def test_multi_mode_param(self):
-        """element_create has 'multi_mode' param with correct enums."""
+    def test_multi_mode_removed_from_schema(self):
+        """element_create no longer has 'multi_mode' param."""
         schema = get_op_schema("element_create")
-        assert "multi_mode" in schema.params
-        assert schema.params["multi_mode"].enum_values == ["compound", "group", "explode"]
+        assert "multi_mode" not in schema.params
+

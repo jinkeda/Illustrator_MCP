@@ -32,7 +32,10 @@ def register_tools(mcp):
     # Task Protocol tools (pilot refactor)
     from illustrator_mcp.tools import query
     
-    return [execute, documents, context, query]
+    # SVG import tool (path_import_svg)
+    from illustrator_mcp.tools import import_svg
+    
+    return [execute, documents, context, query, import_svg]
 
 __all__ = ["register_tools"]
 

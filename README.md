@@ -211,6 +211,12 @@ This server follows a **Scripting First** architecture: one powerful script exec
 | `illustrator_get_app_info` | Illustrator version, open document count, scripting version |
 | `illustrator_get_scripting_reference` | ExtendScript syntax cheat sheet (coordinate system, shapes, colors, text) |
 
+### Path Import (1)
+
+| Tool | Description |
+|---|---|
+| `illustrator_path_import_svg` | Import an SVG path `d` attribute. Parses server-side, converts arcs to cubic Béziers, draws via `drawPathPoints`. Hardcoded safety limits. |
+
 ### Query & Validation (2)
 
 | Tool | Description |
@@ -218,7 +224,7 @@ This server follows a **Scripting First** architecture: one powerful script exec
 | `illustrator_query_items` | Declarative item query via the Task Protocol (target selectors, stable refs) |
 | `illustrator_preflight_check` | Read-only validation: off-artboard items, zero-size items, empty text, locked layers |
 
-**Total: 16 tools.**
+**Total: 17 tools.**
 
 ---
 
@@ -237,7 +243,7 @@ illustrator_execute_script(
 
 | Library | Key Exports | Purpose |
 |---|---|---|
-| `geometry` | `rectXY`, `ellipseXY`, `lineXY`, `makeRGBColor`, `getContext` | Intuitive XY coordinate helpers (x=right, y=down) |
+| `geometry` | `rectXY`, `ellipseXY`, `lineXY`, `makeRGBColor`, `drawPathPoints` | Intuitive XY coordinate helpers, **Golden Path** for Bézier/compound path creation |
 | `selection` | `getOrderedSelection` | Spatial sorting (row-major / column-major) |
 | `layout` | `createGrid`, `distributeHorizontal`, `alignCenter` | Grid creation, alignment, distribution |
 | `presets` | `COLOR_PALETTES`, `getColor`, `applyPreset` | 9 color palettes (Okabe-Ito, Viridis, etc.) and layout presets |
@@ -256,7 +262,7 @@ illustrator_execute_script(
 | Library | Purpose |
 |---|---|
 | `ops_core` | Batch executor, global ID index, journal integration |
-| `ops_element` | Create / modify / delete shapes (rect, ellipse, line, polygon, star, text, SVG d-path) |
+| `ops_element` | Create / modify / delete shapes (rect, ellipse, line, polygon, star, text) |
 | `ops_group` | Group / ungroup, z-order, clipping masks |
 | `ops_layer` | Layer CRUD |
 | `ops_style` | Fill, stroke, opacity |
@@ -310,7 +316,7 @@ var report = executeOpBatch(ops, {strict: true, trace: true});
 
 Key capabilities: stable ID targeting (`@mcp:id=` in item.note), strict/continue error modes, `summaryOnly` for large batches, snapshot rollback, Python-side chunking for WebSocket limits, field evaluators for dynamic params, and op journaling for replay.
 
-**SVG path import:** `element_create` accepts an SVG `d` attribute for `type: "path"`. The path string is parsed Python-side into geometry IR (supports M/L/H/V/C/S/Q/T/Z commands). Multi-subpath paths are detected and reported with guidance for compound path creation.
+**SVG path import:** Use the dedicated `path_import_svg` tool to import SVG `d` attributes. The path string is parsed Python-side into geometry IR (supports M/L/H/V/C/S/Q/T/A/Z commands including arc-to-cubic conversion), then drawn via `geometry.drawPathPoints`. Hardcoded safety limits prevent abuse (50k chars, 5k segments, 100 subpaths, ±100k coordinates).
 
 **Clipping masks:** `clip_create` creates a clipping mask group from a mask path and content items referenced by MCP ID. Supports `dryRun` mode for validation without mutation, parent-aware placement, and mask type validation.
 
@@ -544,7 +550,7 @@ Illustrator_MCP/
 │   ├── errors.py                 # Structured error codes + suggestions
 │   ├── templates.py              # Reusable ExtendScript templates
 │   ├── response_models.py        # Pydantic models for responses
-│   ├── svgd.py                   # SVG path data parser (d attribute → geometry IR)
+│   ├── svgd.py                   # SVG path data parser (d attribute → geometry IR, arc→cubic)
 │   ├── curves.py                 # Bézier curve helpers (rounded polygon, arc points)
 │   ├── utils.py                  # Path escaping, validation helpers
 │   ├── log_config.py             # Structured logging config
@@ -563,6 +569,7 @@ Illustrator_MCP/
 │   │   ├── documents.py          # Document I/O tools
 │   │   ├── context.py            # State inspection tools
 │   │   ├── query.py              # query_items + preflight_check
+│   │   ├── import_svg.py         # SVG path import tool (d → drawPathPoints)
 │   │   └── archive/              # Disabled legacy tools (reference only)
 │   ├── overlay.py                # VLM overlay (bounding boxes + grid overlay + coordinate mapping)
 │   └── resources/
@@ -596,7 +603,8 @@ Illustrator_MCP/
 │   ├── test_proxy_client.py
 │   ├── test_websocket_bridge.py
 │   ├── test_overlay.py
-│   ├── test_svgd.py              # SVG path parser tests (24 tests)
+│   ├── test_svgd.py              # SVG path parser tests (35 tests)
+│   ├── test_import_svg.py        # SVG import tool tests (9 tests)
 │   ├── test_clip_ops.py          # Clipping mask schema + handler guard tests
 │   ├── test_grid_helper.py       # Grid discovery tests
 │   └── test_brand_social_kit_fixes.py

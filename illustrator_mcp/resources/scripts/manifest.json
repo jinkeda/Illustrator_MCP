@@ -5,8 +5,13 @@
     "libraries": {
         "geometry": {
             "file": "geometry.jsx",
-            "version": "2.0.0",
-            "dependencies": [],
+            "version": "3.0.0",
+            "dependencies": [
+                "polyfills",
+                "mcp_id",
+                "heap",
+                "targets"
+            ],
             "exports": [
                 "getContext",
                 "pointXY",
@@ -18,7 +23,9 @@
                 "mmToPoints",
                 "pointsToMm",
                 "getVisibleBounds",
-                "getVisibleInfo"
+                "getVisibleInfo",
+                "_createPath",
+                "drawPathPoints"
             ],
             "description": "Geometry, bounds calculations, unit conversions, and intuitive XY coordinate helpers"
         },
@@ -345,7 +352,8 @@
                 "geo_ir",
                 "curves",
                 "session",
-                "generative"
+                "generative",
+                "geometry"
             ],
             "exports": [],
             "description": "Element CRUD operations (create, modify, delete). Supports polyline and bezier path IR."

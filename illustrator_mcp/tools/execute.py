@@ -953,59 +953,18 @@ async def illustrator_execute_task(params: ExecuteTaskInput) -> Union[str, list]
             "options": {"trace": true}
         }
     """
-    # ── SVG d-param preprocessing ────────────────────────────────
+    # ── SVG d-param removed — redirect to path_import_svg ──────
     payload = params.payload
     if payload.task == "element_create" and "d" in payload.params:
-        from illustrator_mcp.svgd import parse_svg_d
-
-        d_str = payload.params.pop("d")
-        multi_mode = payload.params.pop("multi_mode", None)
-
-        try:
-            ir = parse_svg_d(d_str)
-        except ValueError as e:
-            return json.dumps({
-                "ok": False,
-                "error": f"SVG path parse error: {e}",
-                "diagnostics": {"task": payload.task},
-            })
-
-        if ir.get("ir") == "multi":
-            # Multi-subpath cannot be handled by single execute_task
-            # Reject closed override for multi-subpath
-            if "closed" in payload.params:
-                return json.dumps({
-                    "ok": False,
-                    "error": (
-                        "closed override not supported for multi-subpath SVG. "
-                        "Per-subpath closed state is inferred from Z commands."
-                    ),
-                    "diagnostics": {"task": payload.task},
-                })
-            # Return error directing to multi-op flow
-            n_sub = len(ir.get("subpaths", []))
-            return json.dumps({
-                "ok": False,
-                "error": (
-                    f"SVG path contains {n_sub} subpaths. "
-                    "Multi-subpath requires compound path creation. "
-                    "Use illustrator_execute_script with the compound path "
-                    "helper, or call element_create per subpath and then "
-                    "clip_create/group_create to combine them."
-                ),
-                "diagnostics": {
-                    "task": payload.task,
-                    "subpath_count": n_sub,
-                    "all_closed": ir.get("all_closed", False),
-                    "multi_mode": multi_mode or ("compound" if ir.get("all_closed") else "group"),
-                },
-            })
-        else:
-            # Single subpath — inject geometry IR
-            payload.params["geometry"] = ir
-            # Closed precedence: explicit > Z-inferred > default False
-            if "closed" not in payload.params:
-                payload.params["closed"] = bool(ir.get("closed", False))
+        return json.dumps({
+            "ok": False,
+            "error": (
+                "SVG 'd' attribute is no longer accepted in element_create. "
+                "Use 'path_import_svg' for existing SVG data, or "
+                "'drawPathPoints' (in execute_script with includes: ['geometry']) for new paths."
+            ),
+            "diagnostics": {"task": payload.task},
+        })
 
     # Build the execution script
     payload_json = json.dumps(params.payload.model_dump())

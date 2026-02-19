@@ -4,8 +4,7 @@ svgd.py — Pure-Python SVG path data (d attribute) parser.
 Parses SVG `d` strings into geometry IR compatible with
 irBezierPath (geo_ir.jsx).
 
-Supported commands: M/m, L/l, H/h, V/v, C/c, S/s, Q/q, T/t, Z/z
-Deferred (Phase 2): A/a arcs → raises ValueError
+Supported commands: M/m, L/l, H/h, V/v, C/c, S/s, Q/q, T/t, A/a, Z/z
 
 Output IR matches geo_ir.jsx irBezierPath contract:
   {v: 1, ir: "path", kind: "bezier", handleSpace: "absolute",
@@ -19,12 +18,23 @@ No external dependencies — pure Python math.
 
 from __future__ import annotations
 
+import math
 from typing import Any, Dict, List, Optional, Tuple, Union
 
 
 # ── Constants ──────────────────────────────────────────────────────────
 
 GEO_IR_VERSION = 1
+
+# [H7] Safety limits — hardcoded, no user override
+MAX_D_LENGTH = 50_000       # max chars in d attribute
+MAX_SEGMENTS = 5_000        # max total segments (points) across all subpaths
+MAX_SUBPATHS = 100          # max number of M commands
+MAX_COORD_ABS = 100_000.0   # max absolute coordinate value
+MAX_TOKENS = 50_000         # max tokenizer output length
+
+# [H6] Arc numeric epsilon
+_ARC_EPSILON = 1e-10
 
 _COMMANDS = set("MmLlHhVvCcSsQqTtAaZz")
 
@@ -133,6 +143,191 @@ def _elevate_quadratic(
     return cp1, cp2
 
 
+# ── Arc-to-cubic conversion (W3C SVG 1.1 §F.6) ───────────────────────
+
+
+def _clamp(val: float, lo: float, hi: float) -> float:
+    """Clamp val to [lo, hi]. [H6] prevents math.acos domain errors."""
+    return max(lo, min(hi, val))
+
+
+def _arc_to_center(
+    x1: float, y1: float,
+    rx: float, ry: float,
+    phi_deg: float,
+    fa: int, fs: int,
+    x2: float, y2: float,
+) -> Tuple[float, float, float, float, float, float]:
+    """W3C SVG 1.1 §F.6.5 — endpoint → center parameterization.
+
+    Returns (cx, cy, theta1, dtheta, rx_scaled, ry_scaled).
+    rx/ry may be scaled up per §F.6.6.3 if too small.
+    """
+    phi = math.radians(phi_deg)
+    cos_phi = math.cos(phi)
+    sin_phi = math.sin(phi)
+
+    # Step 1: Compute (x1', y1')
+    dx2 = (x1 - x2) / 2.0
+    dy2 = (y1 - y2) / 2.0
+    x1p = cos_phi * dx2 + sin_phi * dy2
+    y1p = -sin_phi * dx2 + cos_phi * dy2
+
+    # Step 2: Scale radii if too small (§F.6.6.3)
+    x1p_sq = x1p * x1p
+    y1p_sq = y1p * y1p
+    rx_sq = rx * rx
+    ry_sq = ry * ry
+
+    lam = x1p_sq / rx_sq + y1p_sq / ry_sq
+    if lam > 1.0:
+        lam_sqrt = math.sqrt(lam)
+        rx *= lam_sqrt
+        ry *= lam_sqrt
+        rx_sq = rx * rx
+        ry_sq = ry * ry
+
+    # Step 3: Compute center' (cx', cy')
+    num = max(0.0, rx_sq * ry_sq - rx_sq * y1p_sq - ry_sq * x1p_sq)
+    den = rx_sq * y1p_sq + ry_sq * x1p_sq
+    if den < _ARC_EPSILON:
+        # Degenerate — points coincide or nearly so
+        sq = 0.0
+    else:
+        sq = math.sqrt(num / den)
+    if fa == fs:
+        sq = -sq
+
+    cxp = sq * rx * y1p / ry
+    cyp = -sq * ry * x1p / rx
+
+    # Step 4: Compute center (cx, cy) from center'
+    cx = cos_phi * cxp - sin_phi * cyp + (x1 + x2) / 2.0
+    cy = sin_phi * cxp + cos_phi * cyp + (y1 + y2) / 2.0
+
+    # Step 5: Compute theta1 and dtheta
+    def _angle(ux: float, uy: float, vx: float, vy: float) -> float:
+        dot = ux * vx + uy * vy
+        cross = ux * vy - uy * vx
+        mag = math.sqrt((ux * ux + uy * uy) * (vx * vx + vy * vy))
+        if mag < _ARC_EPSILON:
+            return 0.0
+        cos_a = _clamp(dot / mag, -1.0, 1.0)
+        a = math.acos(cos_a)
+        return -a if cross < 0 else a
+
+    theta1 = _angle(1.0, 0.0, (x1p - cxp) / rx, (y1p - cyp) / ry)
+    dtheta = _angle(
+        (x1p - cxp) / rx, (y1p - cyp) / ry,
+        (-x1p - cxp) / rx, (-y1p - cyp) / ry,
+    )
+
+    # Constrain dtheta per sweep flag
+    if fs == 0 and dtheta > 0:
+        dtheta -= 2.0 * math.pi
+    elif fs == 1 and dtheta < 0:
+        dtheta += 2.0 * math.pi
+
+    return cx, cy, theta1, dtheta, rx, ry
+
+
+def _arc_segment_to_cubic(
+    cx: float, cy: float,
+    rx: float, ry: float,
+    phi_deg: float,
+    theta1: float, dtheta: float,
+) -> List[Tuple[List[float], List[float], List[float]]]:
+    """Approximate an arc segment as one or more cubic Béziers.
+
+    Splits into ≤90° sub-arcs and uses the standard kappa approximation.
+    Returns list of (cp1, cp2, end) tuples in document space.
+    """
+    phi = math.radians(phi_deg)
+    cos_phi = math.cos(phi)
+    sin_phi = math.sin(phi)
+
+    # Split into ≤90° arcs
+    n_segs = max(1, int(math.ceil(abs(dtheta) / (math.pi / 2.0))))
+    seg_angle = dtheta / n_segs
+
+    # Kappa for unit-arc approximation:
+    # alpha = sin(seg_angle) * (sqrt(4 + 3*tan(seg_angle/2)^2) - 1) / 3
+    half = seg_angle / 2.0
+    cos_half = math.cos(half)
+    if abs(cos_half) < _ARC_EPSILON:
+        alpha = 0.0
+    else:
+        tan_half = math.sin(half) / cos_half
+        alpha = math.sin(seg_angle) * (math.sqrt(4.0 + 3.0 * tan_half * tan_half) - 1.0) / 3.0
+
+    def _point_on_ellipse(theta: float) -> Tuple[float, float]:
+        cos_t = math.cos(theta)
+        sin_t = math.sin(theta)
+        x = cos_phi * rx * cos_t - sin_phi * ry * sin_t + cx
+        y = sin_phi * rx * cos_t + cos_phi * ry * sin_t + cy
+        return x, y
+
+    def _derivative(theta: float) -> Tuple[float, float]:
+        cos_t = math.cos(theta)
+        sin_t = math.sin(theta)
+        dx = -cos_phi * rx * sin_t - sin_phi * ry * cos_t
+        dy = -sin_phi * rx * sin_t + cos_phi * ry * cos_t
+        return dx, dy
+
+    cubics: List[Tuple[List[float], List[float], List[float]]] = []
+    t1 = theta1
+
+    for _ in range(n_segs):
+        t2 = t1 + seg_angle
+        p1x, p1y = _point_on_ellipse(t1)
+        p2x, p2y = _point_on_ellipse(t2)
+        d1x, d1y = _derivative(t1)
+        d2x, d2y = _derivative(t2)
+
+        cp1 = [p1x + alpha * d1x, p1y + alpha * d1y]
+        cp2 = [p2x - alpha * d2x, p2y - alpha * d2y]
+        end = [p2x, p2y]
+
+        cubics.append((cp1, cp2, end))
+        t1 = t2
+
+    return cubics
+
+
+def arc_to_cubics(
+    x1: float, y1: float,
+    rx: float, ry: float,
+    x_rot: float,
+    large_arc: int, sweep: int,
+    x2: float, y2: float,
+) -> List[Tuple[List[float], List[float], List[float]]]:
+    """Convert an SVG arc command to cubic Bézier segments.
+
+    [H6] Handles all degenerate cases:
+    - Zero radii → empty list (caller should emit lineTo)
+    - Coincident endpoints → empty list
+    - Too-small radii → scaled up per W3C spec
+
+    Returns list of (cp1, cp2, end) tuples.
+    """
+    # [H6] Degenerate: zero radius → lineTo
+    if abs(rx) < _ARC_EPSILON or abs(ry) < _ARC_EPSILON:
+        return []
+
+    # [H6] Degenerate: coincident endpoints → nothing
+    if abs(x1 - x2) < _ARC_EPSILON and abs(y1 - y2) < _ARC_EPSILON:
+        return []
+
+    rx = abs(rx)
+    ry = abs(ry)
+
+    cx, cy, theta1, dtheta, rx, ry = _arc_to_center(
+        x1, y1, rx, ry, x_rot, large_arc, sweep, x2, y2
+    )
+
+    return _arc_segment_to_cubic(cx, cy, rx, ry, x_rot, theta1, dtheta)
+
+
 def _make_handle(
     h_in: Optional[List[float]], h_out: Optional[List[float]]
 ) -> Dict[str, Any]:
@@ -207,17 +402,31 @@ def parse_svg_d(d: str) -> Dict[str, Any]:
         Multi-subpath:  {ir: "multi", subpaths: [...], all_closed: bool}
 
     Raises:
-        ValueError: on empty path, arc commands (Phase 2), or parse errors.
+        ValueError: on empty path, safety limit violations, or parse errors.
     """
     if not d or not d.strip():
         raise ValueError("Empty SVG path data")
+
+    # [H7] Safety limits
+    if len(d) > MAX_D_LENGTH:
+        raise ValueError(
+            f"E_D_TOO_LONG: SVG path data exceeds {MAX_D_LENGTH} chars "
+            f"(got {len(d)})"
+        )
 
     tokens = tokenize_d(d)
     if not tokens:
         raise ValueError("No valid tokens in SVG path data")
 
+    if len(tokens) > MAX_TOKENS:
+        raise ValueError(
+            f"E_TOO_MANY_TOKENS: Tokenized path exceeds {MAX_TOKENS} tokens "
+            f"(got {len(tokens)})"
+        )
+
     subpaths: List[_SubpathBuilder] = []
     current: Optional[_SubpathBuilder] = None
+    total_segments = 0  # [H7] running segment counter
 
     # Current position
     cx, cy = 0.0, 0.0
@@ -230,6 +439,23 @@ def parse_svg_d(d: str) -> Dict[str, Any]:
 
     i = 0
     n_tok = len(tokens)
+
+    def _check_coord(val: float) -> None:
+        """[H7] Assert coordinate is within safe range."""
+        if abs(val) > MAX_COORD_ABS:
+            raise ValueError(
+                f"E_COORD_OVERFLOW: Coordinate {val:.1f} exceeds "
+                f"±{MAX_COORD_ABS}"
+            )
+
+    def _add_segment() -> None:
+        """[H7] Increment segment counter and check limit."""
+        nonlocal total_segments
+        total_segments += 1
+        if total_segments > MAX_SEGMENTS:
+            raise ValueError(
+                f"E_TOO_MANY_SEGMENTS: Path exceeds {MAX_SEGMENTS} segments"
+            )
 
     def _next_num() -> float:
         nonlocal i
@@ -277,11 +503,39 @@ def parse_svg_d(d: str) -> Dict[str, Any]:
             continue
 
         if cmd_upper == "A":
-            raise ValueError(
-                "Arc commands (A/a) not supported yet. "
-                "Decompose arcs to cubic Bézier segments before import, "
-                "or wait for Phase 2 arc support."
-            )
+            while True:
+                arc_rx = abs(_next_num())
+                arc_ry = abs(_next_num())
+                arc_rot = _next_num()
+                arc_fa = int(_next_num())
+                arc_fs = int(_next_num())
+                ax, ay = _next_num(), _next_num()
+                if is_rel:
+                    ax += cx; ay += cy
+                _check_coord(ax); _check_coord(ay)
+
+                if current is None:
+                    raise ValueError("Arc command before MoveTo")
+
+                cubics = arc_to_cubics(
+                    cx, cy, arc_rx, arc_ry, arc_rot,
+                    arc_fa, arc_fs, ax, ay,
+                )
+                if not cubics:
+                    # [H6] Degenerate arc → lineTo
+                    current.add_line_to([ax, ay])
+                    _add_segment()
+                else:
+                    for cp1, cp2, end in cubics:
+                        current.add_cubic_to(cp1, cp2, end)
+                        _add_segment()
+
+                cx, cy = ax, ay
+                prev_cp = None
+                if not _has_numbers():
+                    break
+            prev_cmd = cmd
+            continue
 
         # Commands that consume coordinate pairs
         if cmd_upper == "M":
@@ -290,9 +544,16 @@ def parse_svg_d(d: str) -> Dict[str, Any]:
             if is_rel:
                 x += cx
                 y += cy
+            _check_coord(x); _check_coord(y)
             cx, cy = x, y
             sx, sy = x, y
             prev_cp = None
+
+            # [H7] Subpath count limit
+            if len(subpaths) >= MAX_SUBPATHS:
+                raise ValueError(
+                    f"E_TOO_MANY_SUBPATHS: Path exceeds {MAX_SUBPATHS} subpaths"
+                )
 
             current = _SubpathBuilder()
             current.move_to([cx, cy])
@@ -305,8 +566,10 @@ def parse_svg_d(d: str) -> Dict[str, Any]:
                 if is_rel:
                     x += cx
                     y += cy
+                _check_coord(x); _check_coord(y)
                 cx, cy = x, y
                 current.add_line_to([cx, cy])
+                _add_segment()
             continue
 
         # All remaining commands require an active subpath
@@ -319,8 +582,10 @@ def parse_svg_d(d: str) -> Dict[str, Any]:
                 if is_rel:
                     x += cx
                     y += cy
+                _check_coord(x); _check_coord(y)
                 cx, cy = x, y
                 current.add_line_to([cx, cy])
+                _add_segment()
                 prev_cp = None
                 if not _has_numbers():
                     break
@@ -330,8 +595,10 @@ def parse_svg_d(d: str) -> Dict[str, Any]:
                 x = _next_num()
                 if is_rel:
                     x += cx
+                _check_coord(x)
                 cx = x
                 current.add_line_to([cx, cy])
+                _add_segment()
                 prev_cp = None
                 if not _has_numbers():
                     break
@@ -341,8 +608,10 @@ def parse_svg_d(d: str) -> Dict[str, Any]:
                 y = _next_num()
                 if is_rel:
                     y += cy
+                _check_coord(y)
                 cy = y
                 current.add_line_to([cx, cy])
+                _add_segment()
                 prev_cp = None
                 if not _has_numbers():
                     break
@@ -356,7 +625,9 @@ def parse_svg_d(d: str) -> Dict[str, Any]:
                     x1 += cx; y1 += cy
                     x2 += cx; y2 += cy
                     x += cx; y += cy
+                _check_coord(x); _check_coord(y)
                 current.add_cubic_to([x1, y1], [x2, y2], [x, y])
+                _add_segment()
                 prev_cp = [x2, y2]
                 cx, cy = x, y
                 if not _has_numbers():
@@ -369,6 +640,7 @@ def parse_svg_d(d: str) -> Dict[str, Any]:
                 if is_rel:
                     x2 += cx; y2 += cy
                     x += cx; y += cy
+                _check_coord(x); _check_coord(y)
                 # Reflect previous control point
                 if prev_cp is not None:
                     x1 = 2 * cx - prev_cp[0]
@@ -376,6 +648,7 @@ def parse_svg_d(d: str) -> Dict[str, Any]:
                 else:
                     x1, y1 = cx, cy
                 current.add_cubic_to([x1, y1], [x2, y2], [x, y])
+                _add_segment()
                 prev_cp = [x2, y2]
                 cx, cy = x, y
                 if not _has_numbers():
@@ -388,11 +661,13 @@ def parse_svg_d(d: str) -> Dict[str, Any]:
                 if is_rel:
                     qx1 += cx; qy1 += cy
                     qx += cx; qy += cy
+                _check_coord(qx); _check_coord(qy)
                 # Degree-elevate Q → C
                 cp1, cp2 = _elevate_quadratic(
                     [cx, cy], [qx1, qy1], [qx, qy]
                 )
                 current.add_cubic_to(cp1, cp2, [qx, qy])
+                _add_segment()
                 prev_cp = [qx1, qy1]  # Store Q control for T reflection
                 cx, cy = qx, qy
                 if not _has_numbers():
@@ -403,6 +678,7 @@ def parse_svg_d(d: str) -> Dict[str, Any]:
                 qx, qy = _next_num(), _next_num()
                 if is_rel:
                     qx += cx; qy += cy
+                _check_coord(qx); _check_coord(qy)
                 # Reflect previous Q control point
                 if prev_cp is not None:
                     qx1 = 2 * cx - prev_cp[0]
@@ -413,6 +689,7 @@ def parse_svg_d(d: str) -> Dict[str, Any]:
                     [cx, cy], [qx1, qy1], [qx, qy]
                 )
                 current.add_cubic_to(cp1, cp2, [qx, qy])
+                _add_segment()
                 prev_cp = [qx1, qy1]
                 cx, cy = qx, qy
                 if not _has_numbers():

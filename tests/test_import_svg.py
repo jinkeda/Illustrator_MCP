@@ -1,0 +1,128 @@
+"""
+test_import_svg.py — Unit tests for the path_import_svg tool.
+
+Pure Python tests (no Illustrator needed).
+Tests focus on the parsing/IR conversion layer — the JSX execution
+is not tested here (requires live Illustrator).
+
+Run: python -m pytest tests/test_import_svg.py -v
+"""
+
+import json
+import pytest
+from illustrator_mcp.svgd import parse_svg_d
+from illustrator_mcp.tools.import_svg import (
+    _ir_points_to_draw_spec,
+    PathImportSvgInput,
+)
+
+
+# ── IR-to-spec conversion tests ───────────────────────────────────────
+
+
+class TestIRToDrawSpec:
+    def test_simple_line_points(self):
+        """IR from lineTo → anchors only, no left/right."""
+        ir = parse_svg_d("M 0,0 L 100,0 L 100,100 Z")
+        spec = _ir_points_to_draw_spec(ir)
+        assert len(spec) == 3
+        assert spec[0]["anchor"] == [0, 0]
+        assert spec[1]["anchor"] == [100, 0]
+        assert "left" not in spec[0]
+        assert "right" not in spec[0]
+
+    def test_cubic_bezier_points(self):
+        """IR from cubic → anchors with left/right handles."""
+        ir = parse_svg_d("M 0,0 C 25,50 75,50 100,0")
+        spec = _ir_points_to_draw_spec(ir)
+        assert len(spec) == 2
+        # First point has out-handle (right)
+        assert "right" in spec[0]
+        assert spec[0]["right"] == [25, 50]
+        # Second point has in-handle (left)
+        assert "left" in spec[1]
+        assert spec[1]["left"] == [75, 50]
+
+    def test_arc_produces_handles(self):
+        """IR from arc → anchors with handles (arc→cubic)."""
+        ir = parse_svg_d("M 0,0 A 50,50 0 1,1 100,0")
+        spec = _ir_points_to_draw_spec(ir)
+        assert len(spec) > 1
+        # Should have handles from cubic approximation
+        has_handles = any("left" in s or "right" in s for s in spec)
+        assert has_handles
+
+    def test_multi_subpath_conversion(self):
+        """Multi-subpath IR → separate point specs per subpath."""
+        ir = parse_svg_d("M 0,0 L 10,0 L 10,10 Z M 20,20 L 30,20 L 30,30 Z")
+        assert ir["ir"] == "multi"
+        for sp in ir["subpaths"]:
+            spec = _ir_points_to_draw_spec(sp)
+            assert len(spec) == 3
+            for pt in spec:
+                assert "anchor" in pt
+
+
+# ── Input validation tests ────────────────────────────────────────────
+
+
+class TestInputValidation:
+    def test_minimal_input(self):
+        """d field is required and sufficient."""
+        inp = PathImportSvgInput(d="M 0,0 L 100,0")
+        assert inp.d == "M 0,0 L 100,0"
+        assert inp.layer is None
+        assert inp.tag is None
+        assert inp.name is None
+
+    def test_full_input(self):
+        """All optional fields can be set."""
+        inp = PathImportSvgInput(
+            d="M 0,0 L 100,0 Z",
+            layer="Icons",
+            tag="arrow",
+            name="arrow_path",
+        )
+        assert inp.layer == "Icons"
+        assert inp.tag == "arrow"
+        assert inp.name == "arrow_path"
+
+
+# ── Error code passthrough tests (H7) ─────────────────────────────────
+
+
+class TestErrorCodePassthrough:
+    """Tests that svgd.py safety limit errors have correct error codes."""
+
+    def test_d_too_long_error_code(self):
+        """E_D_TOO_LONG code is present in error message."""
+        d = "M 0,0 " + "L 1,1 " * 20000
+        with pytest.raises(ValueError) as exc_info:
+            parse_svg_d(d)
+        assert "E_D_TOO_LONG" in str(exc_info.value)
+
+    def test_coord_overflow_error_code(self):
+        """E_COORD_OVERFLOW code is present in error message."""
+        d = "M 0,0 L 200000,0"
+        with pytest.raises(ValueError) as exc_info:
+            parse_svg_d(d)
+        assert "E_COORD_OVERFLOW" in str(exc_info.value)
+
+
+# ── Response shape tests (H5) ─────────────────────────────────────────
+
+
+class TestResponseShape:
+    """Tests for the expected H5 response payload structure.
+
+    Since we can't actually call Illustrator, these verify the
+    parsing/IR side only. The full response shape is tested in
+    live integration tests.
+    """
+
+    def test_ir_determinism(self):
+        """Same d string → same IR output (deterministic)."""
+        d = "M 10,20 C 30,40 50,60 70,80 Z"
+        ir1 = parse_svg_d(d)
+        ir2 = parse_svg_d(d)
+        assert ir1 == ir2

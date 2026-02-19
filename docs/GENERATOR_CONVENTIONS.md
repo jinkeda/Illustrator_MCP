@@ -2,6 +2,57 @@
 
 > How to write generative scripts that play nice with the SOC ops framework.
 
+## Golden Path: `drawPathPoints`
+
+> [!IMPORTANT]
+> For **new** paths, always use `drawPathPoints(spec)` from `geometry.jsx`.
+> `element_create(type='path')` emits a deprecation warning and is reserved for legacy IR pipelines.
+> SVG `d` attribute is no longer accepted — use `path_import_svg` for existing SVG data.
+
+### Quick Start
+```javascript
+// includes: ["geometry"]
+
+var result = drawPathPoints({
+    points: [
+        {anchor: [10, 10]},
+        {anchor: [100, 10], right: [120, 10]},
+        {anchor: [100, 100], left: [100, 80]}
+    ],
+    closed: true,
+    appearance: {
+        fill: {r: 30, g: 120, b: 200},
+        stroke: {r: 0, g: 0, b: 0, width: 1}
+    },
+    target: { layer: "Shapes" },
+    meta: { tag: "hero-shape" }
+});
+// result: { ok, uuid, typename, bounds, subpathCount }
+```
+
+### Compound Paths (Holes)
+```javascript
+drawPathPoints({
+    subpaths: [
+        { points: outerRing, closed: true },
+        { points: innerHole, closed: true }
+    ],
+    compound: true,  // wraps in CompoundPathItem
+    appearance: { fill: {r: 255, g: 255, b: 255} }
+});
+```
+
+> [!WARNING]
+> `compound: true` requires **all** subpaths to be closed. Open subpaths in a compound path produce undefined fill behaviour in Illustrator.
+
+### Point Formats
+| Format | Example |
+|--------|---------|
+| Object (preferred) | `{anchor: [x,y], left?: [lx,ly], right?: [rx,ry]}` |
+| Legacy shorthand | `[x, y]` |
+| Legacy handle tuple | `[[ax,ay], [inX,inY], [outX,outY]]` |
+
+
 ## Three-Phase Architecture
 
 Every generator MUST follow this structure:

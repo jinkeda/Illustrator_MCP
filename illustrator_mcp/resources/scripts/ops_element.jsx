@@ -27,6 +27,9 @@ if (typeof findLayer !== "function") {
 if (typeof isIR !== "function") {
     throw new Error("ops_element.jsx requires geo_ir.jsx (isIR=" + typeof isIR + ")");
 }
+if (typeof _createPath !== "function") {
+    throw new Error("ops_element.jsx requires geometry.jsx (_createPath=" + typeof _createPath + ")");
+}
 
 // ==================== Artboard Coordinate Helper ====================
 
@@ -280,6 +283,8 @@ registerOpHandler("element_create", function (params, targets, ctx) {
             if (params.closed === undefined) params.closed = false;
         // fall through
         case "path":
+            // [HB] Soft warning: prefer geometry.drawPathPoints for new paths
+            if (ctx && ctx.warn) ctx.warn("Prefer geometry.drawPathPoints for new paths");
             // Resolve points: geometry IR > points (raw or legacy IR) > error
             var pathPoints;
             var pathWarnings = [];
