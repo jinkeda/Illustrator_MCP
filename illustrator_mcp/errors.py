@@ -17,6 +17,14 @@ from enum import Enum
 from typing import Any, Dict, List, Optional
 
 
+# Error prefixes recognized in plain-text result strings (single source of truth).
+# Imported by response_classification.py and proxy_client.py.
+ERROR_PREFIXES = (
+    "Error:", "error:", "ERROR:",
+    "ReferenceError:", "TypeError:", "SyntaxError:",
+)
+
+
 # =============================================================================
 # ERROR CODE ENUM — SINGLE SOURCE OF TRUTH
 # =============================================================================

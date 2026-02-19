@@ -5,8 +5,9 @@ These tools use execute_script internally to run JavaScript in Illustrator.
 """
 
 import json
+import logging
 import os
-from typing import Optional, Union
+from typing import Literal, Optional, Union
 from enum import Enum
 
 from pydantic import Field
@@ -18,6 +19,8 @@ from illustrator_mcp.utils import escape_path_for_jsx
 from illustrator_mcp.proxy_client import execute_script_with_context, format_envelope
 from illustrator_mcp.libraries import get_injection_metadata
 from illustrator_mcp import templates
+
+logger = logging.getLogger(__name__)
 
 
 class ExportFormat(str, Enum):
@@ -383,14 +386,9 @@ async def illustrator_export_document(params: ExportDocumentInput) -> Union[str,
                 )
             ]
         except Exception as e:
-            # Fall back to envelope if image read fails
-            warnings.append(f"Failed to read image for return: {e}")
-            return format_envelope(
-                response=response,
-                context="export_document",
-                warnings=warnings,
-                diagnostics=diagnostics
-            )
+            # Image read is best-effort; return the original text envelope
+            logger.warning(f"Failed to read exported image for return: {e}")
+            return envelope
 
     return envelope
 
@@ -419,7 +417,7 @@ async def illustrator_close_document(params: CloseDocumentInput) -> str:
 # Combined Undo/Redo tool
 class HistoryInput(ToolInputBase):
     """Input for undo/redo operations."""
-    action: str = Field(default="undo", description="Action: 'undo' or 'redo'")
+    action: Literal["undo", "redo"] = Field(default="undo", description="Action: 'undo' or 'redo'")
     count: int = Field(default=1, description="Number of times to perform action", ge=1, le=100)
 
 

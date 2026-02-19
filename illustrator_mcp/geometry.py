@@ -178,8 +178,8 @@ def flatten_cubic(
 
 def flatten_path(
     anchors: Contour,
-    in_handles: Contour,
-    out_handles: Contour,
+    left_handles: Contour,
+    right_handles: Contour,
     closed: bool = True,
     tolerance: float = DEFAULT_FLATTEN_TOLERANCE,
     max_segments: int = DEFAULT_MAX_SEGMENTS,
@@ -188,8 +188,8 @@ def flatten_path(
 
     Args:
         anchors: Anchor points [(x,y), ...]
-        in_handles: Left direction handles (absolute coords), same length as anchors
-        out_handles: Right direction handles (absolute coords), same length as anchors
+        left_handles: Left (in-direction) handles (absolute coords), same length as anchors
+        right_handles: Right (out-direction) handles (absolute coords), same length as anchors
         closed: Whether path is closed
         tolerance: Bézier flatten precision
         max_segments: Max total segments for entire path
@@ -208,8 +208,8 @@ def flatten_path(
     for i in range(segments_to_process):
         j = (i + 1) % n
         p0 = anchors[i]
-        p1 = out_handles[i]    # out-handle of current point
-        p2 = in_handles[j]     # in-handle of next point
+        p1 = right_handles[i]    # right (out) handle of current point
+        p2 = left_handles[j]     # left (in) handle of next point
         p3 = anchors[j]
 
         # Check if this segment is actually a line (handles == anchors)

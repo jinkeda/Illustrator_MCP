@@ -252,16 +252,17 @@ registerOpHandler("measure_bounds", function (params, targets, ctx) {
         minY = Math.min(minY, item.top - item.height);
     }
 
+    function _q(v) { return (typeof v === "number") ? Math.round(v * 100) / 100 : v; }
     return {
         ok: true,
         data: {
             bounds: {
-                left: minX,
-                top: maxY,
-                right: maxX,
-                bottom: minY,
-                width: maxX - minX,
-                height: maxY - minY
+                left: _q(minX),
+                top: _q(maxY),
+                right: _q(maxX),
+                bottom: _q(minY),
+                width: _q(maxX - minX),
+                height: _q(maxY - minY)
             },
             itemCount: targets.length
         }
@@ -295,10 +296,11 @@ registerOpHandler("snapshot_structure", function (params, targets, ctx) {
             layerInfo.items = [];
             for (var j = 0; j < layer.pageItems.length; j++) {
                 var item = layer.pageItems[j];
+                var _qm = function (v) { return (typeof v === "number") ? Math.round(v * 100) / 100 : v; };
                 layerInfo.items.push({
                     name: item.name || null,
                     typename: item.typename,
-                    bounds: [item.left, item.top, item.width, item.height]
+                    bounds: [_qm(item.left), _qm(item.top), _qm(item.width), _qm(item.height)]
                 });
             }
         }

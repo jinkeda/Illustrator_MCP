@@ -79,19 +79,27 @@ OPEN_DOCUMENT = Template("""
 
 SAVE_DOCUMENT = Template("""
 (function() {
-    var doc = app.activeDocument;
-    var file = new File("${path}");
-    doc.saveAs(file);
-    return JSON.stringify({success: true, path: "${path}"});
+    try {
+        var doc = app.activeDocument;
+        var file = new File("${path}");
+        doc.saveAs(file);
+        return JSON.stringify({success: true, path: "${path}"});
+    } catch (e) {
+        return JSON.stringify({success: false, error: e.message || String(e)});
+    }
 })()
 """)
 
 
 SAVE_DOCUMENT_SIMPLE = """
 (function() {
-    var doc = app.activeDocument;
-    doc.save();
-    return JSON.stringify({success: true, message: "Document saved"});
+    try {
+        var doc = app.activeDocument;
+        doc.save();
+        return JSON.stringify({success: true, message: "Document saved"});
+    } catch (e) {
+        return JSON.stringify({success: false, error: e.message || String(e)});
+    }
 })()
 """
 
@@ -183,18 +191,20 @@ GET_DOCUMENT_STRUCTURE = Template("""
     var itemOffset = ${offset};
     var layerFilter = ${layer_filter};
     
+    function _q(v){return(typeof v==="number")?Math.round(v*100)/100:v;}
+    
     function getItemInfo(item, maxDepth, currentDepth) {
         if (currentDepth > maxDepth) return null;
         
         var info = {
             name: item.name || "(unnamed)",
             type: item.typename,
-            position: item.position ? [item.position[0], item.position[1]] : null,
+            position: item.position ? [_q(item.position[0]), _q(item.position[1])] : null,
             bounds: item.geometricBounds ? {
-                left: item.geometricBounds[0],
-                top: item.geometricBounds[1],
-                right: item.geometricBounds[2],
-                bottom: item.geometricBounds[3]
+                left: _q(item.geometricBounds[0]),
+                top: _q(item.geometricBounds[1]),
+                right: _q(item.geometricBounds[2]),
+                bottom: _q(item.geometricBounds[3])
             } : null
         };
         
@@ -320,17 +330,19 @@ GET_SELECTION_INFO = """
     var items = [];
     var limit = Math.min(sel.length, 50);
     
+    function _q(v){return(typeof v==="number")?Math.round(v*100)/100:v;}
+    
     for (var i = 0; i < limit; i++) {
         var item = sel[i];
         var info = {
             name: item.name || "(unnamed)",
             type: item.typename,
-            position: item.position ? [item.position[0], item.position[1]] : null,
+            position: item.position ? [_q(item.position[0]), _q(item.position[1])] : null,
             bounds: item.geometricBounds ? {
-                left: item.geometricBounds[0],
-                top: item.geometricBounds[1],
-                right: item.geometricBounds[2],
-                bottom: item.geometricBounds[3]
+                left: _q(item.geometricBounds[0]),
+                top: _q(item.geometricBounds[1]),
+                right: _q(item.geometricBounds[2]),
+                bottom: _q(item.geometricBounds[3])
             } : null
         };
         

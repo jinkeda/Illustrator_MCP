@@ -33,14 +33,18 @@ class TestVLMQACadenceConstants(unittest.TestCase):
         """reset_mutation_count() should set counter to 0."""
         # Increment a few times by importing the global directly
         from illustrator_mcp.tools import execute
-        execute._mutation_count = 42
+        for _ in range(42):
+            execute._counter.increment()
         reset_mutation_count()
         self.assertEqual(get_mutation_count(), 0)
 
     def test_get_mutation_count(self):
         """get_mutation_count() returns current counter value."""
         from illustrator_mcp.tools import execute
-        execute._mutation_count = 7
+        # Set counter to a known value via the public API
+        reset_mutation_count()
+        for _ in range(7):
+            execute._counter.increment()
         self.assertEqual(get_mutation_count(), 7)
         reset_mutation_count()
 
@@ -215,13 +219,15 @@ class TestCheckpointInstruction(unittest.TestCase):
         the checkpoint instruction (is_vlm_checkpoint stays False)."""
         from illustrator_mcp.tools import execute
         # Set counter to 3 (not a cadence boundary)
-        execute._mutation_count = 2  # will become 3 after increment
+        reset_mutation_count()
+        for _ in range(2):
+            execute._counter.increment()  # will become 3 after increment
 
         params = ExecuteScriptInput(script="var x = 1;", return_preview=True)
 
         # Simulate the cadence logic from execute_script
-        execute._mutation_count += 1
-        count = execute._mutation_count  # 3
+        execute._counter.increment()
+        count = execute._counter.value  # 3
         is_checkpoint = (count % VLM_QA_CADENCE == 0) or params.final_step
         is_vlm_checkpoint = False
 
@@ -245,7 +251,9 @@ class TestCheckpointInstruction(unittest.TestCase):
         from illustrator_mcp.tools import execute
 
         # Set mutation counter to 4 so the next call hits 5 (cadence boundary)
-        execute._mutation_count = 4
+        reset_mutation_count()
+        for _ in range(4):
+            execute._counter.increment()
 
         # Create a minimal 1x1 white PNG for the preview mock
         import base64
@@ -312,7 +320,7 @@ class TestCheckpointInstruction(unittest.TestCase):
         import base64
 
         # Set to 0 so next call is 1 (NOT a cadence boundary)
-        execute._mutation_count = 0
+        reset_mutation_count()
 
         tiny_png = (
             b'\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR\x00\x00\x00\x01'
@@ -376,7 +384,8 @@ class TestReviewFixes(unittest.TestCase):
         from illustrator_mcp.tools import execute
 
         # Set to 4 so next call hits 5 (cadence boundary)
-        execute._mutation_count = 4
+        for _ in range(4):
+            execute._counter.increment()
 
         mock_response = {"result": "'ok'", "error": None}
         params = ExecuteScriptInput(script="var x = 1;")
@@ -405,7 +414,8 @@ class TestReviewFixes(unittest.TestCase):
         from illustrator_mcp.protocol import TaskPayload, TaskOptions
 
         # Set to 4 so next call hits 5 (cadence boundary)
-        execute._mutation_count = 4
+        for _ in range(4):
+            execute._counter.increment()
 
         # Build a dryRun task payload
         payload = TaskPayload(
@@ -452,7 +462,7 @@ class TestReviewFixes(unittest.TestCase):
         from illustrator_mcp.tools import execute
         from illustrator_mcp.protocol import TaskPayload, TaskOptions
 
-        execute._mutation_count = 0  # not a cadence boundary
+        reset_mutation_count()  # not a cadence boundary
 
         payload = TaskPayload(
             task="test_task",
@@ -491,7 +501,9 @@ class TestReviewFixes(unittest.TestCase):
         but decrement on failure (B18 fix: failed booleans don't inflate cadence)."""
         from illustrator_mcp.tools import execute
 
-        execute._mutation_count = 7
+        reset_mutation_count()
+        for _ in range(7):
+            execute._counter.increment()
 
         # Mock the import of geometry module to fail cleanly at import guard.
         # B18: the counter is incremented then decremented on ImportError,
@@ -511,7 +523,7 @@ class TestReviewFixes(unittest.TestCase):
                 pass  # Geometry import may fail — that's fine
 
         # B18: Counter should be unchanged (7) — failed boolean decremented
-        self.assertEqual(execute._mutation_count, 7)
+        self.assertEqual(get_mutation_count(), 7)
 
 
 if __name__ == "__main__":

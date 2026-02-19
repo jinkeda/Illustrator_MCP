@@ -319,3 +319,15 @@ class RequestRegistry:
         with self._lock:
             return request_id in self._streaming
 
+    @property
+    def pending_count(self) -> int:
+        """Number of pending (non-streaming) requests — for monitoring."""
+        with self._lock:
+            return len(self._pending)
+
+    @property
+    def streaming_count(self) -> int:
+        """Number of active streaming requests — for monitoring."""
+        with self._lock:
+            return len(self._streaming)
+

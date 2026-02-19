@@ -122,12 +122,13 @@ class WebSocketServer:
 
     async def send(self, message: str):
         """Send message to connected client."""
-        if not self.client:
+        ws = self.client  # snapshot to avoid TOCTOU race
+        if ws is None:
             raise ConnectionError("No client connected")
         if not self.is_connected():
             self.client = None
             raise ConnectionError("Client connection is closed")
-        await self.client.send(message)
+        await ws.send(message)
 
     def stop(self):
         """Signal shutdown."""

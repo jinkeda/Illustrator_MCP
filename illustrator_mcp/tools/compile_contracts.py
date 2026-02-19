@@ -24,7 +24,7 @@ PROJECT_ROOT = Path(__file__).parent.parent.parent
 sys.path.insert(0, str(PROJECT_ROOT))
 
 from illustrator_mcp.schemas.contracts import (
-    ErrorCode,
+    OpErrorCode,
     OP_SCHEMAS,
     OpSchema,
 )
@@ -57,9 +57,9 @@ def schema_to_dict(op: OpSchema) -> dict:
 
 
 def error_codes_to_dict() -> dict:
-    """Convert ErrorCode enum to JSX-compatible dict."""
+    """Convert OpErrorCode enum to JSX-compatible dict."""
     result = {}
-    for code in ErrorCode:
+    for code in OpErrorCode:
         if code.name == "retryable":
             continue
         result[code.name] = code.value
@@ -108,7 +108,7 @@ def render_jsx(schemas_dict: dict, errors_dict: dict, checksum: str) -> str:
     lines.append("")
 
     # Retryable codes
-    retryable = ErrorCode.retryable()
+    retryable = OpErrorCode.retryable()
     retryable_refs = ", ".join(f"ErrorCodes.{c.name}" for c in retryable)
     lines.append(f"var RETRYABLE_CODES = [{retryable_refs}];")
     lines.append("")

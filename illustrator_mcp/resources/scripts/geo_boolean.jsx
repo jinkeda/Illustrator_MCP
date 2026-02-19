@@ -5,12 +5,18 @@
  *   1. extractPathGeometry(itemRefs) — reads path data from PathItems
  *   2. reconstructRegions(regions, layerName, style) — creates PathItem/CompoundPathItem
  *
+ * Style helpers:
+ *   - _extractColorCanonical(colorObj) — canonical color serializer with `model` discriminator
+ *   - _extractStyle(item)              — full style snapshot (fill, stroke, opacity)
+ *   - _clamp(v, lo, hi)               — numeric clamping utility
+ *
  * Coordinate convention:
  *   All coordinates are artboard-relative, Y-down (SOC convention).
  *   Transform: x_soc = anchor[0] - abLeft, y_soc = abTop - anchor[1]
  *   Reverse:   x_ai  = abLeft + x_soc,     y_ai  = abTop - y_soc
  *
  * @requires ops_core (for generateUUID, makeError, ErrorCodes)
+ * @version 1.1.0
  */
 
 // ── Dependency guard ───────────────────────────────────────────────
@@ -45,6 +51,67 @@ function _fromSOC(x, y, ab) {
 
 // ── Style extraction ───────────────────────────────────────────────
 
+/**
+ * Clamp a number to [lo, hi].
+ */
+function _clamp(v, lo, hi) { return v < lo ? lo : (v > hi ? hi : v); }
+
+/**
+ * Serialize a single Illustrator color object to a canonical descriptor.
+ * Every returned object has a `model` discriminator key.
+ *
+ * @param {Color} colorObj - Illustrator color object
+ * @returns {Object|null} Canonical color descriptor, or null only for truly unknown types
+ */
+function _extractColorCanonical(colorObj) {
+    if (!colorObj) return null;
+    var tn = "";
+    try { tn = colorObj.typename || ""; } catch (e) { return null; }
+
+    switch (tn) {
+        case "RGBColor":
+            return {
+                model: "RGB",
+                r: Math.round(colorObj.red),
+                g: Math.round(colorObj.green),
+                b: Math.round(colorObj.blue)
+            };
+        case "CMYKColor":
+            return {
+                model: "CMYK",
+                c: _clamp(Math.round(colorObj.cyan * 10) / 10, 0, 100),
+                m: _clamp(Math.round(colorObj.magenta * 10) / 10, 0, 100),
+                y: _clamp(Math.round(colorObj.yellow * 10) / 10, 0, 100),
+                k: _clamp(Math.round(colorObj.black * 10) / 10, 0, 100)
+            };
+        case "GrayColor":
+            return {
+                model: "Gray",
+                gray: _clamp(Math.round(colorObj.gray * 10) / 10, 0, 100)
+            };
+        case "SpotColor": {
+            var desc = {
+                model: "Spot",
+                name: colorObj.spot ? colorObj.spot.name : "unknown",
+                tint: Math.round(colorObj.tint * 10) / 10
+            };
+            // Serialize underlying spot color for round-trip capability
+            try {
+                if (colorObj.spot && colorObj.spot.color) {
+                    desc.base = _extractColorCanonical(colorObj.spot.color);
+                }
+            } catch (e) { /* spot.color may not be readable */ }
+            return desc;
+        }
+        case "GradientColor":
+            return { model: "Gradient", supported: false };
+        case "PatternColor":
+            return { model: "Pattern", supported: false };
+        default:
+            return null;
+    }
+}
+
 function _extractStyle(item) {
     var style = {
         filled: item.filled,
@@ -57,25 +124,13 @@ function _extractStyle(item) {
 
     if (item.filled && item.fillColor) {
         try {
-            var fc = item.fillColor;
-            if (fc.typename === "RGBColor") {
-                style.fillColor = { r: fc.red, g: fc.green, b: fc.blue };
-            } else if (fc.typename === "CMYKColor") {
-                style.fillColor = { c: fc.cyan, m: fc.magenta, y: fc.yellow, k: fc.black, model: "CMYK" };
-            } else if (fc.typename === "GrayColor") {
-                style.fillColor = { gray: fc.gray, model: "Gray" };
-            }
+            style.fillColor = _extractColorCanonical(item.fillColor);
         } catch (e) { /* ignore read error */ }
     }
 
     if (item.stroked && item.strokeColor) {
         try {
-            var sc = item.strokeColor;
-            if (sc.typename === "RGBColor") {
-                style.strokeColor = { r: sc.red, g: sc.green, b: sc.blue };
-            } else if (sc.typename === "CMYKColor") {
-                style.strokeColor = { c: sc.cyan, m: sc.magenta, y: sc.yellow, k: sc.black, model: "CMYK" };
-            }
+            style.strokeColor = _extractColorCanonical(item.strokeColor);
         } catch (e) { /* ignore read error */ }
     }
 
@@ -165,11 +220,9 @@ function extractPathGeometry(mcpIds) {
             warnings.push(appWarnings[w]);
         }
 
-        // Extract geometry
+        // Extract geometry — canonical per-point format (8C)
         var pp = item.pathPoints;
-        var points = [];
-        var inHandles = [];
-        var outHandles = [];
+        var pointObjs = [];
         var hasHandles = false;
 
         for (var pi = 0; pi < pp.length; pi++) {
@@ -182,9 +235,8 @@ function extractPathGeometry(mcpIds) {
             var leftSOC = _toSOC(left[0], left[1], ab);
             var rightSOC = _toSOC(right[0], right[1], ab);
 
-            points.push(anchorSOC);
-            inHandles.push(leftSOC);
-            outHandles.push(rightSOC);
+            // pointType: explicit comparison, never toString()
+            var ptType = (pt.pointType === PointType.SMOOTH) ? "smooth" : "corner";
 
             // Check if handles differ from anchor (i.e., it's a curve)
             var dx1 = Math.abs(left[0] - anchor[0]);
@@ -194,17 +246,23 @@ function extractPathGeometry(mcpIds) {
             if (dx1 > 0.01 || dy1 > 0.01 || dx2 > 0.01 || dy2 > 0.01) {
                 hasHandles = true;
             }
+
+            pointObjs.push({
+                anchor: anchorSOC,
+                left: leftSOC,
+                right: rightSOC,
+                pointType: ptType
+            });
         }
 
         // Extract style for transfer
         var style = _extractStyle(item);
 
         paths.push({
-            points: points,
-            inHandles: inHandles,
-            outHandles: outHandles,
-            closed: item.closed,
+            schema: "mcp.geometry.v1",
+            points: pointObjs,
             hasHandles: hasHandles,
+            closed: item.closed,
             style: style,
             mcpId: mcpId,
             name: item.name || ""

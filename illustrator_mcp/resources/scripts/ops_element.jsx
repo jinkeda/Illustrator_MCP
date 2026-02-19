@@ -359,22 +359,22 @@ registerOpHandler("element_create", function (params, targets, ctx) {
                         var pp = item.pathPoints[bi];
                         var hEntry = bH[bi];
 
-                        // In-handle (leftDirection)
-                        if (hEntry["in"] != null) {
-                            pp.leftDirection = hEntry["in"];
+                        // In-handle (leftDirection) — canonical key: "left"
+                        if (hEntry.left != null) {
+                            pp.leftDirection = hEntry.left;
                         } else {
                             pp.leftDirection = bPts[bi]; // coincident = sharp
                         }
 
-                        // Out-handle (rightDirection)
-                        if (hEntry.out != null) {
-                            pp.rightDirection = hEntry.out;
+                        // Out-handle (rightDirection) — canonical key: "right"
+                        if (hEntry.right != null) {
+                            pp.rightDirection = hEntry.right;
                         } else {
                             pp.rightDirection = bPts[bi]; // coincident = sharp
                         }
 
-                        // PointType: smooth vs corner
-                        if (hEntry.type === "corner") {
+                        // PointType: canonical key: "pointType"
+                        if (hEntry.pointType === "corner") {
                             pp.pointType = PointType.CORNER;
                         } else {
                             pp.pointType = PointType.SMOOTH;

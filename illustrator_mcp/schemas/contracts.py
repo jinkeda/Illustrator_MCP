@@ -17,7 +17,7 @@ from pydantic import BaseModel, Field
 
 # ==================== Error Codes ====================
 
-class ErrorCode(str, Enum):
+class OpErrorCode(str, Enum):
     """Standardized error codes mirrored to JSX runtime."""
 
     # Validation (V) - fail before execution

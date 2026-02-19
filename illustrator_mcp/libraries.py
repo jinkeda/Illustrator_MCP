@@ -369,13 +369,16 @@ _resolver_lock = threading.Lock()
 
 
 def get_resolver() -> LibraryResolver:
-    """Get the global library resolver instance."""
+    """Get the global library resolver instance.
+
+    B6: Always acquires lock (no double-checked locking) so this is safe
+    under free-threaded Python (PEP 703 / --disable-gil).
+    """
     global _resolver
-    if _resolver is None:
-        with _resolver_lock:
-            if _resolver is None:
-                _resolver = LibraryResolver(_RESOURCES_DIR)
-    return _resolver
+    with _resolver_lock:
+        if _resolver is None:
+            _resolver = LibraryResolver(_RESOURCES_DIR)
+        return _resolver
 
 
 def get_injection_metadata(includes: List[str]) -> Dict[str, Any]:

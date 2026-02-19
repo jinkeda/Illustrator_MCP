@@ -318,7 +318,7 @@ registerOpHandler("style_snapshot", function (params, targets, ctx) {
         try {
             entry.stroke = _serializeColor(item.strokeColor, item.stroked);
             if (item.stroked) {
-                entry.strokeWidth = item.strokeWidth;
+                entry.strokeWidth = Math.round(item.strokeWidth * 100) / 100;
             }
             if (entry.stroke.type === "gradient") {
                 warnings.push("Item " + (entry.id || i) + ": gradient stroke — summary only");
@@ -328,7 +328,7 @@ registerOpHandler("style_snapshot", function (params, targets, ctx) {
         }
 
         // Opacity
-        try { entry.opacity = item.opacity; } catch (e) { }
+        try { entry.opacity = Math.round(item.opacity * 100) / 100; } catch (e) { }
 
         // Text attributes (TextFrame only)
         if (item.typename === "TextFrame") {

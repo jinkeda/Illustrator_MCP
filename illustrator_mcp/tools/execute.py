@@ -10,6 +10,7 @@ import json
 import logging
 import os
 import tempfile
+import threading
 from typing import Any, Dict, List, Literal, Optional, Union
 from pydantic import Field, model_validator
 from illustrator_mcp.shared import mcp
@@ -26,9 +27,42 @@ logger = logging.getLogger("illustrator_mcp")
 # Auto-inject annotated preview every N execute_script calls.
 # The counter is module-level and resets on server restart.
 VLM_QA_CADENCE: int = 5
-_mutation_count: int = 0
-# TODO: scope to connection/session if scaling to multi-agent SSE/HTTP.
-# CONTRACT: any new mutating tool MUST increment this counter.
+# CONTRACT: any new mutating tool MUST call _counter.increment().
+
+
+class _MutationCounter:
+    """Thread-safe mutation counter for VLM QA cadence.
+
+    Uses a lock so increment/decrement are safe under free-threaded
+    Python (PEP 703 / --disable-gil).
+    TODO: scope to connection/session if scaling to multi-agent SSE/HTTP.
+    """
+
+    def __init__(self) -> None:
+        self._count: int = 0
+        self._lock = threading.Lock()
+
+    def increment(self) -> int:
+        """Atomically increment and return the new value."""
+        with self._lock:
+            self._count += 1
+            return self._count
+
+    def decrement(self) -> None:
+        """Atomically decrement (floor at 0)."""
+        with self._lock:
+            self._count = max(0, self._count - 1)
+
+    @property
+    def value(self) -> int:
+        return self._count
+
+    def reset(self) -> None:
+        with self._lock:
+            self._count = 0
+
+
+_counter = _MutationCounter()
 
 # Cognitive Forcing Function: injected as the LAST TextContent element
 # when cadence fires, forcing the AI to produce reasoning tokens about
@@ -51,13 +85,12 @@ VLM_CHECKPOINT_INSTRUCTION: str = (
 
 def get_mutation_count() -> int:
     """Return the current mutation counter value."""
-    return _mutation_count
+    return _counter.value
 
 
 def reset_mutation_count() -> None:
     """Reset the mutation counter to 0."""
-    global _mutation_count
-    _mutation_count = 0
+    _counter.reset()
 
 
 
@@ -657,16 +690,15 @@ async def illustrator_execute_script(params: ExecuteScriptInput) -> Union[str, l
 
     # ── VLM QA Cadence: auto-inject annotated preview ──────────
     # B3: Increment counter here; decremented in outer except if execution fails
-    global _mutation_count
-    _mutation_count += 1
-    is_checkpoint = (_mutation_count % VLM_QA_CADENCE == 0) or params.final_step
+    count = _counter.increment()
+    is_checkpoint = (count % VLM_QA_CADENCE == 0) or params.final_step
     is_vlm_checkpoint = False  # True only when cadence auto-injects
 
     if is_checkpoint:
         if params.return_preview is False and not params.final_step:
             # AI explicitly disabled preview — soft override: warn but respect
             warnings.append(
-                f"VLM QA checkpoint skipped (mutation #{_mutation_count}). "
+                f"VLM QA checkpoint skipped (mutation #{count}). "
                 "Consider using return_preview=True, preview_mode='annotated' "
                 "to visually verify the document state."
             )
@@ -677,7 +709,7 @@ async def illustrator_execute_script(params: ExecuteScriptInput) -> Union[str, l
             is_vlm_checkpoint = True
             logger.info(
                 f"VLM QA cadence: auto-injecting annotated preview "
-                f"(mutation #{_mutation_count}, final_step={params.final_step})"
+                f"(mutation #{count}, final_step={params.final_step})"
             )
 
     # Get canonicalized includes metadata
@@ -827,7 +859,7 @@ async def illustrator_execute_script(params: ExecuteScriptInput) -> Union[str, l
                             result_parts.append(TextContent(
                                 type="text",
                                 text=VLM_CHECKPOINT_INSTRUCTION.format(
-                                    count=_mutation_count
+                                    count=_counter.value
                                 ),
                             ))
                         return result_parts
@@ -849,7 +881,7 @@ async def illustrator_execute_script(params: ExecuteScriptInput) -> Union[str, l
                     if is_vlm_checkpoint:
                         return [
                             TextContent(type="text", text=env_text),
-                            TextContent(type="text", text=VLM_CHECKPOINT_INSTRUCTION.format(count=_mutation_count)),
+                            TextContent(type="text", text=VLM_CHECKPOINT_INSTRUCTION.format(count=_counter.value)),
                         ]
                     return env_text
             except Exception as e:
@@ -864,7 +896,7 @@ async def illustrator_execute_script(params: ExecuteScriptInput) -> Union[str, l
                 if is_vlm_checkpoint:
                     return [
                         TextContent(type="text", text=env_text),
-                        TextContent(type="text", text=VLM_CHECKPOINT_INSTRUCTION.format(count=_mutation_count)),
+                        TextContent(type="text", text=VLM_CHECKPOINT_INSTRUCTION.format(count=_counter.value)),
                     ]
                 return env_text
 
@@ -872,7 +904,7 @@ async def illustrator_execute_script(params: ExecuteScriptInput) -> Union[str, l
 
     except Exception as e:
         # B3: Decrement counter so failed executions don't pollute cadence
-        _mutation_count -= 1
+        _counter.decrement()
         logger.error(f"Script execution failed: {str(e)}")
         raise
 
@@ -1007,9 +1039,8 @@ JSON.stringify(report);
             all_includes.append(inc)
     
     # ── VLM QA Cadence: track mutations for execute_task too ──
-    global _mutation_count
-    _mutation_count += 1
-    is_task_checkpoint = (_mutation_count % VLM_QA_CADENCE == 0) or params.final_step
+    count = _counter.increment()
+    is_task_checkpoint = (count % VLM_QA_CADENCE == 0) or params.final_step
 
     diagnostics = {
         "task": params.payload.task,
@@ -1089,7 +1120,7 @@ JSON.stringify(report);
                             result_parts.append(TextContent(
                                 type="text",
                                 text=VLM_CHECKPOINT_INSTRUCTION.format(
-                                    count=_mutation_count
+                                    count=_counter.value
                                 ),
                             ))
                         return result_parts
@@ -1100,7 +1131,7 @@ JSON.stringify(report);
             if is_task_checkpoint:
                 return [
                     TextContent(type="text", text=envelope),
-                    TextContent(type="text", text=VLM_CHECKPOINT_INSTRUCTION.format(count=_mutation_count)),
+                    TextContent(type="text", text=VLM_CHECKPOINT_INSTRUCTION.format(count=_counter.value)),
                 ]
             return envelope
 
@@ -1115,7 +1146,7 @@ JSON.stringify(report);
 
     except Exception as e:
         # B3: Decrement counter so failed tasks don't pollute cadence
-        _mutation_count -= 1
+        _counter.decrement()
         logger.error(f"Task execution failed: {str(e)}")
         raise
 
@@ -1189,19 +1220,17 @@ async def illustrator_path_boolean(params: PathBooleanInput) -> str:
     """
     # ── Track mutation cadence before any early return ──────────
     # B3: Decremented in except block if execution fails
-    global _mutation_count
-    _mutation_count += 1
+    _counter.increment()
 
-    try:  # B18: ensure _mutation_count is decremented on any early-return error
+    try:  # B18: ensure counter is decremented on any early-return error
         return await _path_boolean_impl(params)
     except Exception:
-        _mutation_count -= 1
+        _counter.decrement()
         raise
 
 
 async def _path_boolean_impl(params: PathBooleanInput) -> str:
     """Inner implementation of path_boolean, extracted for B18 counter safety."""
-    global _mutation_count
 
     # ── Step 0: Import guard ────────────────────────────────────
     try:
@@ -1279,15 +1308,21 @@ async def _path_boolean_impl(params: PathBooleanInput) -> str:
     subject_style = subject_geo.get("style", {})
 
     def _to_contour(path_data):
-        """Convert extracted path data to a flat contour for Clipper."""
-        points = [tuple(p) for p in path_data["points"]]
+        """Convert extracted path data to a flat contour for Clipper.
+
+        Expects canonical per-point format (mcp.geometry.v1):
+            points: [{anchor, left, right, pointType}, ...]
+        """
+        pts = path_data["points"]
+        points = [tuple(p["anchor"]) for p in pts]
         if path_data.get("hasHandles"):
-            in_handles = [tuple(h) for h in path_data["inHandles"]]
-            out_handles = [tuple(h) for h in path_data["outHandles"]]
+            # Default missing left/right to anchor (corner points)
+            in_handles = [tuple(p.get("left", p["anchor"])) for p in pts]
+            out_handles = [tuple(p.get("right", p["anchor"])) for p in pts]
             points = flatten_path(
                 anchors=points,
-                in_handles=in_handles,
-                out_handles=out_handles,
+                left_handles=in_handles,
+                right_handles=out_handles,
                 closed=path_data.get("closed", True),
                 tolerance=params.flatten_tolerance,
                 max_segments=params.max_segments,

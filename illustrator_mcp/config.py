@@ -41,6 +41,9 @@ class Config(BaseSettings):
     # Logging
     log_level: str = Field(default="INFO", description="Log level: DEBUG, INFO, WARNING, ERROR")
     
+    # I6: Configurable message size limit (WebSocket bridge)
+    max_message_size_mb: int = Field(default=10, ge=1, le=100, description="Max WebSocket message size in MB")
+    
     @property
     def ws_url(self) -> str:
         """WebSocket URL for CEP panel connection."""

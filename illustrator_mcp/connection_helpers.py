@@ -81,8 +81,12 @@ def check_connection_or_error(
         If connected: (True, None)
         If disconnected: (False, ExecutionResponse with error)
     """
-    bridge = bridge_accessor()
-    
+    try:
+        bridge = bridge_accessor()
+    except Exception as e:
+        logger.warning(f"Bridge accessor failed: {e}")
+        return False, create_connection_error(port, context)
+
     if not bridge.is_connected():
         return False, create_connection_error(port, context)
     

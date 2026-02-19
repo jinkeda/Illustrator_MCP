@@ -215,71 +215,6 @@ async def execute_script(script: str) -> ExecutionResponse:
     return await get_proxy().execute_script(script)
 
 
-def _is_preload_stale(response: ExecutionResponse) -> bool:
-    """Check if a response indicates stale preload (MCP_LIBS_NOT_READY)."""
-    error = response.get("error", "")
-    result = response.get("result", "")
-    for val in (error, result):
-        if isinstance(val, str) and "MCP_LIBS_NOT_READY" in val:
-            return True
-    return False
-
-
-async def _ensure_preloaded() -> Optional[str]:
-    """Lazy-preload all libraries into CEP's global scope.
-
-    On first call, builds a preload bundle containing ALL library code
-    with a version marker, sends it to CEP via _execute_via_bridge, and
-    stores the version hash on the bridge. Subsequent calls return the
-    cached version immediately.
-
-    Returns:
-        Version hash string if preload succeeded, None if failed
-        (caller should fall back to full per-call injection).
-    """
-    bridge = _get_bridge()
-    if bridge.preload_version:
-        return bridge.preload_version
-
-    from illustrator_mcp.libraries import get_resolver
-    resolver = get_resolver()
-
-    try:
-        preload_script, version_hash = resolver.build_preload_bundle()
-    except Exception as e:
-        logger.warning(f"Failed to build preload bundle: {e}")
-        return None
-
-    if not preload_script:
-        return None
-
-    logger.info(
-        f"Preloading libraries (version={version_hash}, "
-        f"size={len(preload_script)} bytes)"
-    )
-
-    response = await _execute_via_bridge(
-        script=preload_script,
-        timeout=30.0,
-        command=CommandMetadata(
-            command_type="library_preload",
-            tool_name="_internal",
-            params={"version": version_hash},
-            trace_id=generate_trace_id(),
-        ),
-    )
-
-    if response.get("error"):
-        logger.warning(
-            f"Library preload failed (will fall back to per-call injection): "
-            f"{response['error']}"
-        )
-        return None
-
-    bridge.set_preload_version(version_hash)
-    logger.info(f"Library preload succeeded (version={version_hash})")
-    return version_hash
-
 
 async def execute_script_with_context(
     script: str,
@@ -328,8 +263,6 @@ async def execute_script_with_context(
     
     # --- Library injection (centralized) ---
     injection_meta = None
-    preload_version = None
-    original_script = script  # preserve for stale-preload retry
     if includes:
         # Sentinel guard: detect already-injected scripts
         if INJECTION_SENTINEL in script:
@@ -343,9 +276,7 @@ async def execute_script_with_context(
                 # persist function declarations between calls; only $.global
                 # properties survive.  Full injection (prepending library code
                 # to every script) is the only reliable path.
-                # preload_version = await _ensure_preloaded()
-                preload_version = None
-                script = inject_libraries(script, includes, preload_version=preload_version)
+                script = inject_libraries(script, includes)
                 injection_meta = get_injection_metadata(includes)
             except ValueError as e:
                 err_msg = str(e)
@@ -397,34 +328,7 @@ async def execute_script_with_context(
     
     duration_ms = (time.time() - start_time) * 1000
 
-    # --- Stale-preload retry ---
-    # If sentinel check failed (CEP was reloaded), clear preload state
-    # and retry with full library injection.
-    if includes and preload_version and _is_preload_stale(response):
-        logger.warning(
-            f"[{tid}] Preload stale (MCP_LIBS_NOT_READY) — "
-            f"retrying with full injection"
-        )
-        bridge = _get_bridge()
-        bridge.clear_preload()
-        try:
-            script = inject_libraries(original_script, includes)
-        except Exception as e:
-            logger.error(f"[{tid}] Full injection fallback failed: {e}")
-            return {
-                "ok": False,
-                "error": format_code(ErrorCode.R_INJECTION_FAILED, str(e)),
-                "trace_id": tid,
-            }
-        start_time = time.time()
-        response = await _execute_via_bridge(
-            script=script,
-            timeout=timeout or config.timeout,
-            command=command,
-            trace_id=tid
-        )
-        duration_ms = (time.time() - start_time) * 1000
-    
+
     # Log success/error with timing
     if response.get("error"):
         log_command(logger, tid, command_type, "error", duration_ms, logging.WARNING)
@@ -549,45 +453,23 @@ async def execute_op_batch_chunked(
 
 # ==================== Shared Result Extraction ====================
 
-# Error prefixes detected in plain-text results
-_ERROR_PREFIXES = ("Error:", "error:", "ERROR:", "ReferenceError:", "TypeError:", "SyntaxError:")
-
 
 def _extract_result(response: Dict[str, Any]) -> tuple:
     """Parse, unwrap, and classify a response into (result, error_str | None).
 
-    Centralizes the result-extraction logic shared by format_response and
-    format_envelope:
-    1. Read ``response["result"]`` (fall back to response itself)
-    2. Parse JSON strings via ``try_parse_json``
-    3. Unwrap nested envelopes via ``unwrap_result``
-    4. Detect errors: ``result.error``, ``success: False``, error prefixes
+    Delegates to classify_response (single source of truth) and adapts
+    its ResponseClassification into the legacy (result, error_str) tuple
+    expected by format_response and format_envelope.
 
     Returns:
         (result, None) on success, or (None, error_string) on detected error.
     """
-    from illustrator_mcp.errors import classify_error
+    from illustrator_mcp.response_classification import classify_response
 
-    result = response.get("result", response)
-
-    if isinstance(result, str):
-        result = try_parse_json(result)
-
-    result = unwrap_result(result)
-
-    # Dict-level error detection
-    if isinstance(result, dict):
-        if result.get("error"):
-            return None, str(result["error"])
-        if result.get("success") is False:
-            return None, str(result.get("error", "Operation failed"))
-
-    # String-level error detection (skip JSON payloads)
-    if isinstance(result, str) and not result.lstrip().startswith(("{", "[")):
-        if result.startswith(_ERROR_PREFIXES) or classify_error(result) is not None:
-            return None, result
-
-    return result, None
+    classification = classify_response(response)
+    if classification.ok:
+        return classification.result, None
+    return None, classification.error_message
 
 
 def format_response(response: dict[str, Any], context: str = "") -> str:

@@ -44,11 +44,9 @@ class ResponseClassification:
     raw: Any = None
 
 
-# Error prefixes recognized in plain-text result strings
-_ERROR_PREFIXES = (
-    "Error:", "error:", "ERROR:",
-    "ReferenceError:", "TypeError:", "SyntaxError:",
-)
+
+from illustrator_mcp.errors import ERROR_PREFIXES as _ERROR_PREFIXES
+
 
 
 def classify_response(
@@ -143,8 +141,8 @@ def classify_response(
         and isinstance(result, str)
         and not result.lstrip().startswith(("{", "["))
     ):
-        if result.startswith(_ERROR_PREFIXES) or classify_error(result) is not None:
-            code_obj = classify_error(result)
+        code_obj = classify_error(result)
+        if result.startswith(_ERROR_PREFIXES) or code_obj is not None:
             return ResponseClassification(
                 ok=False,
                 error_message=result,

@@ -64,10 +64,16 @@ async def server_lifespan(server: FastMCP) -> AsyncIterator[Dict[str, Any]]:
         logger.info("Adobe Illustrator MCP Server - LIFESPAN SHUTDOWN")
         logger.info("=" * 60)
         
-        if bridge:
-            logger.info("Stopping WebSocket bridge...")
-            bridge.stop()
-            logger.info("WebSocket bridge stopped")
+        # Use runtime.shutdown() for full cleanup (bridge + proxy)
+        try:
+            from illustrator_mcp.runtime import get_runtime
+            get_runtime().shutdown()
+            logger.info("Runtime shutdown complete (bridge + proxy)")
+        except Exception as e:
+            logger.error(f"Error during runtime shutdown: {e}")
+            # Fallback: at least try to stop the bridge directly
+            if bridge:
+                bridge.stop()
         
         logger.info("Server shutdown complete")
 

@@ -94,7 +94,10 @@ def tokenize_d(d: str) -> List[Union[str, float]]:
                     i += 1
 
             if not has_digit:
-                # Stray sign or dot with no digits — skip
+                # B8: Stray sign or dot with no trailing digits — advance past
+                # the character (start+1) so we don't re-visit it.  This is
+                # safe even at end-of-input because the outer `while i < n`
+                # will terminate.
                 i = start + 1
                 continue
 

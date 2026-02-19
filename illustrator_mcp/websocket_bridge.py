@@ -307,7 +307,7 @@ class WebSocketBridge:
         )
         # E1: Start watchdog on first heartbeat if not already running
         if self._watchdog_task is None or self._watchdog_task.done():
-            self._watchdog_task = asyncio.create_task(self._watchdog_loop())
+            self._watchdog_task = self.loop.create_task(self._watchdog_loop())
             logger.debug("Panel watchdog started")
 
     def get_panel_health(self) -> dict:

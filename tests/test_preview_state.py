@@ -33,18 +33,18 @@ class TestPreviewStateGuards:
         """'pre_execution' literal exists for failed scripts."""
         assert '"pre_execution"' in EXECUTE_SRC
 
-    def test_preview_state_depends_on_ok(self):
-        """preview_state is derived from envelope's 'ok' field."""
-        assert 'envelope_obj.get("ok")' in EXECUTE_SRC
+    def test_preview_state_depends_on_error_check(self):
+        """preview_state is derived from response's 'error' field (B1 refactor)."""
+        assert 'response.get("error")' in EXECUTE_SRC
 
     def test_preview_state_in_both_sites(self):
         """preview_state injection appears in both execute_script and execute_task."""
         count = EXECUTE_SRC.count('"preview_state"')
         assert count >= 2, f"Expected >=2 preview_state injections, found {count}"
 
-    def test_setdefault_diagnostics(self):
-        """Uses setdefault to safely inject into diagnostics dict."""
-        assert '.setdefault("diagnostics", {})["preview_state"]' in EXECUTE_SRC
+    def test_diagnostics_preview_state_assignment(self):
+        """B1: preview_state is set directly on diagnostics dict (no setdefault)."""
+        assert 'diagnostics["preview_state"]' in EXECUTE_SRC
 
 
 class TestPreviewStateLogic:

@@ -43,6 +43,21 @@ class RuntimeContext:
                 self.proxy = IllustratorProxy()
             return self.proxy
 
+    def shutdown(self) -> None:
+        """Stop the bridge (if running) and clear all references.
+
+        I8: Explicit cleanup instead of relying on garbage collection.
+        Safe to call multiple times.
+        """
+        with self._lock:
+            if self.bridge is not None:
+                try:
+                    self.bridge.stop()
+                except Exception:
+                    pass  # best-effort
+                self.bridge = None
+            self.proxy = None
+
 
 # Single global context
 _runtime = RuntimeContext()
