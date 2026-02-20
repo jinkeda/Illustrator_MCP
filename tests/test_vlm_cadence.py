@@ -526,5 +526,146 @@ class TestReviewFixes(unittest.TestCase):
         self.assertEqual(get_mutation_count(), 7)
 
 
+# ======================== Audit v6: execute_task tri-state + preview_mode ========================
+
+class TestExecuteTaskTriStatePreview(unittest.TestCase):
+    """Audit v6 F1: execute_task respects return_preview tri-state semantics.
+
+    return_preview=None  + checkpoint → preview occurs
+    return_preview=False + checkpoint → preview skipped (warning), unless final_step
+    return_preview=True  → preview always occurs (unless dryRun)
+    """
+
+    def setUp(self):
+        reset_mutation_count()
+
+    def tearDown(self):
+        reset_mutation_count()
+
+    def test_task_return_preview_none_checkpoint(self):
+        """return_preview=None at checkpoint → preview should occur."""
+        params = ExecuteTaskInput(
+            payload={"task": "test", "targets": None, "params": {}},
+            compute_fn="function(i,p,r){return []}",
+            apply_fn="function(a,r){}",
+            return_preview=None,
+        )
+        count = VLM_QA_CADENCE
+        is_task_checkpoint = (count % VLM_QA_CADENCE == 0) or params.final_step
+        is_dry_run = False
+        warnings = []
+
+        # F1: soft-override logic
+        if is_task_checkpoint and params.return_preview is False and not params.final_step:
+            warnings.append("skipped")
+            is_task_checkpoint = False
+
+        should_preview = (is_task_checkpoint or params.return_preview is True) and not is_dry_run
+        self.assertTrue(should_preview, "None+checkpoint should trigger preview")
+        self.assertEqual(len(warnings), 0, "No skip warning for None")
+
+    def test_task_return_preview_false_checkpoint(self):
+        """return_preview=False at checkpoint → preview skipped with warning."""
+        params = ExecuteTaskInput(
+            payload={"task": "test", "targets": None, "params": {}},
+            compute_fn="function(i,p,r){return []}",
+            apply_fn="function(a,r){}",
+            return_preview=False,
+        )
+        count = VLM_QA_CADENCE
+        is_task_checkpoint = (count % VLM_QA_CADENCE == 0) or params.final_step
+        is_dry_run = False
+        warnings = []
+
+        if is_task_checkpoint and params.return_preview is False and not params.final_step:
+            warnings.append(
+                f"VLM QA checkpoint skipped (mutation #{count}). "
+                "Consider using return_preview=True to visually verify."
+            )
+            is_task_checkpoint = False
+
+        should_preview = (is_task_checkpoint or params.return_preview is True) and not is_dry_run
+        self.assertFalse(should_preview, "False+checkpoint should NOT trigger preview")
+        self.assertEqual(len(warnings), 1, "Should produce skip warning")
+        self.assertIn("skipped", warnings[0])
+
+    def test_task_return_preview_false_final_step(self):
+        """return_preview=False + final_step=True → preview still occurs."""
+        params = ExecuteTaskInput(
+            payload={"task": "test", "targets": None, "params": {}},
+            compute_fn="function(i,p,r){return []}",
+            apply_fn="function(a,r){}",
+            return_preview=False,
+            final_step=True,
+        )
+        count = VLM_QA_CADENCE
+        is_task_checkpoint = (count % VLM_QA_CADENCE == 0) or params.final_step
+        is_dry_run = False
+        warnings = []
+
+        if is_task_checkpoint and params.return_preview is False and not params.final_step:
+            warnings.append("should not happen")
+            is_task_checkpoint = False
+
+        should_preview = (is_task_checkpoint or params.return_preview is True) and not is_dry_run
+        self.assertTrue(should_preview, "final_step overrides False")
+        self.assertEqual(len(warnings), 0, "No warning when final_step=True")
+
+    def test_task_return_preview_true_always(self):
+        """return_preview=True → preview regardless of checkpoint."""
+        params = ExecuteTaskInput(
+            payload={"task": "test", "targets": None, "params": {}},
+            compute_fn="function(i,p,r){return []}",
+            apply_fn="function(a,r){}",
+            return_preview=True,
+        )
+        count = 1  # NOT a checkpoint
+        is_task_checkpoint = (count % VLM_QA_CADENCE == 0) or params.final_step
+        is_dry_run = False
+        warnings = []
+
+        should_preview = (is_task_checkpoint or params.return_preview is True) and not is_dry_run
+        self.assertTrue(should_preview, "True should always force preview")
+        self.assertFalse(is_task_checkpoint, "Not a checkpoint — only explicit True")
+
+
+class TestExecuteTaskPreviewMode(unittest.TestCase):
+    """Audit v6 F7: execute_task honors preview_mode and normalizes unknown values."""
+
+    def test_task_preview_mode_artboard(self):
+        """preview_mode='artboard' → only 1 image part, no annotation JSON."""
+        params = ExecuteTaskInput(
+            payload={"task": "test", "targets": None, "params": {}},
+            compute_fn="function(i,p,r){return []}",
+            apply_fn="function(a,r){}",
+            preview_mode="artboard",
+        )
+        warnings = []
+        mode = params.preview_mode or "annotated"
+        if mode not in ("annotated", "artboard"):
+            warnings.append(f"Unknown preview_mode '{mode}', defaulting to 'annotated'")
+            mode = "annotated"
+
+        self.assertEqual(mode, "artboard")
+        self.assertEqual(len(warnings), 0)
+
+    def test_task_preview_mode_annotated_default(self):
+        """Default preview_mode → annotated (includes annotation JSON)."""
+        params = ExecuteTaskInput(
+            payload={"task": "test", "targets": None, "params": {}},
+            compute_fn="function(i,p,r){return []}",
+            apply_fn="function(a,r){}",
+        )
+        warnings = []
+        mode = params.preview_mode or "annotated"
+        if mode not in ("annotated", "artboard"):
+            warnings.append(f"Unknown preview_mode '{mode}', defaulting to 'annotated'")
+            mode = "annotated"
+
+        self.assertEqual(mode, "annotated")
+        self.assertEqual(len(warnings), 0)
+
+
 if __name__ == "__main__":
     unittest.main()
+

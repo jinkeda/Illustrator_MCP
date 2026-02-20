@@ -55,7 +55,8 @@ class _MutationCounter:
 
     @property
     def value(self) -> int:
-        return self._count
+        with self._lock:
+            return self._count
 
     def reset(self) -> None:
         with self._lock:
@@ -255,21 +256,27 @@ class ExecuteScriptInput(ToolInputBase):
     )
 
 
-async def _capture_artboard_png(
-    max_dim: int = 1024,
-    timeout: Optional[float] = None,
-) -> Optional[bytes]:
-    """Export the active artboard as PNG bytes.
+def _build_export_script(tmp_path: str, max_dim: int, fmt: str = "png") -> str:
+    """Build ExtendScript for artboard export.
 
-    Standalone helper — no dependency on ExecuteScriptInput.
-    Returns raw PNG bytes, or None on failure.
+    Centralizes the export JSX template (DRY for PNG/JPG).
+    tmp_path is embedded as a JSON string literal to prevent path injection.
+
+    Args:
+        tmp_path: Forward-slash OS path for the temp file.
+        max_dim: Maximum pixel dimension for scaling.
+        fmt: ``"png"`` or ``"jpg"``.
     """
-    tmp = tempfile.NamedTemporaryFile(suffix=".png", delete=False)
-    tmp_path = tmp.name.replace("\\", "/")
-    tmp.close()
-
-    try:
-        export_script = f"""
+    _FMT_MAP = {
+        "png": ("ExportOptionsPNG24", "ExportType.PNG24"),
+        "jpg": ("ExportOptionsJPEG", "ExportType.JPEG"),
+    }
+    opts_class, export_type = _FMT_MAP[fmt]
+    # json.dumps produces a valid JS string literal including quotes.
+    # This is the canonical pattern; documents.py uses escape_path_for_jsx
+    # (which also wraps json.dumps) for pre-quoted contexts.
+    path_literal = json.dumps(tmp_path)
+    return f"""
 (function() {{
     var doc = app.activeDocument;
     var abIdx = doc.artboards.getActiveArtboardIndex();
@@ -279,21 +286,38 @@ async def _capture_artboard_png(
     var maxDim = Math.max(abW, abH);
     if (maxDim < 1) maxDim = 1;
     var scale = Math.min({max_dim} / maxDim * 100, 100);
-
-    var opts = new ExportOptionsPNG24();
+    var opts = new {opts_class}();
     opts.horizontalScale = scale;
     opts.verticalScale = scale;
     opts.artBoardClipping = true;
-
-    var file = new File("{tmp_path}");
-    doc.exportFile(file, ExportType.PNG24, opts);
+    var file = new File({path_literal});
+    doc.exportFile(file, {export_type}, opts);
     return JSON.stringify({{success: true}});
 }})();
 """
+
+
+async def _capture_artboard(
+    max_dim: int = 1024,
+    timeout: Optional[float] = None,
+    fmt: str = "png",
+) -> Optional[bytes]:
+    """Export the active artboard as image bytes (PNG or JPG).
+
+    Standalone helper — no dependency on ExecuteScriptInput.
+    Returns raw image bytes, or None on failure.
+    """
+    suffix = ".jpg" if fmt == "jpg" else ".png"
+    tmp = tempfile.NamedTemporaryFile(suffix=suffix, delete=False)
+    tmp_path = tmp.name.replace("\\", "/")
+    tmp.close()
+
+    try:
+        export_script = _build_export_script(tmp_path, max_dim, fmt)
         resp = await execute_script_with_context(
             script=export_script,
             command_type="preview_export",
-            tool_name="_capture_artboard_png",
+            tool_name="_capture_artboard",
             timeout=timeout or 30.0,
         )
         if resp.get("error"):
@@ -313,84 +337,37 @@ async def _capture_artboard_png(
             pass
 
 
+async def _capture_artboard_png(
+    max_dim: int = 1024,
+    timeout: Optional[float] = None,
+) -> Optional[bytes]:
+    """Backward-compat alias. Will be removed in a future release."""
+    return await _capture_artboard(max_dim=max_dim, timeout=timeout, fmt="png")
+
+
 async def _generate_preview(
     params: 'ExecuteScriptInput',
     timeout: Optional[float] = None
 ) -> Optional[ImageContent]:
     """Auto-export a thumbnail for the execute-and-preview feature (P4).
 
-    Delegates to _capture_artboard_png, then wraps result as ImageContent.
+    Delegates to _capture_artboard, then wraps result as ImageContent.
     Supports PNG and JPG via params.preview_format.
     """
     import base64
 
     fmt = params.preview_format
     max_dim = params.preview_max_dim
+    mime = "image/jpeg" if fmt == "jpg" else "image/png"
 
-    if fmt == "jpg":
-        # JPG path — can't reuse _capture_artboard_png (PNG-only)
-        suffix = ".jpg"
-        mime = "image/jpeg"
-        opts_class = "ExportOptionsJPEG"
-        export_type = "ExportType.JPEG"
-
-        tmp = tempfile.NamedTemporaryFile(suffix=suffix, delete=False)
-        tmp_path = tmp.name.replace("\\", "/")
-        tmp.close()
-        try:
-            export_script = f"""
-(function() {{
-    var doc = app.activeDocument;
-    var abIdx = doc.artboards.getActiveArtboardIndex();
-    var abRect = doc.artboards[abIdx].artboardRect;
-    var abW = abRect[2] - abRect[0];
-    var abH = Math.abs(abRect[3] - abRect[1]);
-    var maxDim = Math.max(abW, abH);
-    if (maxDim < 1) maxDim = 1;
-    var scale = Math.min({max_dim} / maxDim * 100, 100);
-    var opts = new {opts_class}();
-    opts.horizontalScale = scale;
-    opts.verticalScale = scale;
-    opts.artBoardClipping = true;
-    var file = new File("{tmp_path}");
-    doc.exportFile(file, {export_type}, opts);
-    return JSON.stringify({{success: true}});
-}})();
-"""
-            resp = await execute_script_with_context(
-                script=export_script,
-                command_type="preview_export",
-                tool_name="illustrator_execute_script",
-                timeout=timeout or 30.0,
-            )
-            if resp.get("error"):
-                return None
-            if not os.path.isfile(tmp.name):
-                return None
-            with open(tmp.name, "rb") as f:
-                img_bytes = f.read()
-            if not img_bytes:
-                return None
-            return ImageContent(
-                type="image",
-                data=base64.b64encode(img_bytes).decode('utf-8'),
-                mimeType=mime,
-            )
-        finally:
-            try:
-                os.unlink(tmp.name)
-            except OSError:
-                pass
-    else:
-        # PNG path — delegate to _capture_artboard_png
-        img_bytes = await _capture_artboard_png(max_dim=max_dim, timeout=timeout)
-        if not img_bytes:
-            return None
-        return ImageContent(
-            type="image",
-            data=base64.b64encode(img_bytes).decode('utf-8'),
-            mimeType="image/png",
-        )
+    img_bytes = await _capture_artboard(max_dim=max_dim, timeout=timeout, fmt=fmt)
+    if not img_bytes:
+        return None
+    return ImageContent(
+        type="image",
+        data=base64.b64encode(img_bytes).decode('utf-8'),
+        mimeType=mime,
+    )
 
 
 # JSX script to collect visible item bounds for annotation overlay
@@ -1082,39 +1059,72 @@ JSON.stringify(report);
                 diagnostics["preview_state"] = "pre_execution"
             else:
                 diagnostics["preview_state"] = "post_execution" if report.ok else "error"
+
+            # ── VLM QA Cadence: soft-override for execute_task ──────────
+            # return_preview tri-state semantics:
+            #   None  → allow checkpoint preview (default)
+            #   True  → force preview (unless dryRun)
+            #   False → suppress checkpoint preview (unless final_step)
+            warnings = []
+
+            if is_task_checkpoint and params.return_preview is False and not params.final_step:
+                warnings.append(
+                    f"VLM QA checkpoint skipped (mutation #{count}). "
+                    "Consider using return_preview=True to visually verify."
+                )
+                is_task_checkpoint = False
+
+            # Normalize preview mode with fallback
+            mode = params.preview_mode or "annotated"
+            if mode not in ("annotated", "artboard"):
+                warnings.append(f"Unknown preview_mode '{mode}', defaulting to 'annotated'")
+                mode = "annotated"
+
             envelope = json.dumps({
                 "ok": True,
-                "warnings": [],
+                "warnings": warnings,
                 "error": None,
                 "diagnostics": diagnostics,
                 "result": {"formatted": formatted, "report": report_data}
             })
 
             # ── Auto-Grounding: preview at cadence, manual request, or final_step ──
-            should_preview = (is_task_checkpoint or params.return_preview) and not is_dry_run
+            should_preview = (is_task_checkpoint or params.return_preview is True) and not is_dry_run
             if should_preview:
                 try:
                     import base64 as _b64
-                    raw_png = await _capture_artboard_png(max_dim=1024, timeout=30.0)
+                    raw_png = await _capture_artboard(max_dim=1024, timeout=30.0)
                     if raw_png:
-                        annotated_bytes, annotation_result = await _annotate_preview(
-                            img_bytes=raw_png,
-                            max_items=200,
-                            timeout=30.0,
-                        )
-                        ann_b64 = _b64.b64encode(annotated_bytes).decode('utf-8')
-                        result_parts = [
-                            TextContent(type="text", text=envelope),
-                            ImageContent(
-                                type="image",
-                                data=ann_b64,
-                                mimeType="image/png",
-                            ),
-                            TextContent(
-                                type="text",
-                                text=json.dumps(annotation_result, indent=2),
-                            ),
-                        ]
+                        if mode == "annotated":
+                            annotated_bytes, annotation_result = await _annotate_preview(
+                                img_bytes=raw_png,
+                                max_items=200,
+                                timeout=30.0,
+                            )
+                            ann_b64 = _b64.b64encode(annotated_bytes).decode('utf-8')
+                            result_parts = [
+                                TextContent(type="text", text=envelope),
+                                ImageContent(
+                                    type="image",
+                                    data=ann_b64,
+                                    mimeType="image/png",
+                                ),
+                                TextContent(
+                                    type="text",
+                                    text=json.dumps(annotation_result, indent=2),
+                                ),
+                            ]
+                        else:
+                            # "artboard" mode — raw PNG, no overlay
+                            raw_b64 = _b64.b64encode(raw_png).decode('utf-8')
+                            result_parts = [
+                                TextContent(type="text", text=envelope),
+                                ImageContent(
+                                    type="image",
+                                    data=raw_b64,
+                                    mimeType="image/png",
+                                ),
+                            ]
                         # Cognitive Forcing Function for SOC tasks too
                         if is_task_checkpoint:
                             result_parts.append(TextContent(
@@ -1135,7 +1145,7 @@ JSON.stringify(report);
                 ]
             return envelope
 
-        except (json.JSONDecodeError, Exception) as parse_error:
+        except Exception as parse_error:
             # Fallback: return raw result in envelope
             logger.warning(f"Failed to parse TaskReport: {parse_error}")
             return format_envelope(
@@ -1238,7 +1248,7 @@ async def _path_boolean_impl(params: PathBooleanInput) -> str:
             path_boolean, flatten_path, Region,
         )
     except ImportError as e:
-        _mutation_count -= 1
+        _counter.decrement()
         return json.dumps({
             "ok": False,
             "error": str(e),
