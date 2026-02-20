@@ -501,20 +501,33 @@ function executeSubOps(ops, ctx, mode) {
     var createdIds = [];
     var rolledBackCount = 0;
 
-    var MUTATING_OPS = {
-        "element_create": true, "element_modify": true, "element_delete": true,
-        "element_replace": true,
-        "style_set_fill": true, "style_set_stroke": true, "style_set_opacity": true,
-        "style_remove_fill": true, "style_remove_stroke": true,
-        "style_clone": true, "style_set_gradient": true,
-        "layer_create": true, "layer_delete": true, "layer_lock": true, "layer_visible": true,
-        "group_create": true, "group_ungroup": true,
-        "zorder_front": true, "zorder_back": true, "zorder_forward": true, "zorder_backward": true,
-        "text_create": true, "text_set_content": true, "text_set_style": true,
-        "align_horizontal": true, "align_vertical": true,
-        "distribute_horizontal": true, "distribute_vertical": true,
-        "compound": true
+    // === Op Classification (3-tier) ===
+    // "doc"     = participates in Illustrator undo stack → counted for rollback
+    // "session" = changes app state (not geometry) → logged, not undo-counted
+    // default   = "readonly" (assert_*, measure_*, snapshot_*, hash_*)
+    var OP_CLASS = {
+        "element_create": "doc", "element_create_multi": "doc",
+        "element_create_multi_by_ref": "doc", "element_create_batch": "doc",
+        "element_modify": "doc", "element_delete": "doc", "element_replace": "doc",
+        "style_set_fill": "doc", "style_set_stroke": "doc", "style_set_opacity": "doc",
+        "style_remove_fill": "doc", "style_remove_stroke": "doc",
+        "style_clone": "doc", "style_set_gradient": "doc",
+        "group_create": "doc", "group_ungroup": "doc", "clip_create": "doc",
+        "zorder_front": "doc", "zorder_back": "doc",
+        "zorder_forward": "doc", "zorder_backward": "doc",
+        "text_create": "doc", "text_set_content": "doc", "text_set_style": "doc",
+        "align_horizontal": "doc", "align_vertical": "doc",
+        "distribute_horizontal": "doc", "distribute_vertical": "doc",
+        "compound": "doc",
+        "layer_create": "doc", "layer_delete": "doc",
+        "layer_lock": "doc", "layer_visible": "doc",
+        "layer_activate": "session"
     };
+
+    function getOpClass(task) {
+        return OP_CLASS[task] || "readonly";
+    }
+
 
     var chunkIndex = 0;
 
@@ -680,7 +693,7 @@ function executeSubOps(ops, ctx, mode) {
                 } else if (opResult.id) {
                     createdIds.push(opResult.id);
                 }
-                if (MUTATING_OPS[op.task]) {
+                if (getOpClass(op.task) === "doc") {
                     undoCount++;
                 }
             } else {

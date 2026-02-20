@@ -174,6 +174,18 @@ OP_SCHEMAS: List[OpSchema] = [
         "name":     _p(S),
     }),
     OpSchema(name="element_delete", description="Delete targeted elements"),
+    OpSchema(name="element_create_multi", description="Create multiple paths from Geometry IR", params={
+        "geometry":     _p(O, required=True, desc="Geometry IR multi object"),
+        "layer":        _p(S),
+        "name":         _p(S),
+        "fill":         _p(O),
+        "stroke":       _p(O),
+        "styles":       _p(A, desc="Per-path style overrides"),
+        "styleScalars": _p(A, desc="Per-path scalar t for palette lerp"),
+        "palette":      _p(O, desc="Palette for scalar-based styling"),
+        "offset":       _p(N, desc="Start index for chunked creation"),
+        "limit":        _p(N, desc="Max paths per chunk"),
+    }),
     OpSchema(name="element_replace", description="Atomically replace a single target element", params={
         "type":             _p(S, required=True, enum=["rect", "ellipse", "line", "path",
                                 "polyline", "polygon", "star", "roundedRect", "text"]),
@@ -200,6 +212,26 @@ OP_SCHEMAS: List[OpSchema] = [
         "fontName":         _p(S),
         "opacity":          _p(N),
         "inheritPosition":  _p(B),
+    }),
+    OpSchema(name="element_create_multi_by_ref", description="Create paths from stash IR", params={
+        "irKey":        _p(S, required=True, desc="Session stash key"),
+        "offset":       _p(N, desc="Start index for chunked creation"),
+        "limit":        _p(N, desc="Max paths per chunk"),
+        "layer":        _p(S),
+        "name":         _p(S),
+        "fill":         _p(O),
+        "stroke":       _p(O),
+        "styles":       _p(A, desc="Per-path style overrides"),
+        "styleScalars": _p(A, desc="Per-path scalar t for palette lerp"),
+        "palette":      _p(O, desc="Palette for scalar-based styling"),
+    }),
+    OpSchema(name="element_create_batch", description="Batch-create items (template or items mode)", params={
+        "template":     _p(O, desc="Template shape {type, fill?, stroke?, ...}"),
+        "instances":    _p(A, desc="Array of {x, y, fill?, stroke?, scale?}"),
+        "items":        _p(A, desc="Heterogeneous batch [{type, ...}, ...]"),
+        "defaultStyle": _p(O, desc="Default style for items without explicit style"),
+        "layer":        _p(S),
+        "name":         _p(S),
     }),
 
     # --- Layer ops ---
@@ -339,6 +371,11 @@ OP_SCHEMAS: List[OpSchema] = [
         "tolerance": _p(N),
         "spacing":   _p(N),
         "repair":    _p(B),
+    }),
+    OpSchema(name="assert_z_order", description="Assert z-order between items", params={
+        "above": _p(S, desc="MCP ID that should be above"),
+        "below": _p(S, desc="MCP ID that should be below"),
+        "pairs": _p(A, desc="Array of [aboveId, belowId] pairs for batch check"),
     }),
 
     # --- Measure/snapshot ops ---

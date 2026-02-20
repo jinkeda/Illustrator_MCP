@@ -151,13 +151,13 @@ class TestWithTransaction:
 
 
 class TestMutatingOpsInclusion:
-    """Verify element_replace is in MUTATING_OPS."""
+    """Verify element_replace is in OP_CLASS."""
 
-    def test_element_replace_in_mutating_ops(self):
-        """element_replace should be in MUTATING_OPS."""
+    def test_element_replace_in_op_class(self):
+        """element_replace should be in OP_CLASS as 'doc'."""
         content = _read(OPS_CORE_PATH)
-        assert '"element_replace": true' in content, (
-            "element_replace not in MUTATING_OPS"
+        assert '"element_replace": "doc"' in content, (
+            "element_replace not in OP_CLASS"
         )
 
 

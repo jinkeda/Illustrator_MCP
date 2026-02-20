@@ -94,14 +94,14 @@ class TestGradientType:
         assert "GradientType.RADIAL" in section
 
 
-# ==================== MUTATING_OPS ====================
+# ==================== OP_CLASS ====================
 
 class TestGradientMutatingOps:
-    """style_set_gradient must be in MUTATING_OPS for undo tracking."""
+    """style_set_gradient must be in OP_CLASS for undo tracking."""
 
-    def test_in_mutating_ops(self):
+    def test_in_op_class(self):
         src = _read(OPS_CORE)
-        start = src.index("MUTATING_OPS")
+        start = src.index("OP_CLASS")
         section = src[start:start + 800]
         assert '"style_set_gradient"' in section
 

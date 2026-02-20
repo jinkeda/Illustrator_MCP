@@ -198,20 +198,20 @@ class TestStyleClone:
         assert "mixed formatting" in section
 
 
-# ==================== MUTATING_OPS ====================
+# ==================== OP_CLASS ====================
 
 class TestMutatingOps:
-    """style_clone should be in MUTATING_OPS, style_snapshot should NOT."""
+    """style_clone should be in OP_CLASS, style_snapshot should NOT."""
 
-    def test_style_clone_in_mutating_ops(self):
+    def test_style_clone_in_op_class(self):
         src = _read(OPS_CORE)
-        start = src.index("MUTATING_OPS")
+        start = src.index("OP_CLASS")
         section = src[start:start + 800]
         assert '"style_clone"' in section
 
-    def test_style_snapshot_not_in_mutating_ops(self):
+    def test_style_snapshot_not_in_op_class(self):
         src = _read(OPS_CORE)
-        start = src.index("MUTATING_OPS")
+        start = src.index("OP_CLASS")
         section = src[start:start + 800]
         assert '"style_snapshot"' not in section
 

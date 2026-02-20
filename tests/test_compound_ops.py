@@ -58,10 +58,10 @@ class TestGuardCompoundSchema:
 
 
 class TestGuardCompoundInMutatingOps:
-    """Test 2: compound is in MUTATING_OPS."""
+    """Test 2: compound is in OP_CLASS as 'doc'."""
 
-    def test_compound_in_mutating_ops(self):
-        assert '"compound": true' in OPS_CORE or '"compound":true' in OPS_CORE
+    def test_compound_in_op_class(self):
+        assert '"compound": "doc"' in OPS_CORE or '"compound":"doc"' in OPS_CORE
 
 
 class TestGuardExecuteSubOps:
