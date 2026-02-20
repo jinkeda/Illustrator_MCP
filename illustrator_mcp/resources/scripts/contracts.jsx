@@ -3,13 +3,13 @@
  * Part of Illustrator MCP SOC Framework
  * 
  * AUTO-GENERATED - DO NOT EDIT MANUALLY
- * Generated: 2026-02-14T14:29:55Z
+ * Generated: 2026-02-20T10:43:58Z
  * Source: illustrator_mcp/schemas/contracts.py
  * 
  * To regenerate: python -m illustrator_mcp.tools.compile_contracts
  */
 
-var CONTRACTS_CHECKSUM = "0f4c8b1c1ae5a5b8";
+var CONTRACTS_CHECKSUM = "2512535b676b668d";
 
 // ==================== Error Codes ====================
 
@@ -68,6 +68,7 @@ var OP_PARAM_SCHEMAS = {
             "fill",
             "stroke",
             "points",
+            "geometry",
             "sides",
             "radius",
             "outerRadius",
@@ -93,6 +94,7 @@ var OP_PARAM_SCHEMAS = {
             "fill": "object",
             "stroke": "object",
             "points": "array",
+            "geometry": "object",
             "sides": "number",
             "radius": "number",
             "outerRadius": "number",
@@ -147,6 +149,144 @@ var OP_PARAM_SCHEMAS = {
         "required": [],
         "optional": [],
         "types": {}
+    },
+    "element_create_multi": {
+        "required": ["geometry"],
+        "optional": [
+            "layer",
+            "name",
+            "fill",
+            "stroke",
+            "styles",
+            "styleScalars",
+            "palette",
+            "offset",
+            "limit"
+        ],
+        "types": {
+            "geometry": "object",
+            "layer": "string",
+            "name": "string",
+            "fill": "object",
+            "stroke": "object",
+            "styles": "array",
+            "styleScalars": "array",
+            "palette": "object",
+            "offset": "number",
+            "limit": "number"
+        }
+    },
+    "element_replace": {
+        "required": ["type"],
+        "optional": [
+            "id",
+            "x",
+            "y",
+            "width",
+            "height",
+            "name",
+            "fill",
+            "stroke",
+            "points",
+            "sides",
+            "radius",
+            "outerRadius",
+            "innerRadius",
+            "cornerRadius",
+            "closed",
+            "x2",
+            "y2",
+            "contents",
+            "text",
+            "fontSize",
+            "fontName",
+            "opacity",
+            "inheritPosition"
+        ],
+        "types": {
+            "type": "string",
+            "id": "string",
+            "x": "number",
+            "y": "number",
+            "width": "number",
+            "height": "number",
+            "name": "string",
+            "fill": "object",
+            "stroke": "object",
+            "points": "array",
+            "sides": "number",
+            "radius": "number",
+            "outerRadius": "number",
+            "innerRadius": "number",
+            "cornerRadius": "number",
+            "closed": "boolean",
+            "x2": "number",
+            "y2": "number",
+            "contents": "string",
+            "text": "string",
+            "fontSize": "number",
+            "fontName": "string",
+            "opacity": "number",
+            "inheritPosition": "boolean"
+        },
+        "enumValues": {
+            "type": [
+                "rect",
+                "ellipse",
+                "line",
+                "path",
+                "polyline",
+                "polygon",
+                "star",
+                "roundedRect",
+                "text"
+            ]
+        }
+    },
+    "element_create_multi_by_ref": {
+        "required": ["irKey"],
+        "optional": [
+            "offset",
+            "limit",
+            "layer",
+            "name",
+            "fill",
+            "stroke",
+            "styles",
+            "styleScalars",
+            "palette"
+        ],
+        "types": {
+            "irKey": "string",
+            "offset": "number",
+            "limit": "number",
+            "layer": "string",
+            "name": "string",
+            "fill": "object",
+            "stroke": "object",
+            "styles": "array",
+            "styleScalars": "array",
+            "palette": "object"
+        }
+    },
+    "element_create_batch": {
+        "required": [],
+        "optional": [
+            "template",
+            "instances",
+            "items",
+            "defaultStyle",
+            "layer",
+            "name"
+        ],
+        "types": {
+            "template": "object",
+            "instances": "array",
+            "items": "array",
+            "defaultStyle": "object",
+            "layer": "string",
+            "name": "string"
+        }
     },
     "layer_create": {
         "required": ["name"],
@@ -224,6 +364,31 @@ var OP_PARAM_SCHEMAS = {
         "optional": [],
         "types": {}
     },
+    "style_snapshot": {
+        "required": [],
+        "optional": [],
+        "types": {}
+    },
+    "style_clone": {
+        "required": ["from"],
+        "optional": ["properties"],
+        "types": {
+            "from": "string",
+            "properties": "array"
+        }
+    },
+    "style_set_gradient": {
+        "required": ["type", "stops"],
+        "optional": ["angle", "origin", "length", "name"],
+        "types": {
+            "type": "string",
+            "stops": "array",
+            "angle": "number",
+            "origin": "object",
+            "length": "number",
+            "name": "string"
+        }
+    },
     "group_create": {
         "required": [],
         "optional": ["name"],
@@ -235,6 +400,17 @@ var OP_PARAM_SCHEMAS = {
         "required": [],
         "optional": [],
         "types": {}
+    },
+    "clip_create": {
+        "required": ["mask", "contents"],
+        "optional": ["id", "name", "dryRun"],
+        "types": {
+            "mask": "string",
+            "contents": "array",
+            "id": "string",
+            "name": "string",
+            "dryRun": "boolean"
+        }
     },
     "zorder_front": {
         "required": [],
@@ -258,12 +434,25 @@ var OP_PARAM_SCHEMAS = {
     },
     "text_create": {
         "required": ["contents"],
-        "optional": ["id", "x", "y", "fontSize", "fontName", "r", "g", "b"],
+        "optional": [
+            "id",
+            "x",
+            "y",
+            "layer",
+            "name",
+            "fontSize",
+            "fontName",
+            "r",
+            "g",
+            "b"
+        ],
         "types": {
             "contents": "string",
             "id": "string",
             "x": "number",
             "y": "number",
+            "layer": "string",
+            "name": "string",
             "fontSize": "number",
             "fontName": "string",
             "r": "number",
@@ -388,6 +577,15 @@ var OP_PARAM_SCHEMAS = {
             "mode": ["left", "centerX", "right", "top", "centerY", "bottom"]
         }
     },
+    "assert_z_order": {
+        "required": [],
+        "optional": ["above", "below", "pairs"],
+        "types": {
+            "above": "string",
+            "below": "string",
+            "pairs": "array"
+        }
+    },
     "measure_bounds": {
         "required": [],
         "optional": [],
@@ -411,6 +609,31 @@ var OP_PARAM_SCHEMAS = {
         "types": {
             "ops": "array",
             "atomic": "boolean"
+        }
+    },
+    "path_boolean": {
+        "required": ["operation", "subject", "clip"],
+        "optional": [
+            "flatten_tolerance",
+            "max_segments",
+            "delete_originals",
+            "style",
+            "layer",
+            "name"
+        ],
+        "types": {
+            "operation": "string",
+            "subject": "string",
+            "clip": "array",
+            "flatten_tolerance": "number",
+            "max_segments": "number",
+            "delete_originals": "boolean",
+            "style": "string",
+            "layer": "string",
+            "name": "string"
+        },
+        "enumValues": {
+            "operation": ["subtract", "unite", "intersect", "xor"]
         }
     }
 };
