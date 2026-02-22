@@ -512,3 +512,169 @@ async def illustrator_update_linked_items() -> str:
         tool_name="illustrator_update_linked_items",
         params={}
     )
+
+
+# ==================== Reference Overlay ====================
+
+_REFERENCE_LAYER_NAME = "__reference__"
+
+_SET_REFERENCE_JSX = """
+(function(payload) {
+    var doc = app.activeDocument;
+    var layerName = payload.layer_name;
+    var originalActiveName = doc.activeLayer.name;
+
+    // 1. Pre-flight file check
+    var imgFile = null;
+    if (payload.file_path) {
+        imgFile = new File(payload.file_path);
+        if (!imgFile.exists) {
+            return JSON.stringify({
+                ok: false, status: "error",
+                message: "File not found: " + payload.file_path
+            });
+        }
+    }
+
+    // 2. Idempotent cleanup (unlock before delete, 0-layer guard)
+    try {
+        var existing = doc.layers.getByName(layerName);
+        existing.locked = false;
+        existing.visible = true;
+        if (doc.layers.length === 1) {
+            doc.layers.add().name = "Drawing Layer";
+        }
+        existing.remove();
+    } catch(e) {}
+
+    // 3. Clear-only mode
+    if (!payload.file_path) {
+        if (doc.layers.length > 0) doc.activeLayer = doc.layers[0];
+        return JSON.stringify({
+            ok: true, status: "cleared", layer_name: layerName
+        });
+    }
+
+    // 4. Create layer, send to bottom
+    var refLayer = doc.layers.add();
+    refLayer.name = layerName;
+    if (doc.layers.length > 1) {
+        refLayer.move(doc.layers[doc.layers.length - 1], ElementPlacement.PLACEAFTER);
+    }
+    refLayer.printable = false;
+
+    // 5. Place image, opacity on ITEM (not layer)
+    var pItem = refLayer.placedItems.add();
+    pItem.file = imgFile;
+
+    // 6. Redraw to materialize bounds
+    app.redraw();
+
+    pItem.opacity = payload.opacity;
+
+    // 7. Proportional fit + center on active artboard
+    var abRect = doc.artboards[doc.artboards.getActiveArtboardIndex()].artboardRect;
+    var abW = Math.abs(abRect[2] - abRect[0]);
+    var abH = Math.abs(abRect[3] - abRect[1]);
+
+    if (payload.fit && pItem.width > 0 && pItem.height > 0) {
+        var scale = Math.min(abW / pItem.width, abH / pItem.height) * 100;
+        pItem.resize(scale, scale);
+    }
+    pItem.position = [
+        abRect[0] + (abW - pItem.width) / 2,
+        abRect[1] - (abH - pItem.height) / 2
+    ];
+
+    // 8. Lock layer
+    refLayer.locked = true;
+
+    // 9. Restore active layer by NAME (avoids stale object refs)
+    var safeLayerFound = false;
+    for (var i = 0; i < doc.layers.length; i++) {
+        var L = doc.layers[i];
+        if (L.name === originalActiveName && L.name !== layerName
+            && !L.locked && L.visible) {
+            doc.activeLayer = L;
+            safeLayerFound = true;
+            break;
+        }
+    }
+    if (!safeLayerFound) {
+        for (var i = 0; i < doc.layers.length; i++) {
+            var L = doc.layers[i];
+            if (L.name !== layerName && !L.locked && L.visible) {
+                doc.activeLayer = L;
+                safeLayerFound = true;
+                break;
+            }
+        }
+    }
+    if (!safeLayerFound) {
+        var drawLayer = doc.layers.add();
+        drawLayer.name = "Drawing Layer";
+        doc.activeLayer = drawLayer;
+    }
+
+    return JSON.stringify({
+        ok: true, status: "set", layer_name: layerName,
+        opacity: payload.opacity,
+        artboard: { width: abW, height: abH },
+        image_bounds: {
+            left: pItem.left, top: pItem.top,
+            width: pItem.width, height: pItem.height,
+            center_x: pItem.left + pItem.width / 2,
+            center_y: pItem.top - pItem.height / 2
+        }
+    });
+})(%s);
+"""
+
+
+class SetReferenceInput(ToolInputBase):
+    """Input for setting or clearing a reference overlay image."""
+    file_path: Optional[str] = Field(
+        default=None,
+        description="Path to reference image (PNG/JPG). Omit to remove existing reference."
+    )
+    opacity: float = Field(
+        default=40.0,
+        description="Image opacity 0-100 (default 40 for dim tracing)",
+        ge=0, le=100
+    )
+    fit: bool = Field(
+        default=True,
+        description="Scale image proportionally to fit active artboard"
+    )
+
+
+@mcp.tool(
+    name="illustrator_set_reference",
+    annotations={"title": "Set Reference Overlay", "readOnlyHint": False, "destructiveHint": False}
+)
+async def illustrator_set_reference(params: SetReferenceInput) -> str:
+    """Set or clear a reference image on a locked background layer for tracing.
+
+    Places a reference image on a dedicated '__reference__' layer at the bottom
+    of the layer stack. The layer is locked, dimmed, and non-printable to prevent
+    accidental edits or export contamination.
+
+    Modes:
+    - Set: Provide file_path to place/replace a reference image
+    - Clear: Omit file_path (or pass null) to remove the reference layer
+
+    Idempotent: calling again replaces the previous reference automatically.
+    Uses the active artboard for fit/center calculations.
+    """
+    payload = params.model_dump()
+    payload["layer_name"] = _REFERENCE_LAYER_NAME
+    payload_json = json.dumps(payload)
+
+    script = _SET_REFERENCE_JSX % payload_json
+
+    return await execute_jsx_tool(
+        script=script,
+        command_type="set_reference",
+        tool_name="illustrator_set_reference",
+        params=payload
+    )
