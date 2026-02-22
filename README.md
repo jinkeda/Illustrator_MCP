@@ -393,6 +393,22 @@ execute_script(
 
 The cadence counter is module-level and resets on server restart. Configurable via `VLM_QA_CADENCE` in `execute.py`.
 
+### VLM Grounding Pipeline
+
+The `vlm_grounding` module provides three features that transform VLM checkpoints from "look at this screenshot" into a math-verifiable QA loop:
+
+| Feature | Functions | What It Does |
+|---|---|---|
+| **Hybrid Grounding** | `build_dom_map`, `build_relationship_map` | Pairs each overlay label `[1]`, `[2]`, ... with DOM metadata (screen-space bounds, fill, font, text). Computes pairwise spatial relationships via spatial binning. |
+| **Proposer / Verifier** | `VLMHypothesis`, `verify_hypothesis` | VLM proposes structured hypotheses (misalignment, overlap, spacing, off-artboard, style mismatch). Pure-Python verifier confirms or discards each claim using bounds math. |
+| **Before / After Diffing** | `capture_dom_snapshot`, `diff_dom_snapshots` | Captures DOM state before mutations, diffs after. Two-pass matching: stable `mcp_id` first, then IoU + center proximity scoring for destructive operations. |
+
+Key design decisions:
+- **`mcp_id` is the primary key** — overlay IDs are a view layer for VLM communication only
+- **Screen-space Y-down coordinates** — all bounds normalized to `[x, y, width, height]` matching the exported image
+- **Tolerance-aware verification** — `abs_tol=1.0pt` default, per-hypothesis override via `align_tol`
+- **Spatial binning** — O(n) relationship generation with 2,000-pair hard cap
+
 ---
 
 ## Examples
@@ -550,6 +566,7 @@ Illustrator_MCP/
 │   ├── errors.py                 # Structured error codes + suggestions
 │   ├── templates.py              # Reusable ExtendScript templates
 │   ├── response_models.py        # Pydantic models for responses
+│   ├── vlm_grounding.py          # VLM QA pipeline: hybrid grounding, hypothesis verifier, DOM diffing
 │   ├── svgd.py                   # SVG path data parser (d attribute → geometry IR, arc→cubic)
 │   ├── curves.py                 # Bézier curve helpers (rounded polygon, arc points)
 │   ├── utils.py                  # Path escaping, validation helpers
@@ -590,7 +607,7 @@ Illustrator_MCP/
 │   │   ├── components/MCPControlPanel.tsx
 │   │   └── hooks/useMCP.ts       # WebSocket connection hook
 │   └── vite.config.ts
-├── tests/                        # Unit tests (pytest, 734 tests)
+├── tests/                        # Unit tests (pytest, 743 tests)
 │   ├── conftest.py               # Shared fixtures + collection-error guard
 │   ├── test_execute.py
 │   ├── test_documents.py
@@ -607,6 +624,7 @@ Illustrator_MCP/
 │   ├── test_import_svg.py        # SVG import tool tests (9 tests)
 │   ├── test_clip_ops.py          # Clipping mask schema + handler guard tests
 │   ├── test_grid_helper.py       # Grid discovery tests
+│   ├── test_vlm_grounding.py     # VLM grounding pipeline tests (42 tests)
 │   └── test_brand_social_kit_fixes.py
 ├── scripts/
 │   └── gen_schemas.py            # Schema codegen (Python -> JSX)
