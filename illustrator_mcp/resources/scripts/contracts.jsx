@@ -3,13 +3,13 @@
  * Part of Illustrator MCP SOC Framework
  * 
  * AUTO-GENERATED - DO NOT EDIT MANUALLY
- * Generated: 2026-02-20T10:43:58Z
+ * Generated: 2026-02-22T21:53:40Z
  * Source: illustrator_mcp/schemas/contracts.py
  * 
  * To regenerate: python -m illustrator_mcp.tools.compile_contracts
  */
 
-var CONTRACTS_CHECKSUM = "2512535b676b668d";
+var CONTRACTS_CHECKSUM = "e8b2869f5ececbe2";
 
 // ==================== Error Codes ====================
 
@@ -479,34 +479,54 @@ var OP_PARAM_SCHEMAS = {
         }
     },
     "align_horizontal": {
-        "required": ["mode"],
-        "optional": [],
+        "required": [],
+        "optional": ["mode", "reference", "key_id", "coordinate"],
         "types": {
-            "mode": "string"
+            "mode": "string",
+            "reference": "string",
+            "key_id": "string",
+            "coordinate": "number"
         },
         "enumValues": {
-            "mode": ["left", "center", "right"]
+            "mode": ["left", "center", "right"],
+            "reference": ["targets", "artboard"]
         }
     },
     "align_vertical": {
-        "required": ["mode"],
-        "optional": [],
+        "required": [],
+        "optional": ["mode", "reference", "key_id", "coordinate"],
         "types": {
-            "mode": "string"
+            "mode": "string",
+            "reference": "string",
+            "key_id": "string",
+            "coordinate": "number"
         },
         "enumValues": {
-            "mode": ["top", "middle", "bottom"]
+            "mode": ["top", "middle", "bottom"],
+            "reference": ["targets", "artboard"]
         }
     },
     "distribute_horizontal": {
         "required": [],
-        "optional": [],
-        "types": {}
+        "optional": ["mode", "spacing"],
+        "types": {
+            "mode": "string",
+            "spacing": "number"
+        },
+        "enumValues": {
+            "mode": ["gap", "center"]
+        }
     },
     "distribute_vertical": {
         "required": [],
-        "optional": [],
-        "types": {}
+        "optional": ["mode", "spacing"],
+        "types": {
+            "mode": "string",
+            "spacing": "number"
+        },
+        "enumValues": {
+            "mode": ["gap", "center"]
+        }
     },
     "assert_count": {
         "required": ["expected"],

@@ -333,13 +333,25 @@ OP_SCHEMAS: List[OpSchema] = [
 
     # --- Alignment ops ---
     OpSchema(name="align_horizontal", description="Align items horizontally", params={
-        "mode": _p(S, required=True, enum=["left", "center", "right"]),
+        "mode":       _p(S, enum=["left", "center", "right"], desc="Alignment edge/center"),
+        "reference":  _p(S, enum=["targets", "artboard"], desc="Reference source"),
+        "key_id":     _p(S, desc="MCP ID of key object (others align to it)"),
+        "coordinate": _p(N, desc="Explicit X coordinate (doc space, overrides key_id/reference)"),
     }),
     OpSchema(name="align_vertical", description="Align items vertically", params={
-        "mode": _p(S, required=True, enum=["top", "middle", "bottom"]),
+        "mode":       _p(S, enum=["top", "middle", "bottom"], desc="Alignment edge/center"),
+        "reference":  _p(S, enum=["targets", "artboard"], desc="Reference source"),
+        "key_id":     _p(S, desc="MCP ID of key object (others align to it)"),
+        "coordinate": _p(N, desc="Explicit Y coordinate (doc space, overrides key_id/reference)"),
     }),
-    OpSchema(name="distribute_horizontal", description="Distribute items horizontally"),
-    OpSchema(name="distribute_vertical", description="Distribute items vertically"),
+    OpSchema(name="distribute_horizontal", description="Distribute items horizontally", params={
+        "mode":    _p(S, enum=["gap", "center"], desc="Gap between edges or center-to-center"),
+        "spacing": _p(N, desc="Fixed spacing; omit to auto-distribute within span"),
+    }),
+    OpSchema(name="distribute_vertical", description="Distribute items vertically", params={
+        "mode":    _p(S, enum=["gap", "center"], desc="Gap between edges or center-to-center"),
+        "spacing": _p(N, desc="Fixed spacing; omit to auto-distribute within span"),
+    }),
 
     # --- Assert ops ---
     OpSchema(name="assert_count", description="Assert item count", params={

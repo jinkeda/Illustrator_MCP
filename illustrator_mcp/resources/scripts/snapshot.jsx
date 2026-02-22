@@ -144,7 +144,8 @@ function captureSnapshot(doc, options) {
         docName: doc.name,
         artboardIndex: doc.artboards.getActiveArtboardIndex(),
         items: [],
-        layers: []
+        layers: [],
+        warnings: []
     };
 
     // Capture layer state
@@ -181,6 +182,10 @@ function captureSnapshot(doc, options) {
         scanContainer(doc.layers[i]);
     }
 
+    if (snapshot.items.length === 0) {
+        snapshot.warnings.push("No MCP-managed items captured");
+    }
+
     return snapshot;
 }
 
@@ -210,15 +215,20 @@ function restoreSnapshot(doc, snapshot, options) {
     var notFound = [];
     var errors = [];
 
-    // Build ID index for O(1) lookups
+    // Build ID index for O(1) lookups — detect duplicates
     var idIndex = {};
+    var duplicateIds = [];
     function buildIndex(container) {
         if (!container || !container.pageItems) return;
         for (var i = 0; i < container.pageItems.length; i++) {
             var item = container.pageItems[i];
             var id = extractMcpId(item.note);
             if (id) {
-                idIndex[id] = item;
+                if (idIndex[id]) {
+                    duplicateIds.push(id);
+                } else {
+                    idIndex[id] = item;
+                }
             }
             if (item.typename === "GroupItem") {
                 buildIndex(item);
@@ -229,7 +239,20 @@ function restoreSnapshot(doc, snapshot, options) {
         buildIndex(doc.layers[i]);
     }
 
+    // Fail on duplicate MCP IDs
+    if (duplicateIds.length > 0) {
+        return {
+            ok: false,
+            error: "Duplicate MCP IDs found: " + duplicateIds.slice(0, 5).join(", "),
+            restored: 0,
+            failed: 0,
+            notFound: [],
+            errors: []
+        };
+    }
+
     // Restore each item
+    var warnings = [];
     for (var i = 0; i < snapshot.items.length; i++) {
         var saved = snapshot.items[i];
         var item = idIndex[saved.id];
@@ -240,24 +263,32 @@ function restoreSnapshot(doc, snapshot, options) {
             continue;
         }
 
+        // Type mismatch: warn and restore shared fields only
+        var typeMismatch = saved.typename && item.typename !== saved.typename;
+        if (typeMismatch) {
+            warnings.push("Type mismatch for " + saved.id + ": expected " + saved.typename + ", found " + item.typename);
+        }
+
         try {
-            // Restore geometry
+            // Restore geometry (shared across all types)
             if (restoreGeometry) {
                 item.left = saved.position[0];
                 item.top = saved.position[1];
-                // Size restore is opt-in (can be complex for certain item types)
-                if (restoreSize && saved.size) {
+                if (restoreSize && saved.size && !typeMismatch) {
                     try {
                         item.width = saved.size[0];
                         item.height = saved.size[1];
-                    } catch (sizeErr) {
-                        // Some item types (e.g. linked images) may not support size assignment
-                    }
+                    } catch (sizeErr) { }
                 }
             }
 
-            // Restore style
-            if (restoreStyle) {
+            // Restore opacity (shared across all types)
+            if (restoreStyle && saved.opacity !== undefined) {
+                item.opacity = saved.opacity;
+            }
+
+            // Restore fill/stroke only if types match
+            if (restoreStyle && !typeMismatch) {
                 if (saved.filled === true && saved.fillColor) {
                     var fc = deserializeColor(saved.fillColor);
                     if (fc) {
@@ -280,10 +311,6 @@ function restoreSnapshot(doc, snapshot, options) {
                 } else if (saved.stroked === false) {
                     item.stroked = false;
                 }
-
-                if (saved.opacity !== undefined) {
-                    item.opacity = saved.opacity;
-                }
             }
 
             // Restore visibility
@@ -304,13 +331,15 @@ function restoreSnapshot(doc, snapshot, options) {
         }
     }
 
-    return {
+    var result = {
         ok: failed === 0,
         restored: restored,
         failed: failed,
-        notFound: notFound.slice(0, 10),  // Limit to first 10
+        notFound: notFound.slice(0, 10),
         errors: errors.slice(0, 5)
     };
+    if (warnings.length > 0) result.warnings = warnings;
+    return result;
 }
 
 // ==================== Exports ====================

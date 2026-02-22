@@ -402,13 +402,15 @@
         },
         "ops_align": {
             "file": "ops_align.jsx",
-            "version": "1.0.0",
+            "version": "2.0.0",
             "dependencies": [
                 "ops_core",
-                "contracts"
+                "contracts",
+                "heap",
+                "mcp_id"
             ],
             "exports": [],
-            "description": "Alignment and distribution operations"
+            "description": "Alignment and distribution operations (key-object, coordinate, center-distribute)"
         },
         "ops_measure": {
             "file": "ops_measure.jsx",
@@ -452,6 +454,21 @@
                 "removeFromIdIndex"
             ],
             "description": "MCP ID utilities: extraction, assignment, note manipulation, and targeted index removal"
+        },
+        "checkpoint": {
+            "file": "checkpoint.jsx",
+            "version": "1.0.0",
+            "dependencies": [
+                "snapshot",
+                "mcp_id"
+            ],
+            "exports": [
+                "checkpointSave",
+                "checkpointRestore",
+                "checkpointList",
+                "checkpointDelete"
+            ],
+            "description": "Named checkpoint management (save/restore/list/delete)"
         },
         "generative": {
             "file": "generative.jsx",

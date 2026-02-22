@@ -416,9 +416,79 @@ async def illustrator_close_document(params: CloseDocumentInput) -> str:
 
 # Combined Undo/Redo tool
 class HistoryInput(ToolInputBase):
-    """Input for undo/redo operations."""
-    action: Literal["undo", "redo"] = Field(default="undo", description="Action: 'undo' or 'redo'")
-    count: int = Field(default=1, description="Number of times to perform action", ge=1, le=100)
+    """Input for undo/redo and named checkpoint operations."""
+    action: Literal[
+        "undo", "redo",
+        "checkpoint_save", "checkpoint_restore",
+        "checkpoint_list", "checkpoint_delete"
+    ] = Field(default="undo", description="Action to perform")
+    count: int = Field(default=1, description="Number of times to undo/redo", ge=1, le=100)
+    name: Optional[str] = Field(
+        default=None,
+        description="Checkpoint name (required for save/restore/delete)",
+        max_length=64
+    )
+
+    @classmethod
+    def model_validate(cls, *args, **kwargs):
+        instance = super().model_validate(*args, **kwargs)
+        if instance.action.startswith("checkpoint_") and instance.action != "checkpoint_list":
+            if not instance.name or not instance.name.strip():
+                raise ValueError(f"{instance.action} requires a non-empty 'name'")
+        return instance
+
+
+async def _handle_checkpoint(params: HistoryInput) -> str:
+    """Dispatch checkpoint actions to checkpoint.jsx functions."""
+    action_map = {
+        "checkpoint_save": "checkpointSave",
+        "checkpoint_restore": "checkpointRestore",
+        "checkpoint_list": "checkpointList",
+        "checkpoint_delete": "checkpointDelete",
+    }
+    jsx_fn = action_map[params.action]
+
+    if params.action == "checkpoint_list":
+        script = f"""
+(function() {{
+    var doc = app.activeDocument;
+    return __mcp_toJSON(checkpointList(doc));
+}})();
+"""
+    elif params.action == "checkpoint_save":
+        escaped_name = params.name.replace("\\", "\\\\").replace('"', '\\"')
+        script = f"""
+(function() {{
+    var doc = app.activeDocument;
+    return __mcp_toJSON(checkpointSave("{escaped_name}", doc));
+}})();
+"""
+    elif params.action == "checkpoint_restore":
+        escaped_name = params.name.replace("\\", "\\\\").replace('"', '\\"')
+        script = f"""
+(function() {{
+    var doc = app.activeDocument;
+    return __mcp_toJSON(checkpointRestore("{escaped_name}", doc));
+}})();
+"""
+    elif params.action == "checkpoint_delete":
+        escaped_name = params.name.replace("\\", "\\\\").replace('"', '\\"')
+        script = f"""
+(function() {{
+    var doc = app.activeDocument;
+    return __mcp_toJSON(checkpointDelete("{escaped_name}", doc));
+}})();
+"""
+    else:
+        return json.dumps({"ok": False, "error": f"Unknown checkpoint action: {params.action}"})
+
+    return await execute_jsx_tool(
+        script=script,
+        command_type=params.action,
+        tool_name="illustrator_history",
+        params={"action": params.action, "name": params.name},
+        includes=["checkpoint"]
+    )
 
 
 @mcp.tool(
@@ -433,7 +503,21 @@ async def illustrator_history(params: HistoryInput) -> str:
         count: Number of times to perform the action (default 1)
     
     Use this to revert mistakes or restore undone changes.
+    
+    Checkpoint actions:
+        checkpoint_save: Save current state as a named checkpoint (requires 'name')
+        checkpoint_restore: Restore document to a saved checkpoint (requires 'name')
+        checkpoint_list: List all checkpoints for the current document
+        checkpoint_delete: Delete a named checkpoint (requires 'name')
+    
+    Note: Checkpoints capture MCP-managed items only (those with @mcp:id).
+    Restore is mutate-in-place and may require multiple undo steps to revert.
     """
+    # Dispatch checkpoint actions
+    if params.action.startswith("checkpoint_"):
+        return await _handle_checkpoint(params)
+
+    # Original undo/redo logic
     if params.action not in ("undo", "redo"):
         return json.dumps({"ok": False, "error": "Invalid action. Use 'undo' or 'redo'"})
     
