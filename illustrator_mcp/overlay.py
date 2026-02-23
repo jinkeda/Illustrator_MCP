@@ -606,6 +606,14 @@ def draw_ruler_overlay(
         draw.rectangle([0, 0, band, img_h], fill=_RULER_BG)       # left band
         draw.rectangle([0, 0, band, band], fill=_RULER_BG)        # corner overlap
 
+        # ── Origin marker ──
+        origin_font = _load_font(font_sz + 2)  # slightly bolder
+        _draw_text_with_halo(draw, (pad, pad), "0", origin_font,
+                            fg=(255, 255, 255, 255))
+        # crosshair lines from corner
+        draw.line([(band, 0), (band, band)], fill=_RULER_TICK_COLOR, width=1)
+        draw.line([(0, band), (band, band)], fill=_RULER_TICK_COLOR, width=1)
+
         # ── Minor tick size ──
         minor_h = 5
         major_h = 10
@@ -691,6 +699,27 @@ def draw_ruler_overlay(
 
         _draw_axis_ticks("x", artboard_width_pt, iv_x, sx)
         _draw_axis_ticks("y", artboard_height_pt, iv_y, sy)
+
+        # ── Terminal extent markers ──
+        dim_color = (200, 200, 200, 160)
+        # X-axis: show artboard width at the right end
+        w_label = str(int(artboard_width_pt))
+        w_tw, w_th = _measure_text(font, w_label)
+        w_px = int(round(artboard_width_pt * sx))
+        if w_px - w_tw - pad > band:  # only if it fits
+            _draw_text_with_halo(draw, (w_px - w_tw - pad, pad), w_label,
+                                font, fg=dim_color)
+            draw.line([(w_px - 1, 0), (w_px - 1, band)],
+                      fill=dim_color, width=1)
+        # Y-axis: show artboard height at the bottom end
+        h_label = str(int(artboard_height_pt))
+        h_tw, h_th = _measure_text(font, h_label)
+        h_px = int(round(artboard_height_pt * sy))
+        if h_px - h_th - pad > band:
+            _draw_text_with_halo(draw, (pad, h_px - h_th - pad), h_label,
+                                font, fg=dim_color)
+            draw.line([(0, h_px - 1), (band, h_px - 1)],
+                      fill=dim_color, width=1)
 
         final_img = Image.alpha_composite(base_img, overlay)
         out_buf = io.BytesIO()

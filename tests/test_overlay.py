@@ -739,7 +739,7 @@ class TestPickInterval(unittest.TestCase):
 
     def test_huge_artboard(self):
         iv = _pick_interval(50000)
-        self.assertEqual(iv, 10000)  # fallback to largest
+        self.assertEqual(iv, 5000)  # 50000/5000 = 10 ≤ 12
 
     def test_all_candidates_within_limit(self):
         for dim in [50, 300, 600, 1200, 2400, 6000, 12000, 100000]:

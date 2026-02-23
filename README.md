@@ -368,6 +368,10 @@ This closes the visual loop: the agent sees overlapping elements, abandoned text
 
 > **Requires:** `pip install -e ".[overlay]"` for Pillow. Without it, previews return without annotations.
 
+### Coordinate Rulers
+
+All VLM auto-previews include coordinate axis rulers along the top and left edges, giving the VLM exact point-coordinate reference. Ruler labels use **screen-space**: origin at top-left of artboard, X rightward, Y downward — matching `spatial_context` (returned by `set_reference`) and `bounds_screen` (used in `vlm_grounding`). Tick intervals are adaptive (≤12 labels per axis), and labels use anti-overlap logic to stay readable on any artboard size.
+
 ### VLM QA Cadence
 
 The server automatically injects an annotated preview every **5th** `execute_script` call, even if the caller didn't request one. This forces the AI to periodically *see* the canvas and catch visual defects (broken glyphs, overlaps, misaligned items) before they accumulate.
@@ -583,7 +587,7 @@ Illustrator_MCP/
 │   │   ├── query.py              # query_items + preflight_check
 │   │   ├── import_svg.py         # SVG path import tool (d → drawPathPoints)
 │   │   └── archive/              # Disabled legacy tools (reference only)
-│   ├── overlay.py                # VLM overlay (bounding boxes + grid overlay + coordinate mapping)
+│   ├── overlay.py                # VLM overlay (bounding boxes + grid overlay + ruler overlay + coordinate mapping)
 │   └── resources/
 │       ├── docs/
 │       │   └── extendscript_reference.md
