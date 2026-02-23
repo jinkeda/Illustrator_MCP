@@ -5,14 +5,24 @@
         "left",
         "center",
         "right"
+      ],
+      "reference": [
+        "targets",
+        "artboard"
       ]
     },
-    "optional": [],
-    "required": [
-      "mode"
+    "optional": [
+      "mode",
+      "reference",
+      "key_id",
+      "coordinate"
     ],
+    "required": [],
     "types": {
-      "mode": "string"
+      "coordinate": "number",
+      "key_id": "string",
+      "mode": "string",
+      "reference": "string"
     }
   },
   "align_vertical": {
@@ -21,14 +31,24 @@
         "top",
         "middle",
         "bottom"
+      ],
+      "reference": [
+        "targets",
+        "artboard"
       ]
     },
-    "optional": [],
-    "required": [
-      "mode"
+    "optional": [
+      "mode",
+      "reference",
+      "key_id",
+      "coordinate"
     ],
+    "required": [],
     "types": {
-      "mode": "string"
+      "coordinate": "number",
+      "key_id": "string",
+      "mode": "string",
+      "reference": "string"
     }
   },
   "assert_alignment": {
@@ -180,14 +200,38 @@
     }
   },
   "distribute_horizontal": {
-    "optional": [],
+    "enumValues": {
+      "mode": [
+        "gap",
+        "center"
+      ]
+    },
+    "optional": [
+      "mode",
+      "spacing"
+    ],
     "required": [],
-    "types": {}
+    "types": {
+      "mode": "string",
+      "spacing": "number"
+    }
   },
   "distribute_vertical": {
-    "optional": [],
+    "enumValues": {
+      "mode": [
+        "gap",
+        "center"
+      ]
+    },
+    "optional": [
+      "mode",
+      "spacing"
+    ],
     "required": [],
-    "types": {}
+    "types": {
+      "mode": "string",
+      "spacing": "number"
+    }
   },
   "element_create": {
     "enumValues": {

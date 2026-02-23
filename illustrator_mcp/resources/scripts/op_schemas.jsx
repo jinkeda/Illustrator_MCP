@@ -497,46 +497,90 @@ var OP_PARAM_SCHEMAS = {
         }
     },
     "align_horizontal": {
-        "required": [
-            "mode"
+        "required": [],
+        "optional": [
+            "mode",
+            "reference",
+            "key_id",
+            "coordinate"
         ],
-        "optional": [],
         "types": {
-            "mode": "string"
+            "mode": "string",
+            "reference": "string",
+            "key_id": "string",
+            "coordinate": "number"
         },
         "enumValues": {
             "mode": [
                 "left",
                 "center",
                 "right"
+            ],
+            "reference": [
+                "targets",
+                "artboard"
             ]
         }
     },
     "align_vertical": {
-        "required": [
-            "mode"
+        "required": [],
+        "optional": [
+            "mode",
+            "reference",
+            "key_id",
+            "coordinate"
         ],
-        "optional": [],
         "types": {
-            "mode": "string"
+            "mode": "string",
+            "reference": "string",
+            "key_id": "string",
+            "coordinate": "number"
         },
         "enumValues": {
             "mode": [
                 "top",
                 "middle",
                 "bottom"
+            ],
+            "reference": [
+                "targets",
+                "artboard"
             ]
         }
     },
     "distribute_horizontal": {
         "required": [],
-        "optional": [],
-        "types": {}
+        "optional": [
+            "mode",
+            "spacing"
+        ],
+        "types": {
+            "mode": "string",
+            "spacing": "number"
+        },
+        "enumValues": {
+            "mode": [
+                "gap",
+                "center"
+            ]
+        }
     },
     "distribute_vertical": {
         "required": [],
-        "optional": [],
-        "types": {}
+        "optional": [
+            "mode",
+            "spacing"
+        ],
+        "types": {
+            "mode": "string",
+            "spacing": "number"
+        },
+        "enumValues": {
+            "mode": [
+                "gap",
+                "center"
+            ]
+        }
     },
     "assert_count": {
         "required": [
