@@ -329,8 +329,15 @@ async def illustrator_preflight_check(params: PreflightCheckInput) -> str:
     """
     ab_idx = params.artboard_index if params.artboard_index is not None else 'null'
 
+    # F9: Use json.dumps for user-supplied strings to prevent JSX injection
+    bounds_type_js = json.dumps(params.bounds_type)
+    bounds_source_js = json.dumps(params.bounds_source)
+    policy_js = json.dumps(params.policy)
+    scope_js = json.dumps(params.scope)
+
     # Build the preflight check script
     script = f"""
+// Pre-flight check: verify library functions are available
 (function() {{
     var doc = app.activeDocument;
     var result = {{
@@ -355,10 +362,10 @@ async def illustrator_preflight_check(params: PreflightCheckInput) -> str:
     // 1. Bounds check using validate library
     var boundsResult = JSON.parse(countItemsOnArtboard({{
         artboardIndex: abIdx,
-        boundsType: "{params.bounds_type}",
-        boundsSource: "{params.bounds_source}",
-        policy: "{params.policy}",
-        scope: "{params.scope}",
+        boundsType: {bounds_type_js},
+        boundsSource: {bounds_source_js},
+        policy: {policy_js},
+        scope: {scope_js},
         ignoreHidden: true,
         ignoreLocked: false
     }}));
@@ -377,7 +384,7 @@ async def illustrator_preflight_check(params: PreflightCheckInput) -> str:
     }}
 
     // Helper for scope filtering
-    var scope = "{params.scope}";
+    var scope = {scope_js};
     function isItemCenterOnArtboard(itemBounds, artboardRect) {{
         var centerX = (itemBounds[0] + itemBounds[2]) / 2;
         var centerY = (itemBounds[1] + itemBounds[3]) / 2;

@@ -378,6 +378,11 @@ async def execute_op_batch_chunked(
     If the batch is small enough, executes directly.
     If chunking is needed, splits the batch and merges results.
     
+    .. warning::
+        Rollback is per-chunk, not cross-chunk. If chunk N fails in strict
+        mode, chunks 1..N-1 have already been committed. The returned
+        ``createdIds`` from completed chunks can be used for manual cleanup.
+    
     Args:
         ops: List of SOC operations
         options: executeOpBatch options (strict, trace, rollback, etc.)
@@ -424,7 +429,7 @@ async def execute_op_batch_chunked(
         )
         
         if response.get("error"):
-            # Chunk failed - return error or continue based on strict mode
+            # Chunk failed at transport/injection level
             if chunk_config.strict:
                 return {
                     "ok": False,
@@ -438,12 +443,12 @@ async def execute_op_batch_chunked(
         # Parse result and accumulate created IDs
         result = unwrap_result(response.get("result", response))
         if isinstance(result, dict):
+            chunk_ids = result.get("createdIds", [])
+            created_ids.extend(chunk_ids)
             results.append(result)
-            created_ids.extend(result.get("createdIds", []))
-        
-        # Stop on first failure in strict mode
-        if chunk_config.strict and isinstance(result, dict) and not result.get("ok", True):
-            return merge_chunk_results(results, created_ids)
+            # Stop on batch-level failure in strict mode
+            if chunk_config.strict and not result.get("ok", True):
+                return merge_chunk_results(results, created_ids)
     
     return merge_chunk_results(results, created_ids)
 

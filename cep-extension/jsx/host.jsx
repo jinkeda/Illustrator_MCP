@@ -37,14 +37,68 @@ if (typeof JSON === 'undefined') {
 }
 
 /**
+ * Wrap a user script with an iteration safety guard.
+ *
+ * Injects:
+ *   __mcp_ops        – running operation counter
+ *   __MCP_MAX_OPS    – hard op limit (default 500 000, overridable by Python)
+ *   __mcp_start      – timestamp at script start
+ *   __MCP_MAX_MS     – hard wall-clock limit in ms (default 25 000, overridable)
+ *   __mcp_check()    – call inside loops; throws when either limit exceeded
+ *   __mcp_snapshot(collection) – snapshot a live Illustrator collection to Array
+ *   __mcp_forEachSnapshot(collection, fn) – safe iteration with built-in check
+ *
+ * COVERAGE NOTE:
+ *   This is an opt-in guard. Scripts that never call __mcp_check() (e.g. bare
+ *   while(true){}) are NOT protected. The only robust fix for non-cooperative
+ *   loops is chunked execution via app.scheduleTask() (future P2 work).
+ *   The helpers here solve the most common real-world crash class: iterating
+ *   a live collection while adding/removing items.
+ *
+ * @param {string} scriptStr - The raw user script
+ * @returns {string} - Script with safety preamble prepended
+ */
+function wrapWithSafetyGuard(scriptStr) {
+    // Do not double-wrap (idempotent)
+    if (scriptStr.indexOf('__mcp_ops') >= 0) return scriptStr;
+
+    var preamble =
+        '// MCP safety guard \u2013 injected by host.jsx\n' +
+        'var __mcp_ops = 0;\n' +
+        'var __mcp_start = +new Date();\n' +
+        'if (typeof __MCP_MAX_OPS === "undefined") var __MCP_MAX_OPS = 500000;\n' +
+        'if (typeof __MCP_MAX_MS  === "undefined") var __MCP_MAX_MS  = 25000;\n' +
+        'function __mcp_check() {\n' +
+        '  if (++__mcp_ops > __MCP_MAX_OPS)\n' +
+        '    throw new Error("MCP_SAFETY: Exceeded " + __MCP_MAX_OPS + " ops. Possible infinite loop.");\n' +
+        '  if (__mcp_ops % 1000 === 0 && (+new Date() - __mcp_start) > __MCP_MAX_MS)\n' +
+        '    throw new Error("MCP_SAFETY: Exceeded " + __MCP_MAX_MS + "ms wall-clock limit.");\n' +
+        '}\n' +
+        'function __mcp_snapshot(col) {\n' +
+        '  var out = [];\n' +
+        '  for (var _i = 0; _i < col.length; _i++) out.push(col[_i]);\n' +
+        '  return out;\n' +
+        '}\n' +
+        'function __mcp_forEachSnapshot(col, fn) {\n' +
+        '  var snap = __mcp_snapshot(col);\n' +
+        '  for (var _i = 0; _i < snap.length; _i++) { __mcp_check(); fn(snap[_i], _i); }\n' +
+        '}\n\n';
+
+    return preamble + scriptStr;
+}
+
+/**
  * Execute a JavaScript script string in Illustrator context
  * @param {string} scriptStr - The JavaScript code to execute
  * @returns {string} - JSON string of the result
  */
 function executeScript(scriptStr) {
     try {
+        // Wrap with safety guard to prevent infinite-loop crashes
+        var safeScript = wrapWithSafetyGuard(scriptStr);
+
         // Execute the script
-        var result = eval(scriptStr);
+        var result = eval(safeScript);
 
         // Convert result to JSON-safe format
         if (result === undefined) {

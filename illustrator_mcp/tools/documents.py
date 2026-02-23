@@ -32,22 +32,25 @@ class ExportFormat(str, Enum):
 
 
 # Pydantic models - inherit from ToolInputBase for shared config
-class CreateDocumentInput(ToolInputBase):
-    """Input for creating a new document."""
-    width: float = Field(default=800, description="Width in points", ge=1, le=16383)
-    height: float = Field(default=600, description="Height in points", ge=1, le=16383)
-    name: Optional[str] = Field(default=None, description="Document name", max_length=255)
-    color_mode: str = Field(default="RGB", description="RGB or CMYK")
+class DocumentInput(ToolInputBase):
+    """Unified input for document create/open/save/close operations."""
+    action: Literal["create", "open", "save", "close"] = Field(
+        ..., description="Action: 'create', 'open', 'save', or 'close'"
+    )
+    # create params
+    width: float = Field(default=800, description="Width in points (create)", ge=1, le=16383)
+    height: float = Field(default=600, description="Height in points (create)", ge=1, le=16383)
+    name: Optional[str] = Field(default=None, description="Document name (create)", max_length=255)
+    color_mode: str = Field(default="RGB", description="RGB or CMYK (create)")
+    # open/save params
+    file_path: Optional[str] = Field(default=None, description="File path (required for open, optional for save-as)")
+    # close params
+    save_before_close: bool = Field(default=False, description="Save before closing (close)")
 
-
-class OpenDocumentInput(ToolInputBase):
-    """Input for opening a document."""
-    file_path: str = Field(..., description="Full path to the file", min_length=1)
-
-
-class SaveDocumentInput(ToolInputBase):
-    """Input for saving a document."""
-    file_path: Optional[str] = Field(default=None, description="Path for Save As")
+    def model_post_init(self, __context) -> None:
+        """Validate action-specific required fields."""
+        if self.action == "open" and not self.file_path:
+            raise ValueError("file_path is required for action='open'")
 
 
 class ExportDocumentInput(ToolInputBase):
@@ -58,11 +61,6 @@ class ExportDocumentInput(ToolInputBase):
     artboard_only: bool = Field(default=False, description="Clip export to artboard bounds")
     artboard_index: Optional[int] = Field(default=None, description="Artboard index (None = active artboard)")
     return_image: bool = Field(default=False, description="Return image bytes for Claude visualization (PNG/JPG only)")
-
-
-class CloseDocumentInput(ToolInputBase):
-    """Input for closing a document."""
-    save_before_close: bool = Field(default=False, description="Save before closing")
 
 
 # ==================== Helper Functions ====================
@@ -167,63 +165,71 @@ async def _place_item_impl(
     )
 
 
-# Tool implementations using execute_script
+# Unified document CRUD tool
 @mcp.tool(
-    name="illustrator_create_document",
-    annotations={"title": "Create Document", "readOnlyHint": False, "destructiveHint": False}
+    name="illustrator_document",
+    annotations={"title": "Document", "readOnlyHint": False, "destructiveHint": False}
 )
-async def illustrator_create_document(params: CreateDocumentInput) -> str:
-    """Create a new Illustrator document with specified dimensions."""
-    color_space = 'CMYK' if params.color_mode == 'CMYK' else 'RGB'
-    title_line = f'preset.title = "{params.name}";' if params.name else ''
-    
-    script = templates.CREATE_DOCUMENT.substitute(
-        width=params.width,
-        height=params.height,
-        color_space=color_space,
-        title_line=title_line
-    )
-    return await execute_jsx_tool(
-        script=script,
-        command_type="create_document",
-        tool_name="illustrator_create_document",
-        params={"width": params.width, "height": params.height, "name": params.name, "color_mode": params.color_mode}
-    )
+async def illustrator_document(params: DocumentInput) -> str:
+    """Create, open, save, or close an Illustrator document.
 
+    Args:
+        params.action: 'create', 'open', 'save', or 'close'
+        params.width/height/name/color_mode: create params
+        params.file_path: required for open, optional for save-as
+        params.save_before_close: close param
+    """
+    action = params.action
 
-@mcp.tool(
-    name="illustrator_open_document",
-    annotations={"title": "Open Document", "readOnlyHint": True, "destructiveHint": False}
-)
-async def illustrator_open_document(params: OpenDocumentInput) -> str:
-    """Open an existing Illustrator document."""
-    path = escape_path_for_jsx(params.file_path)
-    script = templates.OPEN_DOCUMENT.substitute(path=path)
-    return await execute_jsx_tool(
-        script=script,
-        command_type="open_document",
-        tool_name="illustrator_open_document",
-        params={"file_path": params.file_path}
-    )
+    if action == "create":
+        color_space = 'CMYK' if params.color_mode == 'CMYK' else 'RGB'
+        title_line = f'preset.title = "{params.name}";' if params.name else ''
+        script = templates.CREATE_DOCUMENT.substitute(
+            width=params.width,
+            height=params.height,
+            color_space=color_space,
+            title_line=title_line
+        )
+        return await execute_jsx_tool(
+            script=script,
+            command_type="create_document",
+            tool_name="illustrator_document",
+            params={"action": action, "width": params.width, "height": params.height,
+                    "name": params.name, "color_mode": params.color_mode}
+        )
 
-
-@mcp.tool(
-    name="illustrator_save_document",
-    annotations={"title": "Save Document", "readOnlyHint": False, "destructiveHint": False}
-)
-async def illustrator_save_document(params: SaveDocumentInput) -> str:
-    """Save the current Illustrator document."""
-    if params.file_path:
+    elif action == "open":
         path = escape_path_for_jsx(params.file_path)
-        script = templates.SAVE_DOCUMENT.substitute(path=path)
-    else:
-        script = templates.SAVE_DOCUMENT_SIMPLE
-    return await execute_jsx_tool(
-        script=script,
-        command_type="save_document",
-        tool_name="illustrator_save_document",
-        params={"file_path": params.file_path}
-    )
+        script = templates.OPEN_DOCUMENT.substitute(path=path)
+        return await execute_jsx_tool(
+            script=script,
+            command_type="open_document",
+            tool_name="illustrator_document",
+            params={"action": action, "file_path": params.file_path}
+        )
+
+    elif action == "save":
+        if params.file_path:
+            path = escape_path_for_jsx(params.file_path)
+            script = templates.SAVE_DOCUMENT.substitute(path=path)
+        else:
+            script = templates.SAVE_DOCUMENT_SIMPLE
+        return await execute_jsx_tool(
+            script=script,
+            command_type="save_document",
+            tool_name="illustrator_document",
+            params={"action": action, "file_path": params.file_path}
+        )
+
+    elif action == "close":
+        save_option = "SaveOptions.SAVECHANGES" if params.save_before_close else "SaveOptions.DONOTSAVECHANGES"
+        script = templates.CLOSE_DOCUMENT.substitute(save_option=save_option)
+        return await execute_jsx_tool(
+            script=script,
+            command_type="close_document",
+            tool_name="illustrator_document",
+            params={"action": action, "save_before_close": params.save_before_close}
+        )
 
 
 @mcp.tool(
@@ -393,23 +399,6 @@ async def illustrator_export_document(params: ExportDocumentInput) -> Union[str,
     return envelope
 
 
-# NOTE: get_document_info functionality is now in context.py as illustrator_get_document
-
-
-@mcp.tool(
-    name="illustrator_close_document",
-    annotations={"title": "Close Document", "readOnlyHint": False, "destructiveHint": True}
-)
-async def illustrator_close_document(params: CloseDocumentInput) -> str:
-    """Close the active document."""
-    save_option = "SaveOptions.SAVECHANGES" if params.save_before_close else "SaveOptions.DONOTSAVECHANGES"
-    script = templates.CLOSE_DOCUMENT.substitute(save_option=save_option)
-    return await execute_jsx_tool(
-        script=script,
-        command_type="close_document",
-        tool_name="illustrator_close_document",
-        params={"save_before_close": params.save_before_close}
-    )
 
 
 
@@ -580,22 +569,6 @@ async def illustrator_place_file(params: PlaceFileInput) -> str:
         embed_editable=params.embed_editable
     )
 
-
-@mcp.tool(
-    name="illustrator_update_linked_items",
-    annotations={"title": "Update Linked Items", "readOnlyHint": False, "destructiveHint": False}
-)
-async def illustrator_update_linked_items() -> str:
-    """Update all linked items from their source files.
-    
-    Use when source files (e.g., MATLAB exports) have been regenerated.
-    """
-    return await execute_jsx_tool(
-        script=templates.UPDATE_LINKED_ITEMS,
-        command_type="update_linked_items",
-        tool_name="illustrator_update_linked_items",
-        params={}
-    )
 
 
 # ==================== Reference Overlay ====================

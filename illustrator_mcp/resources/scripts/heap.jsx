@@ -269,7 +269,7 @@ function heapRebuildIndex(doc) {
                     }
                 }
             } catch (e) { }
-            if (item.typename === "GroupItem") {
+            if (item.typename === "GroupItem" || item.typename === "CompoundPathItem") {
                 scan(item, depth + 1);
             }
         }

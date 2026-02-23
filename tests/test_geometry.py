@@ -19,6 +19,16 @@ from illustrator_mcp.geometry import (
     CLIPPER_SCALE,
 )
 
+try:
+    import pyclipper  # noqa: F401
+    _HAS_PYCLIPPER = True
+except ImportError:
+    _HAS_PYCLIPPER = False
+
+_skip_no_pyclipper = pytest.mark.skipif(
+    not _HAS_PYCLIPPER, reason="pyclipper not installed"
+)
+
 
 # ── Test fixtures ───────────────────────────────────────────────────
 
@@ -51,6 +61,7 @@ def _polygon_area(pts):
 
 # ── Subtract tests ─────────────────────────────────────────────────
 
+@_skip_no_pyclipper
 class TestSubtract:
     def test_partial_overlap_produces_l_shape(self):
         """Overlapping rects subtracted → L-shape, 1 region, 0 holes."""
@@ -91,6 +102,7 @@ class TestSubtract:
 
 # ── Unite tests ─────────────────────────────────────────────────────
 
+@_skip_no_pyclipper
 class TestUnite:
     def test_overlapping_merge(self):
         """Overlapping rects united → 1 merged region, 0 holes."""
@@ -119,6 +131,7 @@ class TestUnite:
 
 # ── Intersect tests ─────────────────────────────────────────────────
 
+@_skip_no_pyclipper
 class TestIntersect:
     def test_overlapping_intersection(self):
         """Overlapping rects → intersection area = 50x50 = 2500."""
@@ -135,6 +148,7 @@ class TestIntersect:
 
 # ── XOR tests ──────────────────────────────────────────────────────
 
+@_skip_no_pyclipper
 class TestXOR:
     def test_overlapping_xor(self):
         """Overlapping XOR → 2 disjoint regions."""
@@ -147,6 +161,7 @@ class TestXOR:
 
 # ── Hole semantics tests ──────────────────────────────────────────
 
+@_skip_no_pyclipper
 class TestHoleSemantics:
     def test_donut_is_region_with_hole_not_two_contours(self):
         """Donut (large - small) must be 1 Region with 1 hole, NOT 2 independent contours."""
@@ -164,6 +179,7 @@ class TestHoleSemantics:
 
 # ── Winding invariance tests ──────────────────────────────────────
 
+@_skip_no_pyclipper
 class TestWindingInvariance:
     def test_reversed_subject_same_result(self):
         """Reversed subject winding → same geometric result."""
@@ -257,6 +273,7 @@ class TestScaling:
 
 # ── Degenerate input tests ─────────────────────────────────────────
 
+@_skip_no_pyclipper
 class TestDegenerate:
     def test_empty_subject(self):
         """Empty subject produces empty or raises."""
@@ -292,6 +309,7 @@ class TestImportGuard:
 
 # ── Multi-clip tests ───────────────────────────────────────────────
 
+@_skip_no_pyclipper
 class TestMultiClip:
     def test_subtract_multiple_clips(self):
         """Subject minus multiple clips."""

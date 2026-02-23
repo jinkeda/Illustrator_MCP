@@ -255,6 +255,23 @@ class ExecuteScriptInput(ToolInputBase):
                     "regardless of the cadence counter."
     )
 
+    max_ops: int = Field(
+        default=500000,
+        ge=1000,
+        le=5000000,
+        description="Maximum iteration guard count. A watchdog counter (__mcp_check()) is "
+                    "injected into scripts; when called more than max_ops times it throws "
+                    "to prevent infinite-loop crashes. Raise for legitimately large batch scripts."
+    )
+
+    max_ms: int = Field(
+        default=25000,
+        ge=1000,
+        le=120000,
+        description="Maximum wall-clock time in milliseconds. __mcp_check() also monitors "
+                    "elapsed time (checked every 1000 ops) and throws if exceeded."
+    )
+
 
 def _build_export_script(tmp_path: str, max_dim: int, fmt: str = "png") -> str:
     """Build ExtendScript for artboard export.
@@ -655,11 +672,36 @@ async def illustrator_execute_script(params: ExecuteScriptInput) -> Union[str, l
         path.pathPoints[0].rightDirection = [rx0, -ry0];
       Handle coordinates are absolute, not relative to the anchor.
     
+    SAFETY:
+      A watchdog is injected before every script with dual limits:
+      - Op count: __mcp_check() throws after max_ops (default 500K)
+      - Wall clock: __mcp_check() throws after max_ms (default 25s)
+      Call __mcp_check() as the FIRST line inside every for/while body.
+      
+      CRITICAL: Never iterate a live Illustrator collection if you add/remove
+      items in the loop. Use the injected snapshot helpers instead:
+        __mcp_forEachSnapshot(doc.pathItems, function(item, i) { ... });
+        var snap = __mcp_snapshot(doc.pathItems);
+      
+      NOTE: Scripts that never call __mcp_check() (e.g. bare while(true){})
+      are NOT protected by this guard. The only robust fix for non-cooperative
+      loops is chunked execution (future work).
+    
     IMPORTANT: Always use -y for Y coordinates when positioning objects.
     Call get_scripting_reference for more detailed syntax examples.
     """
     # Log script execution for telemetry
     script = params.script  # Already resolved by model_validator
+
+    # ── Safety guard: inject max_ops / max_ms overrides if non-default ──
+    safety_overrides = []
+    if params.max_ops != 500000:
+        safety_overrides.append(f"var __MCP_MAX_OPS = {params.max_ops};")
+    if params.max_ms != 25000:
+        safety_overrides.append(f"var __MCP_MAX_MS = {params.max_ms};")
+    if safety_overrides:
+        script = "\n".join(safety_overrides) + "\n" + script
+
     script_len = len(script)
     desc = params.description.strip() if params.description else None
 

@@ -219,109 +219,91 @@ class LibraryResolver:
         with self._file_lock:
             self._file_cache.clear()
 
-    def build_sentinel_script(self, preload_version: str) -> str:
-        """Build JS that verifies preloaded libraries match expected version.
 
-        Returns ExtendScript that checks $.global.__mcp.version against
-        preload_version. On mismatch, throws an error containing the
-        MCP_LIBS_NOT_READY sentinel which response_classification.py catches.
-        """
-        return (
-            'if (typeof $.global.__mcp === "undefined"'
-            f' || $.global.__mcp.version !== "{preload_version}") {{\n'
-            f'  throw new Error("MCP_LIBS_NOT_READY:{preload_version}");\n'
-            '}\n'
-        )
 
-    def get_all_library_names(self) -> List[str]:
-        """Return all library names from the manifest.
 
-        Used by build_preload_bundle to resolve the full library set.
-        """
-        manifest = self._load_manifest()
-        if not manifest or not manifest.get("libraries"):
-            return []
-        return list(manifest["libraries"].keys())
+    def resolve_with_order(self, includes: List[str], *, skip_collision_check: bool = False) -> Tuple[str, List[str]]:
+        """Resolve libraries and return both code and load order in one pass.
 
-    def build_preload_bundle(self) -> Tuple[str, str]:
-        """Build a preload script that persists all libraries in global scope.
+        Combines the logic of ``resolve()`` and ``_resolve_dependency_order()``
+        to avoid double-walking the manifest.
 
-        Resolves ALL libraries from the manifest in dependency order,
-        concatenates them, and appends a version marker to
-        ``$.global.__mcp.version``. The resulting script is eval'd once;
-        subsequent calls use sentinel-only injection.
+        Args:
+            includes: List of library names to resolve.
+            skip_collision_check: Skip symbol collision detection.
 
         Returns:
-            Tuple of (preload_script, version_hash) where version_hash
-            is an 8-char MD5 prefix of the concatenated library code.
+            Tuple of (concatenated_code, ordered_lib_names).
         """
-        all_libs = self.get_all_library_names()
-        if not all_libs:
-            return ("", "")
+        if not includes:
+            return ("", [])
 
-        library_code = self.resolve(all_libs, skip_collision_check=True)
-        version_hash = hashlib.md5(library_code.encode("utf-8")).hexdigest()[:8]
-
-        # Append version marker so sentinel checks can verify preload state
-        preload_script = (
-            library_code + "\n\n"
-            "// === MCP Preload Version Marker ===\n"
-            "$.global.__mcp = $.global.__mcp || {};\n"
-            f'$.global.__mcp.version = "{version_hash}";\n'
-        )
-
-        return (preload_script, version_hash)
-
-
-    def _resolve_dependency_order(self, includes: List[str]) -> List[str]:
-        """Resolve libraries with transitive dependencies, returning load order.
-
-        Returns the ordered list of library names (deps first, then requested).
-        This is the same resolution logic as resolve() but returns names, not code.
-        """
         manifest = self._load_manifest()
+
         if not manifest or not manifest.get("libraries"):
-            return list(includes)
+            return (self._simple_resolve(includes), list(includes))
 
-        resolved: List[str] = []
+        resolved_names: List[str] = []
+        resolved_code: List[str] = []
         seen: set = set()
+        all_exports: Dict[str, str] = {}
 
-        def walk(lib_name: str) -> None:
+        def resolve_one(lib_name: str) -> None:
             nonlocal manifest
             if lib_name in seen:
                 return
+
             if lib_name not in manifest["libraries"]:
+                logger.warning(f"Library '{lib_name}' not found, forcing manifest reload")
                 self._manifest_cache = None
                 manifest = self._load_manifest()
                 if lib_name not in manifest["libraries"]:
-                    return  # skip unknown, resolve() will raise
+                    available = list(manifest["libraries"].keys())
+                    raise ValueError(f"Unknown library: {lib_name}. Available: {available}.")
+
             lib = manifest["libraries"][lib_name]
-            # Mark seen BEFORE recursing to break mutual dependencies
+
+            if lib.get("deprecated"):
+                logger.warning(f"Library '{lib_name}' is deprecated. {lib.get('description', '')}")
+
             seen.add(lib_name)
+
             for dep in lib.get("dependencies", []):
-                walk(dep)
-            resolved.append(lib_name)
+                resolve_one(dep)
+
+            if not skip_collision_check:
+                for symbol in lib.get("exports", []):
+                    if symbol in all_exports:
+                        raise ValueError(
+                            f"Symbol collision: '{symbol}' defined in both "
+                            f"'{all_exports[symbol]}' and '{lib_name}'"
+                        )
+                    all_exports[symbol] = lib_name
+
+            lib_path = self.resources_dir / lib["file"]
+            try:
+                content = self._read_library_file(lib_path)
+                resolved_code.append(content)
+                resolved_names.append(lib_name)
+            except ValueError as e:
+                raise ValueError(f"Library file not found: {lib['file']}") from e
 
         for lib_name in includes:
-            walk(lib_name)
+            resolve_one(lib_name)
 
-        return resolved
+        return ("\n\n".join(resolved_code), resolved_names)
 
     def get_resolution_metadata(self, includes: List[str]) -> Dict[str, Any]:
         """Get metadata for diagnostics including resolution details and versions.
+
+        Uses ``resolve_with_order`` for a single-pass resolution.
 
         Args:
             includes: List of requested library names.
 
         Returns:
-            Dict with:
-            - includes_requested: Original requested libraries (sorted)
-            - includes_resolved: All libraries actually loaded (incl. transitive deps, load order)
-            - includes_canonical: Sorted list (backward compat alias for includes_requested)
-            - prelude_hash: MD5 hash prefix (8 chars) of resolved code
-            - prelude_length: Length of resolved code in bytes
-            - library_versions: Dict of library name → version string
-            - manifest_version: Manifest version string
+            Dict with includes_requested, includes_resolved, prelude_hash,
+            prelude_length, library_versions, and manifest_version.
         """
         if not includes:
             return {
@@ -335,8 +317,7 @@ class LibraryResolver:
             }
 
         requested = sorted(includes)
-        resolved_order = self._resolve_dependency_order(includes)
-        code = self.resolve(includes)
+        code, resolved_order = self.resolve_with_order(includes)
         code_bytes = code.encode('utf-8')
         prelude_hash = hashlib.md5(code_bytes).hexdigest()[:8]
 
@@ -358,6 +339,7 @@ class LibraryResolver:
             "library_versions": library_versions,
             "manifest_version": manifest.get("version"),
         }
+
 
 
 # Default resources directory
@@ -400,7 +382,6 @@ INJECTION_SENTINEL = "/* @ILLUSTRATOR_MCP_INJECTED */"
 def inject_libraries(
     script: str,
     includes: List[str],
-    preload_version: Optional[str] = None,
 ) -> str:
     """Prepend standard library code to a script using manifest-driven resolution.
     
@@ -410,12 +391,10 @@ def inject_libraries(
     - Symbol collision detection
     - Library content caching
     - Sentinel marker for double-injection prevention
-    - Preload-aware: sentinel-only injection when libraries are preloaded (C1)
     
     Args:
         script: The user's ExtendScript code.
         includes: List of library names (e.g., ["geometry", "selection", "layout"]).
-        preload_version: If set, libraries are preloaded; inject sentinel check only.
     
     Returns:
         Combined script with libraries prepended and sentinel marker.
@@ -427,16 +406,6 @@ def inject_libraries(
         return script
     
     resolver = get_resolver()
-    
-    if preload_version:
-        # C1: Sentinel-only injection — libraries already in $.global.__mcp
-        sentinel_script = resolver.build_sentinel_script(preload_version)
-        return (
-            INJECTION_SENTINEL + "\n"
-            + sentinel_script + "\n\n"
-            + "// === MCP user script ===\n"
-            + script
-        )
     
     # Full injection — resolve and prepend all library code
     library_code = resolver.resolve(includes)

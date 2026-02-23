@@ -65,6 +65,18 @@ async def illustrator_path_import_svg(params: PathImportSvgInput) -> str:
     - MAX_SUBPATHS: 100 subpaths
     - MAX_COORD_ABS: +/-100,000
     """
+    # F5: Track mutation cadence — lazy import avoids import-order risk
+    from illustrator_mcp.tools.execute import _counter
+    _counter.increment()
+    try:
+        return await _path_import_svg_impl(params)
+    except Exception:
+        _counter.decrement()
+        raise
+
+
+async def _path_import_svg_impl(params: PathImportSvgInput) -> str:
+    """Inner implementation of path_import_svg, extracted for counter safety."""
     from illustrator_mcp.svgd import parse_svg_d
 
     d_str = params.d

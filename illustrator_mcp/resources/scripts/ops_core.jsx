@@ -856,6 +856,7 @@ function executeOpBatch(ops, options) {
     // Requires explicit confirmation + takes snapshot before clearing
     if (options.recompute) {
         if (!options.recompute.confirm || options.recompute.snapshotFirst !== true) {
+            heapRollbackTxn();  // F1: close txn opened at L853
             return {
                 ok: false,
                 errors: [makeError(ErrorCodes.V_INVALID_PARAMS,
@@ -868,6 +869,7 @@ function executeOpBatch(ops, options) {
         var docName = doc.name;
         var journal = (typeof journalGet === "function") ? journalGet(docName, doc) : [];
         if (journal.length === 0) {
+            heapRollbackTxn();  // F1: close txn opened at L853
             return {
                 ok: false,
                 errors: [makeError(ErrorCodes.V_INVALID_PARAMS,

@@ -38,7 +38,7 @@ Claude / AI Client           MCP Server (Python)            Illustrator
 1. AI calls a tool (e.g. `illustrator_execute_script`) with ExtendScript code
 2. The MCP server sends the script over WebSocket to the CEP panel
 3. The CEP panel executes it in Illustrator's ExtendScript runtime and returns the result
-4. Context tools (`get_document_structure`, `get_selection_info`) let the AI understand document state before writing scripts
+4. Context tools (`get_document`) let the AI understand document state before writing scripts
 
 ### Architecture
 
@@ -184,17 +184,14 @@ This server follows a **Scripting First** architecture: one powerful script exec
 | `illustrator_execute_script` | **Primary tool.** Execute any ExtendScript code in Illustrator. Supports library injection, params, bounds validation, and preview export. |
 | `illustrator_execute_task` | Execute a structured task using the Task Protocol (collect > compute > apply). |
 
-### Document Operations (7)
+### Document Operations (4)
 
 | Tool | Description |
 |---|---|
-| `illustrator_create_document` | Create a new document with specified dimensions and color mode |
-| `illustrator_open_document` | Open an existing `.ai` / `.eps` / `.pdf` file |
-| `illustrator_save_document` | Save the current document (or Save As to a new path) |
+| `illustrator_document` | Unified document I/O: `action="create"` / `"open"` / `"save"` / `"close"` |
 | `illustrator_export_document` | Export to PNG, JPG, SVG, or PDF with optional visual feedback |
-| `illustrator_close_document` | Close the active document |
 | `illustrator_place_file` | Place an external file (PNG, JPG, EPS, AI, PDF) with optional editable embed |
-| `illustrator_update_linked_items` | Refresh all linked items from their source files |
+| `illustrator_set_reference` | Place or clear a locked reference image on a background layer |
 
 ### Undo / Redo (1)
 
@@ -202,29 +199,27 @@ This server follows a **Scripting First** architecture: one powerful script exec
 |---|---|
 | `illustrator_history` | Undo or redo actions (supports multi-step count) |
 
-### Context & Inspection (4)
+### Context & Inspection (1)
 
 | Tool | Description |
 |---|---|
-| `illustrator_get_document` | Full document tree: layers, sublayers, items with types, positions, bounds |
-| `illustrator_get_selection_info` | Detailed info about selected objects (fill, stroke, text contents) |
-| `illustrator_get_app_info` | Illustrator version, open document count, scripting version |
-| `illustrator_get_scripting_reference` | ExtendScript syntax cheat sheet (coordinate system, shapes, colors, text) |
+| `illustrator_get_document` | Full document tree + optional app info via `scope` param (`"document"`, `"app"`, `"both"`) |
 
-### Path Import (1)
+### Path Operations (2)
 
 | Tool | Description |
 |---|---|
-| `illustrator_path_import_svg` | Import an SVG path `d` attribute. Parses server-side, converts arcs to cubic Béziers, draws via `drawPathPoints`. Hardcoded safety limits. |
+| `illustrator_path_import_svg` | Import an SVG path `d` attribute. Parses server-side, converts arcs to cubic Béziers. Hardcoded safety limits. |
+| `illustrator_path_boolean` | Boolean operations (unite, subtract, intersect, xor) on paths via pyclipper |
 
 ### Query & Validation (2)
 
 | Tool | Description |
 |---|---|
-| `illustrator_query_items` | Declarative item query via the Task Protocol (target selectors, stable refs) |
+| `illustrator_query_items` | Declarative item query via the Task Protocol (target selectors, stable refs). Defaults to selection info when no targets given. |
 | `illustrator_preflight_check` | Read-only validation: off-artboard items, zero-size items, empty text, locked layers |
 
-**Total: 17 tools.**
+**Total: 12 tools.** Scripting reference and linked-item refresh are available as MCP resources.
 
 ---
 
@@ -499,7 +494,7 @@ If occupied, change `WS_PORT` in `.env` and restart.
 ### Script Errors
 
 - Debug the CEP panel at `http://localhost:8088` (Chrome DevTools)
-- Use `illustrator_get_scripting_reference` for ExtendScript syntax
+- The scripting reference is available as an MCP resource (`illustrator://reference/extendscript`)
 - File paths: use forward slashes or escaped backslashes
 
 ### Structured Error Codes
@@ -607,7 +602,7 @@ Illustrator_MCP/
 │   │   ├── components/MCPControlPanel.tsx
 │   │   └── hooks/useMCP.ts       # WebSocket connection hook
 │   └── vite.config.ts
-├── tests/                        # Unit tests (pytest, 743 tests)
+├── tests/                        # Unit tests (pytest, 940+ tests)
 │   ├── conftest.py               # Shared fixtures + collection-error guard
 │   ├── test_execute.py
 │   ├── test_documents.py
@@ -625,6 +620,7 @@ Illustrator_MCP/
 │   ├── test_clip_ops.py          # Clipping mask schema + handler guard tests
 │   ├── test_grid_helper.py       # Grid discovery tests
 │   ├── test_vlm_grounding.py     # VLM grounding pipeline tests (42 tests)
+│   ├── test_registry_snapshot.py  # Registry snapshot test (12 tools, 3 resources)
 │   └── test_brand_social_kit_fixes.py
 ├── scripts/
 │   └── gen_schemas.py            # Schema codegen (Python -> JSX)
@@ -669,7 +665,7 @@ python -m scripts.gen_schemas
 1. **Scripting First** -- One powerful script executor instead of 100+ atomic tools. Stays under platform tool limits, enables any ExtendScript operation, and reduces maintenance surface.
 2. **Thick Scripts, Thin Server** -- Move complexity into ExtendScript, not Python. Fewer round-trips, atomic operations, and Illustrator-native calculations.
 3. **Library Injection** -- Reusable `.jsx` libraries with manifest-driven transitive dependency resolution and symbol collision detection.
-4. **Context Before Creation** -- AI inspects document state (`get_document_structure`, `get_selection_info`) before writing modification scripts.
+4. **Context Before Creation** -- AI inspects document state (`get_document`, `query_items`) before writing modification scripts.
 5. **Standardized Envelope** -- All tools return `{ok, warnings, error, diagnostics, result}` for consistent downstream handling.
 6. **Fail Fast with Structured Errors** -- Typed error codes (V/R/S/C categories) with actionable recovery suggestions.
 7. **Auto-Grounding** -- SOC task results always include an annotated artboard preview, forcing the AI to see the visual state before its next action. No opt-in required.

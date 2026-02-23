@@ -25,12 +25,13 @@ class StreamingRequest:
     """A streaming request that receives multiple updates before completion.
     
     Completion is signaled via a sentinel message {type: "complete"} in the queue.
-    No separate `completed` flag — single-channel truth prevents race conditions.
+    The ``_completed`` flag guards against double-completion.
     """
     queue: asyncio.Queue
     script: str
     command: Optional[Dict[str, Any]] = None
     trace_id: Optional[str] = None
+    _completed: bool = field(default=False, init=False)
 
 
 class RequestRegistry:
@@ -166,7 +167,7 @@ class RequestRegistry:
         with self._lock:
             streaming = self._streaming.get(request_id)
             if streaming:
-                if getattr(streaming, '_completed', False):
+                if streaming._completed:
                     return False
                 final_result["type"] = "complete"
                 try:
@@ -301,7 +302,7 @@ class RequestRegistry:
                 try:
                     streaming.queue.put_nowait({"type": "complete", "cancelled": True, "reason": reason})
                 except asyncio.QueueFull:
-                    pass
+                    logger.warning(f"cancel_all: queue full for streaming request {req_id}, sentinel not sent")
             self._streaming.clear()
             
         for req_id, pending in requests:

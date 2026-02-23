@@ -69,9 +69,6 @@ class WebSocketBridge:
             on_disconnect=self._handle_disconnect
         )
 
-        # Library preload state (C1)
-        self._preload_version: Optional[str] = None
-
         # E1: Panel health watchdog
         self._watchdog_task: Optional[asyncio.Task] = None
 
@@ -79,21 +76,6 @@ class WebSocketBridge:
         self._last_heartbeat: float = 0.0
         self._panel_busy: bool = False
         self._panel_active_request: Optional[int] = None
-
-    # --- Library preload accessors ---
-
-    @property
-    def preload_version(self) -> Optional[str]:
-        """Current preload version hash, or None if not preloaded."""
-        return self._preload_version
-
-    def set_preload_version(self, version: str) -> None:
-        """Set the preload version after successful preload."""
-        self._preload_version = version
-
-    def clear_preload(self) -> None:
-        """Invalidate preload state (e.g., CEP reloaded)."""
-        self._preload_version = None
 
 
     def _transition(self, new_state: ConnectionState, reason: str = "") -> bool:
@@ -144,8 +126,6 @@ class WebSocketBridge:
         self._last_heartbeat = 0.0
         self._panel_busy = False
         self._panel_active_request = None
-        # Invalidate preload cache — panel JS globals are lost on reconnect
-        self.clear_preload()
         # State stays LISTENING (server running, no client) — no transition needed
         # since we're already LISTENING
 
@@ -369,10 +349,18 @@ class WebSocketBridge:
                 f"(threshold={config.watchdog_stale_threshold}s) — "
                 f"forcing disconnect"
             )
+            # F4: Grab local ref before _handle_disconnect (which resets state)
+            ws = self.server.client
             try:
                 await self._handle_disconnect()
             except asyncio.CancelledError:
                 pass
+            # F4: Force-close the stale WebSocket so server.client is cleared
+            if ws is not None:
+                try:
+                    await ws.close(1001, "stale heartbeat")
+                except Exception:
+                    pass
             return True
         return False
 

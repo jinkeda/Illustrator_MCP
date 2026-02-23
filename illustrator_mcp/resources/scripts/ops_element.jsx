@@ -491,7 +491,7 @@ registerOpHandler("element_create", function (params, targets, ctx) {
  *     opacity: [lo,hi], width: [lo,hi] }
  */
 registerOpHandler("element_create_multi", function (params, targets, ctx) {
-    var doc = app.activeDocument;
+    var doc = ctx.doc;
     var abTop = _artboardTop(doc);
     var abLeft = _artboardLeft(doc);
     var geo = params.geometry;
@@ -767,21 +767,21 @@ function _interpolatePalette(t, palette) {
     if (palette.stroke) {
         style.stroke = {};
         var ps = palette.stroke;
-        if (ps.r) style.stroke.r = Math.round(ps.r[0] + (ps.r[1] - ps.r[0]) * t);
-        if (ps.g) style.stroke.g = Math.round(ps.g[0] + (ps.g[1] - ps.g[0]) * t);
-        if (ps.b) style.stroke.b = Math.round(ps.b[0] + (ps.b[1] - ps.b[0]) * t);
-        if (palette.width) {
+        if (ps.r instanceof Array) style.stroke.r = Math.round(ps.r[0] + (ps.r[1] - ps.r[0]) * t);
+        if (ps.g instanceof Array) style.stroke.g = Math.round(ps.g[0] + (ps.g[1] - ps.g[0]) * t);
+        if (ps.b instanceof Array) style.stroke.b = Math.round(ps.b[0] + (ps.b[1] - ps.b[0]) * t);
+        if (palette.width instanceof Array) {
             style.stroke.width = palette.width[0] + (palette.width[1] - palette.width[0]) * t;
         }
     }
     if (palette.fill) {
         style.fill = {};
         var pf = palette.fill;
-        if (pf.r) style.fill.r = Math.round(pf.r[0] + (pf.r[1] - pf.r[0]) * t);
-        if (pf.g) style.fill.g = Math.round(pf.g[0] + (pf.g[1] - pf.g[0]) * t);
-        if (pf.b) style.fill.b = Math.round(pf.b[0] + (pf.b[1] - pf.b[0]) * t);
+        if (pf.r instanceof Array) style.fill.r = Math.round(pf.r[0] + (pf.r[1] - pf.r[0]) * t);
+        if (pf.g instanceof Array) style.fill.g = Math.round(pf.g[0] + (pf.g[1] - pf.g[0]) * t);
+        if (pf.b instanceof Array) style.fill.b = Math.round(pf.b[0] + (pf.b[1] - pf.b[0]) * t);
     }
-    if (palette.opacity) {
+    if (palette.opacity instanceof Array) {
         style.opacity = palette.opacity[0] + (palette.opacity[1] - palette.opacity[0]) * t;
     }
     return style;
