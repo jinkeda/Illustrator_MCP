@@ -210,6 +210,7 @@ async def _annotate_preview(
     img_bytes: bytes,
     max_items: int = 200,
     timeout: Optional[float] = None,
+    probe_points: Optional[list] = None,
 ) -> tuple:
     """Generate annotated preview with numbered bounding boxes.
 
@@ -224,6 +225,7 @@ async def _annotate_preview(
     """
     from illustrator_mcp.overlay import (
         composite_overlay,
+        draw_probe_overlay,
         draw_ruler_overlay,
         get_png_dimensions,
         map_bounds_to_pixels,
@@ -248,7 +250,7 @@ async def _annotate_preview(
 
     if not HAS_PILLOW:
         return img_bytes, _result(
-            warnings=["Pillow not installed. Run: pip install illustrator-mcp[overlay]"]
+            warnings=["Pillow not installed. Run: pip install illustrator-mcp"]
         )
 
     # 1. Decode PNG dimensions
@@ -329,6 +331,12 @@ async def _annotate_preview(
     ab_h_pt = abs(artboard_rect[1] - artboard_rect[3])
     ruled_bytes = draw_ruler_overlay(img_bytes, ab_w_pt, ab_h_pt)
     annotated_bytes = composite_overlay(ruled_bytes, pixel_annotations)
+
+    # 6. Draw probe-point markers (on top of everything)
+    if probe_points:
+        annotated_bytes = draw_probe_overlay(
+            annotated_bytes, probe_points, ab_w_pt, ab_h_pt
+        )
 
     return annotated_bytes, _result(
         annotations=annotation_entries,

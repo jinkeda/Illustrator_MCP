@@ -465,7 +465,7 @@ async def _handle_checkpoint(params: HistoryInput) -> str:
         script = f"""
 (function() {{
     var doc = app.activeDocument;
-    return __mcp_toJSON(checkpointList(doc));
+    return JSON.stringify(checkpointList(doc));
 }})();
 """
     elif params.action == "checkpoint_save":
@@ -473,7 +473,7 @@ async def _handle_checkpoint(params: HistoryInput) -> str:
         script = f"""
 (function() {{
     var doc = app.activeDocument;
-    return __mcp_toJSON(checkpointSave("{escaped_name}", doc));
+    return JSON.stringify(checkpointSave("{escaped_name}", doc));
 }})();
 """
     elif params.action == "checkpoint_restore":
@@ -481,7 +481,7 @@ async def _handle_checkpoint(params: HistoryInput) -> str:
         script = f"""
 (function() {{
     var doc = app.activeDocument;
-    return __mcp_toJSON(checkpointRestore("{escaped_name}", doc));
+    return JSON.stringify(checkpointRestore("{escaped_name}", doc));
 }})();
 """
     elif params.action == "checkpoint_delete":
@@ -489,7 +489,7 @@ async def _handle_checkpoint(params: HistoryInput) -> str:
         script = f"""
 (function() {{
     var doc = app.activeDocument;
-    return __mcp_toJSON(checkpointDelete("{escaped_name}", doc));
+    return JSON.stringify(checkpointDelete("{escaped_name}", doc));
 }})();
 """
     else:
@@ -500,7 +500,7 @@ async def _handle_checkpoint(params: HistoryInput) -> str:
         command_type=params.action,
         tool_name="illustrator_history",
         params={"action": params.action, "name": params.name},
-        includes=["checkpoint"]
+        includes=["polyfills", "checkpoint"]
     )
 
 
@@ -774,6 +774,90 @@ class SetReferenceInput(ToolInputBase):
     )
 
 
+def _extract_dominant_colors(
+    file_path: str,
+    max_colors: int = 8,
+    max_dimension: int = 512,
+    dedup_distance: float = 30.0,
+) -> list[dict]:
+    """Extract dominant colors from an image using Pillow quantization.
+
+    Args:
+        file_path: Path to the image file.
+        max_colors: Maximum number of colors to extract (quantize target).
+        max_dimension: Downscale longest side to this before quantizing.
+        dedup_distance: Euclidean RGB distance threshold for deduplication.
+
+    Returns:
+        List of dicts sorted by percentage descending:
+        [{"r": int, "g": int, "b": int, "hex": "#RRGGBB", "percentage": float}, ...]
+    """
+    try:
+        from PIL import Image
+    except ImportError:
+        logger.debug("Pillow not available for dominant color extraction")
+        return []
+
+    try:
+        img = Image.open(file_path)
+        img = img.convert("RGB")
+
+        # Downscale for performance
+        w, h = img.size
+        if max(w, h) > max_dimension:
+            scale = max_dimension / max(w, h)
+            img = img.resize(
+                (max(1, int(w * scale)), max(1, int(h * scale))),
+                Image.LANCZOS,
+            )
+
+        # Quantize to N colors
+        quantized = img.quantize(colors=max_colors, method=Image.Quantize.MEDIANCUT)
+        palette = quantized.getpalette()  # flat [R,G,B, R,G,B, ...]
+        if not palette:
+            return []
+
+        # Count pixels per palette index
+        pixel_counts = quantized.getdata()
+        total_pixels = len(pixel_counts)
+        counts: dict[int, int] = {}
+        for idx in pixel_counts:
+            counts[idx] = counts.get(idx, 0) + 1
+
+        # Build raw color list
+        raw_colors = []
+        for idx, count in sorted(counts.items(), key=lambda x: -x[1]):
+            if idx * 3 + 2 >= len(palette):
+                continue
+            r, g, b = palette[idx * 3], palette[idx * 3 + 1], palette[idx * 3 + 2]
+            pct = round(100.0 * count / total_pixels, 1)
+            raw_colors.append({"r": r, "g": g, "b": b, "percentage": pct})
+
+        # Deduplicate near-colors (merge into higher-percentage neighbor)
+        deduped: list[dict] = []
+        for c in raw_colors:
+            merged = False
+            for d in deduped:
+                dist = ((c["r"] - d["r"]) ** 2 + (c["g"] - d["g"]) ** 2 + (c["b"] - d["b"]) ** 2) ** 0.5
+                if dist < dedup_distance:
+                    d["percentage"] = round(d["percentage"] + c["percentage"], 1)
+                    merged = True
+                    break
+            if not merged:
+                deduped.append(dict(c))
+
+        # Add hex and sort
+        for c in deduped:
+            c["hex"] = f"#{c['r']:02X}{c['g']:02X}{c['b']:02X}"
+
+        deduped.sort(key=lambda x: -x["percentage"])
+        return deduped
+
+    except Exception as e:
+        logger.warning("Dominant color extraction failed: %s", e)
+        return []
+
+
 @mcp.tool(
     name="illustrator_set_reference",
     annotations={"title": "Set Reference Overlay", "readOnlyHint": False, "destructiveHint": False}
@@ -798,9 +882,28 @@ async def illustrator_set_reference(params: SetReferenceInput) -> str:
 
     script = _SET_REFERENCE_JSX % payload_json
 
-    return await execute_jsx_tool(
+    result = await execute_jsx_tool(
         script=script,
         command_type="set_reference",
         tool_name="illustrator_set_reference",
         params=payload
     )
+
+    # Extract dominant colors from the reference image (if setting, not clearing)
+    if params.file_path:
+        resolved = os.path.abspath(params.file_path)
+        if os.path.isfile(resolved):
+            colors = _extract_dominant_colors(resolved)
+            if colors:
+                # Merge colors into the response envelope
+                try:
+                    parsed = json.loads(result)
+                    parsed["dominant_colors"] = colors
+                    result = json.dumps(parsed, indent=2)
+                except (json.JSONDecodeError, TypeError):
+                    # Response isn't JSON — append as separate block
+                    color_json = json.dumps({"dominant_colors": colors}, indent=2)
+                    result = f"{result}\n\n--- Dominant Colors ---\n{color_json}"
+
+    return result
+

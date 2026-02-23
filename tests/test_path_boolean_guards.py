@@ -112,7 +112,7 @@ class TestContractsSchema:
         assert '"xor"' in self.source
 
     def test_schema_version_updated(self):
-        assert "1.5" in self.source
+        assert "1.6" in self.source
 
 
 class TestPythonGeometryModule:

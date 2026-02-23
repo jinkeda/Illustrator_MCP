@@ -72,13 +72,7 @@ cd Illustrator_MCP
 pip install -e .
 ```
 
-**Optional — enable VLM overlay (annotated artboard preview):**
-
-```bash
-pip install -e ".[overlay]"
-```
-
-This installs [Pillow](https://python-pillow.org/) for compositing numbered bounding boxes onto preview images. Without it, the overlay degrades gracefully (plain preview returned instead).
+This installs all dependencies including [Pillow](https://python-pillow.org/) for compositing numbered bounding boxes onto VLM preview images.
 
 ### 2. Build & Install the CEP Extension
 
@@ -191,13 +185,13 @@ This server follows a **Scripting First** architecture: one powerful script exec
 | `illustrator_document` | Unified document I/O: `action="create"` / `"open"` / `"save"` / `"close"` |
 | `illustrator_export_document` | Export to PNG, JPG, SVG, or PDF with optional visual feedback |
 | `illustrator_place_file` | Place an external file (PNG, JPG, EPS, AI, PDF) with optional editable embed or Image Trace vectorization (`trace=True`) |
-| `illustrator_set_reference` | Place or clear a locked reference image on a background layer |
+| `illustrator_set_reference` | Place or clear a locked reference image on a background layer. Returns dominant colors for palette matching. |
 
-### Undo / Redo (1)
+### Undo / Redo / Checkpoints (1)
 
 | Tool | Description |
 |---|---|
-| `illustrator_history` | Undo or redo actions (supports multi-step count) |
+| `illustrator_history` | Undo/redo actions (multi-step count), plus named checkpoint management: `checkpoint_save`, `checkpoint_restore`, `checkpoint_list`, `checkpoint_delete` |
 
 ### Context & Inspection (1)
 
@@ -364,13 +358,31 @@ execute_task return shape:
   [TextContent(SOC report), ImageContent(annotated PNG), TextContent(annotation map)]
 ```
 
-This closes the visual loop: the agent sees overlapping elements, abandoned text frames, or off-artboard items before deciding its next action. If the overlay fails (Pillow missing, export error), the response degrades gracefully to the text-only SOC report.
+This closes the visual loop: the agent sees overlapping elements, abandoned text frames, or off-artboard items before deciding its next action. If the overlay fails (export error), the response degrades gracefully to the text-only SOC report.
 
-> **Requires:** `pip install -e ".[overlay]"` for Pillow. Without it, previews return without annotations.
+> **Note:** Pillow is a core dependency (installed automatically). The VLM overlay is always available.
 
 ### Coordinate Rulers
 
 All VLM auto-previews include coordinate axis rulers along the top and left edges, giving the VLM exact point-coordinate reference. Ruler labels use **screen-space**: origin at top-left of artboard, X rightward, Y downward — matching `spatial_context` (returned by `set_reference`) and `bounds_screen` (used in `vlm_grounding`). Tick intervals are adaptive (≤12 labels per axis), and labels use anti-overlap logic to stay readable on any artboard size.
+
+### Coordinate Prober
+
+Pass `probe_points` to `execute_script` to render labeled coordinate markers on the annotated preview. Each probe is a colored circle with crosshair lines and a coordinate readout, useful for verifying exact positions.
+
+```python
+execute_script(
+    script="...",
+    return_preview=True,
+    preview_mode="annotated",
+    probe_points=[
+        {"label": "center", "x": 250, "y": 300},
+        {"label": "top_left", "x": 50, "y": 50}
+    ]
+)
+```
+
+Probe coordinates use the same screen-space Y-down convention as rulers. Colors cycle through a 6-color palette. Rendering is non-fatal — probes are skipped gracefully if Pillow is unavailable.
 
 ### VLM QA Cadence
 
@@ -581,13 +593,16 @@ Illustrator_MCP/
 │   ├── tools/
 │   │   ├── __init__.py           # Tool registration
 │   │   ├── base.py               # Shared execute_jsx_tool helper
-│   │   ├── execute.py            # execute_script + execute_task + auto-grounding
-│   │   ├── documents.py          # Document I/O tools
+│   │   ├── execute.py            # execute_script + auto-grounding
+│   │   ├── path_boolean.py       # execute_task + path boolean operations
+│   │   ├── cadence.py            # VLM QA cadence counter + constants
+│   │   ├── preview.py            # Preview capture + annotation pipeline
+│   │   ├── documents.py          # Document I/O + checkpoint tools
 │   │   ├── context.py            # State inspection tools
 │   │   ├── query.py              # query_items + preflight_check
 │   │   ├── import_svg.py         # SVG path import tool (d → drawPathPoints)
 │   │   └── archive/              # Disabled legacy tools (reference only)
-│   ├── overlay.py                # VLM overlay (bounding boxes + grid overlay + ruler overlay + coordinate mapping)
+│   ├── overlay.py                # VLM overlay (bounding boxes + ruler + probe markers + coordinate mapping)
 │   └── resources/
 │       ├── docs/
 │       │   └── extendscript_reference.md
@@ -606,7 +621,7 @@ Illustrator_MCP/
 │   │   ├── components/MCPControlPanel.tsx
 │   │   └── hooks/useMCP.ts       # WebSocket connection hook
 │   └── vite.config.ts
-├── tests/                        # Unit tests (pytest, 940+ tests)
+├── tests/                        # Unit tests (pytest, 1037 tests)
 │   ├── conftest.py               # Shared fixtures + collection-error guard
 │   ├── test_execute.py
 │   ├── test_documents.py

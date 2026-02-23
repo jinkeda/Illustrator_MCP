@@ -730,3 +730,133 @@ def draw_ruler_overlay(
         logger.error(f"Ruler overlay failed: {e}")
         return img_bytes
 
+
+# ── Probe-Point Overlay ──────────────────────────────────────────────
+
+# Visual constants for probe markers
+_PROBE_RADIUS = 6           # circle radius in pixels
+_PROBE_CROSSHAIR = 10       # crosshair half-length in pixels
+_PROBE_FONT_SIZE = 12
+
+# 6-color probe palette (distinct from annotation outline colors)
+_PROBE_PALETTE = [
+    (255, 60,  60,  220),   # red
+    (60,  180, 255, 220),   # blue
+    (60,  220, 60,  220),   # green
+    (255, 200, 40,  220),   # yellow
+    (200, 80,  255, 220),   # purple
+    (255, 140, 40,  220),   # orange
+]
+
+
+def draw_probe_overlay(
+    img_bytes: bytes,
+    probe_points: List[dict],
+    artboard_width_pt: float,
+    artboard_height_pt: float,
+) -> bytes:
+    """Draw coordinate probe markers onto a PNG image.
+
+    Each probe point is rendered as a colored circle with crosshair lines
+    and a label showing the name and coordinates.
+
+    Probe points use screen-space coordinates: origin at top-left of artboard,
+    X rightward, Y downward. This matches the ruler overlay convention.
+
+    Args:
+        img_bytes: Raw PNG bytes (base image).
+        probe_points: List of dicts with keys:
+            - x (float): X coordinate in artboard points (screen-space).
+            - y (float): Y coordinate in artboard points (screen-space, Y-down).
+            - label (str, optional): Display label for the probe point.
+        artboard_width_pt: Artboard width in points.
+        artboard_height_pt: Artboard height in points.
+
+    Returns:
+        PNG bytes with probe markers composited. Returns original bytes
+        if Pillow is missing, no points provided, or an error occurs.
+    """
+    if not HAS_PILLOW:
+        return img_bytes
+    if not probe_points:
+        return img_bytes
+    if artboard_width_pt <= 0 or artboard_height_pt <= 0:
+        return img_bytes
+
+    try:
+        from PIL import Image, ImageDraw
+
+        base_img = Image.open(io.BytesIO(img_bytes)).convert("RGBA")
+        img_w, img_h = base_img.size
+        overlay = Image.new("RGBA", (img_w, img_h), (0, 0, 0, 0))
+        draw = ImageDraw.Draw(overlay)
+
+        scale_x = img_w / artboard_width_pt
+        scale_y = img_h / artboard_height_pt
+
+        font = _load_font(_PROBE_FONT_SIZE)
+        radius = _PROBE_RADIUS
+        cross = _PROBE_CROSSHAIR
+
+        for i, pt in enumerate(probe_points):
+            px_x = pt.get("x", 0) * scale_x
+            px_y = pt.get("y", 0) * scale_y
+            cx = int(round(px_x))
+            cy = int(round(px_y))
+
+            color = _PROBE_PALETTE[i % len(_PROBE_PALETTE)]
+            label = pt.get("label", "")
+
+            # Crosshair lines
+            draw.line(
+                [(cx - cross, cy), (cx + cross, cy)],
+                fill=color, width=2,
+            )
+            draw.line(
+                [(cx, cy - cross), (cx, cy + cross)],
+                fill=color, width=2,
+            )
+
+            # Filled circle
+            draw.ellipse(
+                [cx - radius, cy - radius, cx + radius, cy + radius],
+                fill=color,
+                outline=(255, 255, 255, 240),
+                width=1,
+            )
+
+            # Label pill: "label (x, y)"
+            coord_text = f"({pt.get('x', 0):.0f}, {pt.get('y', 0):.0f})"
+            display = f"{label} {coord_text}" if label else coord_text
+            tw, th = _measure_text(font, display)
+
+            # Position label: to the right of the marker, offset slightly
+            lx = cx + radius + 4
+            ly = cy - th // 2
+            # Clamp to image
+            if lx + tw + 4 > img_w:
+                lx = cx - radius - tw - 4  # flip to left
+            if ly < 2:
+                ly = 2
+            if ly + th + 2 > img_h:
+                ly = img_h - th - 2
+
+            # Draw background pill
+            pill_pad = 3
+            draw.rounded_rectangle(
+                [lx - pill_pad, ly - pill_pad, lx + tw + pill_pad, ly + th + pill_pad],
+                radius=4,
+                fill=(0, 0, 0, 160),
+            )
+            _draw_text_with_halo(draw, (lx, ly), display, font, fg=(255, 255, 255, 255))
+
+        final_img = Image.alpha_composite(base_img, overlay)
+        out_buf = io.BytesIO()
+        final_img.save(out_buf, format="PNG")
+        return out_buf.getvalue()
+
+    except Exception as e:
+        logger.error(f"Probe overlay failed: {e}")
+        return img_bytes
+
+

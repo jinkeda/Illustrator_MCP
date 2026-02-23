@@ -207,6 +207,13 @@ class ExecuteScriptInput(ToolInputBase):
                     "elapsed time (checked every 1000 ops) and throws if exceeded."
     )
 
+    probe_points: Optional[List[dict]] = Field(
+        default=None,
+        description="Coordinate probe markers to render on the annotated preview. "
+                    "Each dict has: x (float, pts screen-space), y (float, pts Y-down), "
+                    "label (str, optional). Only drawn when preview_mode='annotated'."
+    )
+
 
 @mcp.tool(
     name="illustrator_execute_script",
@@ -474,6 +481,7 @@ async def illustrator_execute_script(params: ExecuteScriptInput) -> Union[str, l
                             img_bytes=raw_bytes,
                             max_items=params.preview_max_items,
                             timeout=params.timeout,
+                            probe_points=params.probe_points,
                         )
                         ann_b64 = _b64.b64encode(annotated_bytes).decode('utf-8')
                         result_parts = [

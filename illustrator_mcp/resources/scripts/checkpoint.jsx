@@ -115,7 +115,7 @@ function _saveFallback(docKey) {
             serialized[name] = store[name];
         }
         var json = ""; // Manual JSON serialization for ES3
-        json = __mcp_toJSON(serialized);
+        json = JSON.stringify(serialized);
 
         var f = new File(_fallbackPath(docKey));
         f.open("w");
@@ -161,7 +161,7 @@ function checkpointSave(name, doc) {
     // Estimate byte size
     var jsonStr;
     try {
-        jsonStr = __mcp_toJSON(snap);
+        jsonStr = JSON.stringify(snap);
     } catch (e) {
         return { ok: false, error: "Failed to serialize snapshot: " + e.message };
     }

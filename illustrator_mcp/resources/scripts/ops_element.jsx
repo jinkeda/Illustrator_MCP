@@ -317,6 +317,19 @@ registerOpHandler("element_create", function (params, targets, ctx) {
             } else {
                 // Raw point array: [[x,y], ...]
                 pathPoints = geoInput;
+
+                // Auto-smooth: Catmull-Rom → Bézier IR
+                if (params.smooth && pathPoints.length >= 3) {
+                    var isClosed = params.closed !== false;
+                    var tension = (params.tension !== undefined && params.tension !== null)
+                        ? params.tension : 0.5;
+                    geoInput = smoothCurve(pathPoints, tension, isClosed);
+                    pathPoints = geoInput.points || [];
+                    if (params.closed === undefined) params.closed = geoInput.closed;
+                    pathWarnings.push("smooth: Catmull-Rom applied (" + pathPoints.length + " pts, tension=" + tension + ")");
+                } else if (params.smooth) {
+                    pathWarnings.push("smooth: ignored (< 3 points, need >= 3 for smoothing)");
+                }
             }
 
             if (pathPoints.length < 2) {
@@ -355,26 +368,32 @@ registerOpHandler("element_create", function (params, targets, ctx) {
                     item.setEntirePath(bPts);
 
                     // Apply handles and pointType — single transform (already flipped)
+                    // Accept both IR format (in/out/type) and canonical (left/right/pointType)
                     for (var bi = 0; bi < bPts.length; bi++) {
                         var pp = item.pathPoints[bi];
                         var hEntry = bH[bi];
 
-                        // In-handle (leftDirection) — canonical key: "left"
-                        if (hEntry.left != null) {
-                            pp.leftDirection = hEntry.left;
+                        // In-handle (leftDirection): IR key "in", canonical key "left"
+                        var hIn = (hEntry.left != null) ? hEntry.left
+                            : (hEntry["in"] != null) ? hEntry["in"] : null;
+                        if (hIn != null) {
+                            pp.leftDirection = hIn;
                         } else {
                             pp.leftDirection = bPts[bi]; // coincident = sharp
                         }
 
-                        // Out-handle (rightDirection) — canonical key: "right"
-                        if (hEntry.right != null) {
-                            pp.rightDirection = hEntry.right;
+                        // Out-handle (rightDirection): IR key "out", canonical key "right"
+                        var hOut = (hEntry.right != null) ? hEntry.right
+                            : (hEntry.out != null) ? hEntry.out : null;
+                        if (hOut != null) {
+                            pp.rightDirection = hOut;
                         } else {
                             pp.rightDirection = bPts[bi]; // coincident = sharp
                         }
 
-                        // PointType: canonical key: "pointType"
-                        if (hEntry.pointType === "corner") {
+                        // PointType: canonical "pointType", IR "type"
+                        var pType = hEntry.pointType || hEntry.type || "smooth";
+                        if (pType === "corner") {
                             pp.pointType = PointType.CORNER;
                         } else {
                             pp.pointType = PointType.SMOOTH;

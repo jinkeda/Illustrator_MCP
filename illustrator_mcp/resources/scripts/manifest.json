@@ -459,6 +459,7 @@
             "file": "checkpoint.jsx",
             "version": "1.0.0",
             "dependencies": [
+                "polyfills",
                 "snapshot",
                 "mcp_id"
             ],

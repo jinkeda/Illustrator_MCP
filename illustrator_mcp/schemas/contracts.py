@@ -7,7 +7,7 @@ contracts.jsx for the JSX runtime.
 
 DO NOT define schemas in JSX files directly. This is the SSOT.
 
-Schema version: 1.5 — added Bézier control points for path/polyline
+Schema version: 1.6 — added smooth/tension for Catmull-Rom auto-smoothing
 """
 
 from enum import Enum
@@ -156,6 +156,8 @@ OP_SCHEMAS: List[OpSchema] = [
         "innerRadius":  _p(N),
         "cornerRadius": _p(N),
         "closed":       _p(B),
+        "smooth":       _p(B, desc="Auto-smooth points via Catmull-Rom spline"),
+        "tension":      _p(N, desc="Smooth tension 0-1 (0=straight, 0.5=Catmull-Rom, 1.0=loose)"),
         "x2":           _p(N),
         "y2":           _p(N),
         "contents":     _p(S),

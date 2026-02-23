@@ -26,6 +26,7 @@ from illustrator_mcp.tools.preview import (
 logger = logging.getLogger("illustrator_mcp")
 
 
+
 # ==================== Task Protocol Tool ====================
 
 
@@ -298,6 +299,12 @@ JSON.stringify(report);
         # B3: Decrement counter so failed tasks don't pollute cadence
         _counter.decrement()
         logger.error(f"Task execution failed: {str(e)}")
+        # Include checkpoint name for recovery if available
+        if checkpoint_name:
+            raise RuntimeError(
+                f"{e}\n\nRecovery: restore checkpoint '{checkpoint_name}' "
+                f"via illustrator_history(action='checkpoint_restore', name='{checkpoint_name}')"
+            ) from e
         raise
 
 
