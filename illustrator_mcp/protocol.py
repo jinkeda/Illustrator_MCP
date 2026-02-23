@@ -17,6 +17,7 @@ from pydantic import BaseModel, Field, model_validator
 # ==================== Error Codes ====================
 
 from illustrator_mcp.errors import ErrorCode  # noqa: F401 — single source of truth
+from illustrator_mcp.schemas.contracts import TASK_PROTOCOL_VERSION  # noqa: F401
 
 
 # ==================== Ordering & Filtering ====================
@@ -325,7 +326,7 @@ class TaskReport(BaseModel):
 class TaskPayload(BaseModel):
     """Standard task payload."""
     task: str = Field(..., description="Task type: draw_shapes, apply_styles, query_items")
-    version: str = Field(default="3.0.0", description="Protocol version")
+    version: str = Field(default=TASK_PROTOCOL_VERSION, description="Protocol version")
     targets: Optional[Union[TargetSelector, Dict[str, Any]]] = Field(
         default=None,
         description="Target selector (structured or legacy dict)"

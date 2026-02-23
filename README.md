@@ -594,7 +594,7 @@ Illustrator_MCP/
 │   │   ├── __init__.py           # Tool registration
 │   │   ├── base.py               # Shared execute_jsx_tool helper
 │   │   ├── execute.py            # execute_script + auto-grounding
-│   │   ├── path_boolean.py       # execute_task + path boolean operations
+│   │   ├── task_execution.py     # execute_task + path boolean operations
 │   │   ├── cadence.py            # VLM QA cadence counter + constants
 │   │   ├── preview.py            # Preview capture + annotation pipeline
 │   │   ├── documents.py          # Document I/O + checkpoint tools
@@ -606,6 +606,8 @@ Illustrator_MCP/
 │   └── resources/
 │       ├── docs/
 │       │   └── extendscript_reference.md
+│       ├── templates/            # JSX templates loaded by Python (IDE-checkable)
+│       │   └── compute_soc_batch.jsx
 │       └── scripts/              # 18+ ExtendScript libraries
 │           ├── manifest.json     # Library metadata + dependency graph
 │           ├── geometry.jsx      # XY coordinates, bounds, colors
@@ -621,7 +623,7 @@ Illustrator_MCP/
 │   │   ├── components/MCPControlPanel.tsx
 │   │   └── hooks/useMCP.ts       # WebSocket connection hook
 │   └── vite.config.ts
-├── tests/                        # Unit tests (pytest, 1037 tests)
+├── tests/                        # Unit tests (pytest, 1200+ tests)
 │   ├── conftest.py               # Shared fixtures + collection-error guard
 │   ├── test_execute.py
 │   ├── test_documents.py

@@ -119,15 +119,23 @@ function validatePayload(payload) {
     }
 
     // Validate version (fail fast on major version mismatch)
+    // TASK_PROTOCOL_MAJOR_VERSIONS is defined in contracts.jsx (compiled from contracts.py SSOT)
     if (payload.version) {
         var majorVersion = payload.version.split(".")[0];
-        if (majorVersion !== "2") {
+        var acceptedVersions = (typeof TASK_PROTOCOL_MAJOR_VERSIONS !== "undefined")
+            ? TASK_PROTOCOL_MAJOR_VERSIONS
+            : ["2", "3"];  // fallback if contracts.jsx not loaded
+        var versionOk = false;
+        for (var vi = 0; vi < acceptedVersions.length; vi++) {
+            if (acceptedVersions[vi] === majorVersion) { versionOk = true; break; }
+        }
+        if (!versionOk) {
             errors.push(makeError(
                 ErrorCodes.V_SCHEMA_MISMATCH,
-                "Incompatible protocol version: " + payload.version + " (expected 2.x)",
+                "Incompatible protocol version: " + payload.version + " (expected " + acceptedVersions.join(", ") + ")",
                 "validate",
                 null,
-                { expected: "2.x", received: payload.version }
+                { expected: acceptedVersions.join(", "), received: payload.version }
             ));
         }
     }
@@ -455,6 +463,13 @@ function executeTask(payload, collectFn, computeFn, applyFn) {
     }
 
     // === APPLY stage ===
+    if (!applyFn) {
+        // SOC batch mode: no apply step (ops in compute are the mutations)
+        if (trace) trace.push("[APPLY] Skipped (applyFn=null, SOC batch mode)");
+        report.timing.apply_ms = 0;
+        report.timing.total_ms = (new Date().getTime()) - t0;
+        return report;
+    }
     try {
         if (trace) trace.push("[APPLY] Applying " + actions.length + " actions");
         applyFn(actions, report);

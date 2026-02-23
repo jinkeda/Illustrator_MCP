@@ -438,9 +438,9 @@ class TestReviewFixes(unittest.TestCase):
         }
         mock_response = {"result": json.dumps(mock_report), "error": None}
 
-        with patch("illustrator_mcp.tools.path_boolean.execute_script_with_context",
+        with patch("illustrator_mcp.tools.task_execution.execute_script_with_context",
                     new_callable=AsyncMock, return_value=mock_response), \
-             patch("illustrator_mcp.tools.path_boolean._capture_artboard",
+             patch("illustrator_mcp.tools.task_execution._capture_artboard",
                     new_callable=AsyncMock) as mock_capture:
 
             result = asyncio.get_event_loop().run_until_complete(
@@ -484,9 +484,9 @@ class TestReviewFixes(unittest.TestCase):
         }
         mock_response = {"result": json.dumps(mock_report), "error": None}
 
-        with patch("illustrator_mcp.tools.path_boolean.execute_script_with_context",
+        with patch("illustrator_mcp.tools.task_execution.execute_script_with_context",
                     new_callable=AsyncMock, return_value=mock_response), \
-             patch("illustrator_mcp.tools.path_boolean._capture_artboard",
+             patch("illustrator_mcp.tools.task_execution._capture_artboard",
                     new_callable=AsyncMock) as mock_capture:
 
             result = asyncio.get_event_loop().run_until_complete(

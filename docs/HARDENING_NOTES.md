@@ -56,11 +56,10 @@ Bugs, gaps, and observations found during verification on 2026-02-10.
 
 ## 🏗️ Architectural Observations
 
-### 7. `element_create` doesn't return `createdIds` in summaryOnly mode
-- **Observed**: `createdIds` from the batch only contained ONE id (from `element_create` for the rect), not the IDs from `element_create_multi`
-- **Root cause**: `element_create_multi` returns IDs in `result.data.ids[]` but `executeOpBatch` only pushes `opResult.id` (singular) to `createdIds[]`, not the array from multi-create
-- **Impact**: In `summaryOnly` mode, you lose track of individual curve IDs — only the first/parent ID is captured
-- **Fix needed**: `executeOpBatch` should check for `opResult.data.ids` array and concat to `createdIds`
+### 7. ~~`element_create` doesn't return `createdIds` in summaryOnly mode~~ ✅ FIXED
+- **Fixed in**: `executeSubOps` L688-695 (`ops_core.jsx`) — now checks `opResult.data.ids[]` and concats to `createdIds`
+- ~~Root cause~~: `element_create_multi` returns IDs in `result.data.ids[]` but `executeOpBatch` only pushed `opResult.id`
+- **Verified**: `createdIds` aggregation now works in all paths (full, summaryOnly, chunked)
 
 ### 8. No runtime dependency guard in JSX
 - `ops_core.jsx` calls `makeError()` at line 80 (inside `validateOp`). If `task_executor.jsx` isn't loaded, this throws a generic `TypeError` with no useful message.
@@ -74,7 +73,11 @@ Bugs, gaps, and observations found during verification on 2026-02-10.
 - **Root cause**: Known Illustrator bug — `textFrames.add()` throws PARM when document has many `pathItems`. The `addLabel` function already works around this by using `pointText()`, but even `pointText()` can fail in very large documents.
 - **Mitigation**: Wrap Phase C in try/catch in the generator, make labels optional
 
-### 10. Journal recording skipped in `summaryOnly` mode
-- **Observed**: Looking at `executeOpBatch` code — journal recording (P6 section) only runs in the NON-summaryOnly branch (after the `if (summaryOnly) { return ... }` early return at ~line 750)
-- **Impact**: When `summaryOnly: true` is used (which generators should use per conventions), journal entries are never written
-- **Fix needed**: Move journal recording BEFORE the summaryOnly early return
+### 10. ~~Journal recording skipped in `summaryOnly` mode~~ ✅ FIXED
+- **Fixed in**: `executeOpBatch` L991-1014 (`ops_core.jsx`) — journal recording now runs before the `summaryOnly` early return
+
+### 11. Handler `ok` semantics: `ok: count > 0` producer bug ✅ FIXED
+- **Observed**: Multiple handlers returned `ok: created > 0` or `ok: modified > 0`, conflating "nothing to do" with "operation failed"
+- **Impact**: When all items were skipped (valid behavior), handler returned `ok: false`, causing `executeSubOps` to increment `failed`, leading to misleading `{ok: false, errors: []}` batch reports
+- **Fixed in**: 8 handler sites across `ops_element.jsx`, `ops_style.jsx`, `ops_text.jsx` — all changed to `ok: true` (errors exit early via `makeError`)
+- **Consumer hardening**: `classify_response` now checks `result.get("ok") is False` (step 4b)

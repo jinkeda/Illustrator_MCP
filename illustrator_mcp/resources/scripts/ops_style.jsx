@@ -55,7 +55,7 @@ registerOpHandler("style_set_fill", function (params, targets, ctx) {
         }
     }
 
-    return { ok: modified > 0, data: { modified: modified }, warnings: warnings };
+    return { ok: true, data: { modified: modified }, warnings: warnings };
 });
 
 // ==================== Style Set Stroke ====================
@@ -97,7 +97,7 @@ registerOpHandler("style_set_stroke", function (params, targets, ctx) {
         }
     }
 
-    return { ok: modified > 0, data: { modified: modified }, warnings: warnings };
+    return { ok: true, data: { modified: modified }, warnings: warnings };
 });
 
 // ==================== Style Set Opacity ====================
@@ -587,7 +587,7 @@ registerOpHandler("style_set_gradient", function (params, targets, ctx) {
     }
 
     return {
-        ok: modified > 0,
+        ok: true,
         data: { modified: modified, gradientName: gradName },
         warnings: warnings
     };

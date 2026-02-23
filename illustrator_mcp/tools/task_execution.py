@@ -7,9 +7,11 @@ Python-Clipper-backed path boolean tool (path_boolean).
 
 import json
 import logging
+from functools import lru_cache
+from pathlib import Path
 from typing import Any, Dict, List, Literal, Optional, Union
 
-from pydantic import Field
+from pydantic import Field, model_validator
 from mcp.types import ImageContent, TextContent
 
 from illustrator_mcp.shared import mcp
@@ -25,9 +27,16 @@ from illustrator_mcp.tools.preview import (
 
 logger = logging.getLogger("illustrator_mcp")
 
+_TEMPLATES_DIR = Path(__file__).parent.parent / "resources" / "templates"
 
 
-# ==================== Task Protocol Tool ====================
+@lru_cache(maxsize=16)
+def _load_jsx_template(name: str) -> str:
+    """Load a .jsx template from resources/templates/ (cached)."""
+    path = _TEMPLATES_DIR / name
+    if not path.exists():
+        raise FileNotFoundError(f"JSX template not found: {path}")
+    return path.read_text(encoding="utf-8")
 
 
 class ExecuteTaskInput(ToolInputBase):
@@ -45,15 +54,30 @@ class ExecuteTaskInput(ToolInputBase):
         description="Collector function name (use standard 'collectTargets' or provide custom)"
     )
     
-    compute_fn: str = Field(
-        ...,
-        description="JSX code for compute logic. Receives (items, params, report), must return actions array."
+    compute_fn: Optional[str] = Field(
+        default=None,
+        description=(
+            "JSX code for compute logic. Receives (items, params, report), "
+            "must return actions array. Omit for SOC batch-only mode."
+        ),
     )
     
-    apply_fn: str = Field(
-        ...,
-        description="JSX code for apply logic. Receives (actions, report), modifies items."
+    apply_fn: Optional[str] = Field(
+        default=None,
+        description=(
+            "JSX code for apply logic. Receives (actions, report), modifies items. "
+            "Omit for SOC batch-only mode (ops in the payload are the apply step)."
+        ),
     )
+    
+    @model_validator(mode="after")
+    def _check_fn_consistency(self):
+        if self.compute_fn is not None and self.apply_fn is None:
+            raise ValueError(
+                "compute_fn requires apply_fn. If you are running SOC ops batches, "
+                "omit both compute_fn and apply_fn."
+            )
+        return self
 
     return_preview: Optional[bool] = Field(
         default=None,
@@ -125,16 +149,24 @@ async def illustrator_execute_task(params: ExecuteTaskInput) -> Union[str, list]
     # Build the execution script
     payload_json = json.dumps(params.payload.model_dump())
     
+    # Build compute/apply function blocks
+    if params.compute_fn is not None:
+        compute_block = f"function compute(items, params, report) {{\n{params.compute_fn}\n}}"
+    else:
+        # SOC batch mode: load template from .jsx file (IDE-checkable, no inline strings)
+        compute_block = _load_jsx_template("compute_soc_batch.jsx")
+
+    if params.apply_fn is not None:
+        apply_block = f"function apply(actions, report) {{\n{params.apply_fn}\n}}"
+    else:
+        apply_block = "var apply = null;  // SOC batch mode: no apply step"
+
     script = f"""
 // Compute function
-function compute(items, params, report) {{
-{params.compute_fn}
-}}
+{compute_block}
 
-// Apply function  
-function apply(actions, report) {{
-{params.apply_fn}
-}}
+// Apply function
+{apply_block}
 
 // Execute task
 var payload = {payload_json};

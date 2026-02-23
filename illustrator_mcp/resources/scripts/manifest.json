@@ -450,8 +450,7 @@
             "exports": [
                 "extractMcpId",
                 "setMcpId",
-                "removeIdFromNote",
-                "removeFromIdIndex"
+                "removeIdFromNote"
             ],
             "description": "MCP ID utilities: extraction, assignment, note manipulation, and targeted index removal"
         },

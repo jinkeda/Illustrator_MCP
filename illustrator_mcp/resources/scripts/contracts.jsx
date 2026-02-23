@@ -3,13 +3,17 @@
  * Part of Illustrator MCP SOC Framework
  * 
  * AUTO-GENERATED - DO NOT EDIT MANUALLY
- * Generated: 2026-02-22T21:53:40Z
+ * Generated: 2026-02-23T16:49:14Z
  * Source: illustrator_mcp/schemas/contracts.py
  * 
  * To regenerate: python -m illustrator_mcp.tools.compile_contracts
  */
 
-var CONTRACTS_CHECKSUM = "e8b2869f5ececbe2";
+var CONTRACTS_CHECKSUM = "8855668fe77f3c9f";
+
+// ==================== Protocol Version ====================
+var TASK_PROTOCOL_VERSION = "3.0.0";
+var TASK_PROTOCOL_MAJOR_VERSIONS = ["2", "3"];
 
 // ==================== Error Codes ====================
 
@@ -73,8 +77,11 @@ var OP_PARAM_SCHEMAS = {
             "radius",
             "outerRadius",
             "innerRadius",
+            "numPoints",
             "cornerRadius",
             "closed",
+            "smooth",
+            "tension",
             "x2",
             "y2",
             "contents",
@@ -99,8 +106,11 @@ var OP_PARAM_SCHEMAS = {
             "radius": "number",
             "outerRadius": "number",
             "innerRadius": "number",
+            "numPoints": "number",
             "cornerRadius": "number",
             "closed": "boolean",
+            "smooth": "boolean",
+            "tension": "number",
             "x2": "number",
             "y2": "number",
             "contents": "string",
@@ -192,6 +202,7 @@ var OP_PARAM_SCHEMAS = {
             "radius",
             "outerRadius",
             "innerRadius",
+            "numPoints",
             "cornerRadius",
             "closed",
             "x2",
@@ -218,6 +229,7 @@ var OP_PARAM_SCHEMAS = {
             "radius": "number",
             "outerRadius": "number",
             "innerRadius": "number",
+            "numPoints": "number",
             "cornerRadius": "number",
             "closed": "boolean",
             "x2": "number",

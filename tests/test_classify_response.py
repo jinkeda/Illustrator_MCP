@@ -151,3 +151,62 @@ class TestClassifyOptions:
         assert c.ok is True
         # Result should still be the raw dict with success key
         assert c.result.get("success") is True
+
+
+class TestClassifyResponseBatchReport:
+    """Test batch report classification (step 4b)."""
+
+    def test_batch_ok_false_with_errors(self):
+        """Batch report {ok:false, errors:[{...}]} is classified as failure."""
+        resp = {"result": {
+            "ok": False,
+            "errors": [{"index": 0, "task": "element_create", "error": "Layer locked"}],
+            "stats": {"total": 5, "failed": 1},
+        }}
+        c = classify_response(resp)
+
+        assert c.ok is False
+        assert "Layer locked" in c.error_message
+
+    def test_batch_ok_false_empty_errors(self):
+        """Batch report {ok:false, errors:[], stats:{failed:1}} is classified as failure."""
+        resp = {"result": {
+            "ok": False,
+            "errors": [],
+            "stats": {"total": 5, "failed": 1},
+        }}
+        c = classify_response(resp)
+
+        assert c.ok is False
+        assert "1/5" in c.error_message
+
+    def test_batch_ok_true_passes(self):
+        """Batch report {ok:true} passes through as success."""
+        resp = {"result": {
+            "ok": True,
+            "stats": {"total": 5, "passed": 5, "failed": 0},
+            "createdIds": ["id1", "id2"],
+        }}
+        c = classify_response(resp)
+
+        assert c.ok is True
+        assert c.result["ok"] is True
+
+    def test_batch_ok_true_with_errors_trusts_ok(self):
+        """Batch with ok:true AND non-empty errors trusts ok (partial success)."""
+        resp = {"result": {
+            "ok": True,
+            "errors": [{"index": 2, "task": "style_set_fill", "error": "skipped"}],
+            "stats": {"total": 5, "passed": 4, "failed": 1},
+        }}
+        c = classify_response(resp)
+
+        assert c.ok is True
+
+    def test_no_ok_field_passes(self):
+        """Dict with no 'ok' key is treated as success (backward compat)."""
+        resp = {"result": {"data": "some result", "stats": {"total": 1}}}
+        c = classify_response(resp)
+
+        assert c.ok is True
+

@@ -187,7 +187,14 @@ class LibraryResolver:
             lib_path = self.resources_dir / lib["file"]
             try:
                 content = self._read_library_file(lib_path)
-                resolved.append(content)
+                line_count = content.count('\n') + 1
+                # Wrap with source markers for error traceability
+                # Format: // === [lib_name] (filename, N lines) ===
+                resolved.append(
+                    f"// === BEGIN: {lib_name} ({lib['file']}, {line_count} lines) ===\n"
+                    f"{content}\n"
+                    f"// === END: {lib_name} ==="
+                )
             except ValueError as e:
                 raise ValueError(f"Library file not found: {lib['file']}") from e
         
@@ -283,7 +290,13 @@ class LibraryResolver:
             lib_path = self.resources_dir / lib["file"]
             try:
                 content = self._read_library_file(lib_path)
-                resolved_code.append(content)
+                line_count = content.count('\n') + 1
+                # Wrap with source markers for error traceability
+                resolved_code.append(
+                    f"// === BEGIN: {lib_name} ({lib['file']}, {line_count} lines) ===\n"
+                    f"{content}\n"
+                    f"// === END: {lib_name} ==="
+                )
                 resolved_names.append(lib_name)
             except ValueError as e:
                 raise ValueError(f"Library file not found: {lib['file']}") from e
@@ -415,3 +428,56 @@ def inject_libraries(
         + "// === MCP user script ===\n"
         + script
     )
+
+
+def map_error_to_source(prelude: str, error_line: int) -> Optional[Dict[str, Any]]:
+    """
+    Map a global prelude line number to a source .jsx file + local line.
+    
+    Parses ``// === BEGIN: lib_name (filename, N lines) ===`` markers
+    to determine which source file an error occurred in.
+    
+    Args:
+        prelude: The concatenated prelude string (from resolve()).
+        error_line: The 1-indexed line number from ExtendScript error.
+        
+    Returns:
+        Dict with {library, file, local_line} or None if line is not in a library.
+    """
+    import re
+    
+    current_lib: Optional[str] = None
+    current_file: Optional[str] = None
+    lib_start_line: int = 0
+    
+    for i, line in enumerate(prelude.split('\n'), start=1):
+        m = re.match(r'^// === BEGIN: (\S+) \(([^,]+),', line)
+        if m:
+            current_lib = m.group(1)
+            current_file = m.group(2)
+            lib_start_line = i + 1  # content starts on next line
+            continue
+        
+        if line.startswith('// === END:'):
+            if i >= error_line and current_lib is not None:
+                # Error was in this library
+                local_line = error_line - lib_start_line + 1
+                return {
+                    "library": current_lib,
+                    "file": current_file,
+                    "local_line": local_line,
+                }
+            current_lib = None
+            current_file = None
+            continue
+        
+        if i == error_line and current_lib is not None:
+            local_line = error_line - lib_start_line + 1
+            return {
+                "library": current_lib,
+                "file": current_file,
+                "local_line": local_line,
+            }
+    
+    return None
+

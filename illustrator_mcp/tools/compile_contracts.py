@@ -27,6 +27,8 @@ from illustrator_mcp.schemas.contracts import (
     OpErrorCode,
     OP_SCHEMAS,
     OpSchema,
+    TASK_PROTOCOL_VERSION,
+    TASK_PROTOCOL_MAJOR_VERSIONS,
 )
 
 OUTPUT_PATH = (
@@ -85,6 +87,13 @@ def render_jsx(schemas_dict: dict, errors_dict: dict, checksum: str) -> str:
 
     # Checksum
     lines.append(f'var CONTRACTS_CHECKSUM = "{checksum}";')
+    lines.append("")
+
+    # Protocol version constants (SSOT — from contracts.py)
+    lines.append("// ==================== Protocol Version ====================")
+    lines.append(f'var TASK_PROTOCOL_VERSION = "{TASK_PROTOCOL_VERSION}";')
+    major_list = ", ".join(f'"{v}"' for v in TASK_PROTOCOL_MAJOR_VERSIONS)
+    lines.append(f"var TASK_PROTOCOL_MAJOR_VERSIONS = [{major_list}];")
     lines.append("")
 
     # Error codes

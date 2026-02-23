@@ -1041,9 +1041,13 @@ function executeOpBatch(ops, options) {
             timing: { total_ms: totalMs },
             diagnostics: ctx.diagnostics,
             warnings: reportWarnings.length > 0 ? reportWarnings : undefined,
-            errors: results.filter(function (r) { return !r.ok; }).map(function (r) {
-                return { index: r.index, task: r.task, error: r.error };
-            }),
+            errors: (function () {
+                var errs = [];
+                for (var ei = 0; ei < results.length; ei++) {
+                    if (!results[ei].ok) errs.push({ index: results[ei].index, task: results[ei].task, error: results[ei].error });
+                }
+                return errs.length > 0 ? errs : undefined;
+            })(),
             trace: trace
         };
     }

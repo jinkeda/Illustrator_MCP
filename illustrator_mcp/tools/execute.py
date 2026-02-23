@@ -556,7 +556,7 @@ async def illustrator_execute_script(params: ExecuteScriptInput) -> Union[str, l
 # ── Backward-compatible re-exports ──────────────────────────────────
 # These ensure existing imports like `from illustrator_mcp.tools.execute import X`
 # continue to work from tests and import_svg.py.
-from illustrator_mcp.tools.path_boolean import (  # noqa: E402, F401
+from illustrator_mcp.tools.task_execution import (  # noqa: E402, F401
     ExecuteTaskInput,
     PathBooleanInput,
     illustrator_execute_task,
@@ -572,7 +572,7 @@ __all__ = [
     "_generate_preview", "_COLLECT_ITEMS_JSX", "_filter_items", "_annotate_preview",
     # Execute script
     "ExecuteScriptInput", "illustrator_execute_script",
-    # Re-exports from path_boolean
+    # Re-exports from task_execution
     "ExecuteTaskInput", "PathBooleanInput",
     "illustrator_execute_task", "illustrator_path_boolean",
 ]

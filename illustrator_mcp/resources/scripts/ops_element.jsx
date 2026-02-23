@@ -228,10 +228,15 @@ registerOpHandler("element_create", function (params, targets, ctx) {
             break;
 
         case "line":
-            var x2 = params.x2 !== undefined ? params.x2 : x + 100;
-            var y2 = params.y2 !== undefined ? params.y2 : y;
+            // Accept x1/y1 as aliases for start point (x/y)
+            var lx1 = params.x1 !== undefined ? params.x1 : x;
+            var ly1 = params.y1 !== undefined ? params.y1 : y;
+            var lx2 = params.x2 !== undefined ? params.x2 : lx1 + 100;
+            var ly2 = params.y2 !== undefined ? params.y2 : ly1;
             item = targetLayer.pathItems.add();
-            item.setEntirePath([[abLeft + x, abTop - y], [abLeft + x2, abTop - y2]]);
+            item.setEntirePath([[abLeft + lx1, abTop - ly1], [abLeft + lx2, abTop - ly2]]);
+            item.closed = false;
+            item.filled = false;
             break;
 
         case "roundedRect":
@@ -248,7 +253,7 @@ registerOpHandler("element_create", function (params, targets, ctx) {
             break;
 
         case "star":
-            var points = params.points || 5;
+            var points = params.numPoints || params.points || 5;
             var outerRadius = params.outerRadius || 50;
             var innerRadius = params.innerRadius || 25;
             item = targetLayer.pathItems.star(abLeft + x, abTop - y, outerRadius, innerRadius, points);
@@ -893,6 +898,17 @@ function _createFromTemplate(params, doc, abTop, abLeft, ctx) {
                 master.closed = tmpl.closed === true;
                 if (!tmpl.closed) master.filled = false;
                 break;
+            case "polygon":
+                var bSides = tmpl.sides || 6;
+                var bRadius = tmpl.radius || 50;
+                master = targetLayer.pathItems.polygon(abLeft, abTop, bRadius, bSides);
+                break;
+            case "star":
+                var bNumPoints = tmpl.numPoints || tmpl.points || 5;
+                var bOuterR = tmpl.outerRadius || 50;
+                var bInnerR = tmpl.innerRadius || 25;
+                master = targetLayer.pathItems.star(abLeft, abTop, bOuterR, bInnerR, bNumPoints);
+                break;
             default:
                 return makeError(ErrorCodes.V_INVALID_PARAM_TYPE, "unknown template type: " + type, "validate");
         }
@@ -998,7 +1014,7 @@ function _createFromTemplate(params, doc, abTop, abLeft, ctx) {
     }
 
     return {
-        ok: created > 0,
+        ok: true,
         data: {
             created: created,
             skipped: skipped,
@@ -1223,7 +1239,7 @@ registerOpHandler("element_create_batch", function (params, targets, ctx) {
     }
 
     return {
-        ok: created > 0,
+        ok: true,
         data: {
             created: created,
             skipped: skipped,
@@ -1345,7 +1361,7 @@ registerOpHandler("element_modify", function (params, targets, ctx) {
         };
     }
     return {
-        ok: modified > 0,
+        ok: true,
         data: { modified: modified, total: targets.length, failed: targets.length - modified, position: posEcho },
         warnings: warnings
     };
@@ -1468,10 +1484,13 @@ registerOpHandler("element_replace", function (params, targets, ctx) {
                 newItem = sandbox.pathItems.ellipse(aiTop, aiLeft, width, height);
                 break;
             case "line":
-                var x2 = params.x2 || (x + width);
-                var y2 = params.y2 || y;
+                // Accept x1/y1 as aliases for start point (x/y)
+                var rlx1 = params.x1 !== undefined ? params.x1 : x;
+                var rly1 = params.y1 !== undefined ? params.y1 : y;
+                var rlx2 = params.x2 !== undefined ? params.x2 : rlx1 + width;
+                var rly2 = params.y2 !== undefined ? params.y2 : rly1;
                 newItem = sandbox.pathItems.add();
-                newItem.setEntirePath([[aiLeft, aiTop], [abLeft + x2, abTop - y2]]);
+                newItem.setEntirePath([[abLeft + rlx1, abTop - rly1], [abLeft + rlx2, abTop - rly2]]);
                 newItem.closed = false;
                 newItem.filled = false;
                 break;
@@ -1481,7 +1500,7 @@ registerOpHandler("element_replace", function (params, targets, ctx) {
                 newItem = sandbox.pathItems.polygon(aiLeft, aiTop, radius, sides);
                 break;
             case "star":
-                var points = params.points || 5;
+                var points = params.numPoints || params.points || 5;
                 var outerRadius = params.outerRadius || 50;
                 var innerRadius = params.innerRadius || 25;
                 newItem = sandbox.pathItems.star(aiLeft, aiTop, outerRadius, innerRadius, points);

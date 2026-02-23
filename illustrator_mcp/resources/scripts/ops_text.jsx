@@ -117,7 +117,7 @@ registerOpHandler("text_set_content", function (params, targets, ctx) {
         }
     }
 
-    return { ok: modified > 0, data: { modified: modified }, warnings: warnings };
+    return { ok: true, data: { modified: modified }, warnings: warnings };
 });
 
 // ==================== Text Set Style ====================
@@ -168,5 +168,5 @@ registerOpHandler("text_set_style", function (params, targets, ctx) {
         }
     }
 
-    return { ok: modified > 0 || targets.length === 0, data: { modified: modified }, warnings: warnings };
+    return { ok: true, data: { modified: modified }, warnings: warnings };
 });

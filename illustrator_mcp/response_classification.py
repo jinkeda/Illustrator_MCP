@@ -125,6 +125,30 @@ def classify_response(
                 error_code=code_obj.value if code_obj else "E999",
                 raw=raw,
             )
+        # 4b. Batch report with explicit ok: false (no singular 'error' key)
+        if result.get("ok") is False:
+            errors = result.get("errors") or []
+            stats = result.get("stats") or {}
+            if errors:
+                parts = []
+                for e in errors[:3]:
+                    parts.append(
+                        str(e.get("error", e)) if isinstance(e, dict) else str(e)
+                    )
+                error_msg = "; ".join(parts)
+            elif stats.get("failed", 0) > 0:
+                error_msg = (
+                    f"Batch: {stats['failed']}/{stats.get('total', '?')} ops failed"
+                )
+            else:
+                error_msg = "Batch reported ok:false with no error details"
+            code_obj = classify_error(error_msg)
+            return ResponseClassification(
+                ok=False,
+                error_message=error_msg,
+                error_code=code_obj.value if code_obj else "BATCH_FAILURE",
+                raw=raw,
+            )
 
     # 5. MCP_LIBS_NOT_READY sentinel (C1-3) — must check before generic prefix
     if isinstance(result, str) and result.startswith("MCP_LIBS_NOT_READY:"):

@@ -15,6 +15,38 @@ from typing import Any, Dict, List, Literal, Optional
 from pydantic import BaseModel, Field
 
 
+# ==================== Protocol Version (SSOT) ====================
+# Compiled into contracts.jsx so JSX and Python share the same constant.
+
+TASK_PROTOCOL_VERSION = "3.0.0"
+"""Current task protocol version (Python default for TaskPayload.version)."""
+
+TASK_PROTOCOL_MAJOR_VERSIONS = ["2", "3"]
+"""Accepted major versions (JSX validatePayload checks against this list)."""
+
+
+# ==================== Batch Report Schema (documentation) ====================
+# executeOpBatch() return shape — Python code depends on these fields.
+
+BATCH_REPORT_SCHEMA = {
+    "ok": "bool — true if all ops passed",
+    "stats": {
+        "total": "int — total ops attempted",
+        "passed": "int — ops that succeeded",
+        "failed": "int — ops that failed",
+    },
+    "createdIds": "list[str] — IDs of created elements",
+    "ops": "list[dict] — per-op results with {ok, task, id, error?}",
+}
+"""
+Documents the return shape of executeOpBatch() in ops_core.jsx.
+
+Python SOC batch compute depends on:
+  - result.stats.passed → report.stats.itemsModified
+  - result (full) → report.batchReport
+"""
+
+
 # ==================== Error Codes ====================
 
 class OpErrorCode(str, Enum):
@@ -154,6 +186,7 @@ OP_SCHEMAS: List[OpSchema] = [
         "radius":       _p(N),
         "outerRadius":  _p(N),
         "innerRadius":  _p(N),
+        "numPoints":    _p(N, desc="Number of points for star (avoids 'points' array collision)"),
         "cornerRadius": _p(N),
         "closed":       _p(B),
         "smooth":       _p(B, desc="Auto-smooth points via Catmull-Rom spline"),
@@ -204,6 +237,7 @@ OP_SCHEMAS: List[OpSchema] = [
         "radius":           _p(N),
         "outerRadius":      _p(N),
         "innerRadius":      _p(N),
+        "numPoints":        _p(N, desc="Number of points for star (avoids 'points' array collision)"),
         "cornerRadius":     _p(N),
         "closed":           _p(B),
         "x2":               _p(N),
