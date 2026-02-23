@@ -386,6 +386,7 @@ PLACE_ITEM = Template("""
     placed.left = ${x};
     placed.top = ${neg_y};
     ${embed_line}
+    ${marker_line}
     return JSON.stringify({
         success: true,
         path: "${path}",
@@ -394,6 +395,126 @@ PLACE_ITEM = Template("""
         width: placed.width,
         height: placed.height
     });
+})()
+""")  
+
+
+# Image Trace: vectorize a placed raster image
+# Finds target by UUID marker (not fragile index), retries expandTracing() directly.
+TRACE_PLACED_IMAGE = Template("""
+(function() {
+    var doc = app.activeDocument;
+    var marker = "${marker}";
+    var warnings = [];
+
+    // 1. Find target by marker — narrow collections first
+    var target = null;
+    var collections = [doc.placedItems, doc.rasterItems];
+    for (var c = 0; c < collections.length && !target; c++) {
+        for (var i = 0; i < collections[c].length; i++) {
+            __mcp_check();
+            if (collections[c][i].note && collections[c][i].note.indexOf(marker) >= 0) {
+                target = collections[c][i];
+                break;
+            }
+        }
+    }
+    // Fallback: full pageItems scan
+    if (!target) {
+        for (var i = 0; i < doc.pageItems.length; i++) {
+            __mcp_check();
+            if (doc.pageItems[i].note && doc.pageItems[i].note.indexOf(marker) >= 0) {
+                target = doc.pageItems[i];
+                break;
+            }
+        }
+    }
+    if (!target) {
+        return JSON.stringify({
+            ok: false, error: "Trace target not found (marker: " + marker + ")"
+        });
+    }
+
+    // 2. Type guard
+    var tn = target.typename;
+    if (tn !== "PlacedItem" && tn !== "RasterItem") {
+        return JSON.stringify({
+            ok: false, error: "Item not traceable: typename=" + tn
+        });
+    }
+
+    // 3. Trace
+    doc.selection = null;
+    target.selected = true;
+    var plugin = target.trace();
+
+    // 4. Apply preset (safe fallback on locale/version mismatch)
+    var presetName = ${preset};
+    if (presetName) {
+        try {
+            plugin.tracing.tracingOptions.loadFromPreset(presetName);
+        } catch(pe) {
+            warnings.push("Preset not found: " + presetName + "; using default");
+        }
+    }
+
+    var result = {
+        success: true,
+        trace_marker: marker,
+        target_typename: tn,
+        preset: presetName || "(default)",
+        warnings: warnings
+    };
+
+    // 5. Expand with retry-around-expand (direct operation test)
+    if (${expand}) {
+        app.redraw();
+        var group = null;
+        var maxRetries = 20;
+        for (var r = 0; r < maxRetries; r++) {
+            __mcp_check();
+            try {
+                group = plugin.tracing.expandTracing();
+                break;
+            } catch(ex) {
+                $$.sleep(500);
+                app.redraw();
+            }
+        }
+        if (!group) {
+            return JSON.stringify({
+                ok: false,
+                error: "expandTracing() failed after " + maxRetries + " retries",
+                warnings: warnings
+            });
+        }
+
+        // Tag with MCP ID (trace: namespace)
+        var mcpId = "trace:" + marker.replace("@mcp:trace_target=", "");
+        group.note = "@mcp:id=" + mcpId;
+        group.name = "traced_group";
+
+        result.type = "traced_expanded";
+        result.mcp_id = mcpId;
+        result.itemCount = group.pageItems.length;
+
+        var b = group.geometricBounds;
+        result.bounds = {
+            left: b[0], top: b[1], right: b[2], bottom: b[3],
+            width: b[2] - b[0], height: b[1] - b[3]
+        };
+
+        // Complexity guardrail
+        if (group.pageItems.length > 2000) {
+            warnings.push("High complexity: " + group.pageItems.length
+                + " items. Consider simpler preset.");
+        }
+    } else {
+        result.type = "traced_live";
+    }
+
+    doc.selection = null;
+    return JSON.stringify(result);
 })()
 """)
 

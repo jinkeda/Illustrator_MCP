@@ -190,7 +190,7 @@ This server follows a **Scripting First** architecture: one powerful script exec
 |---|---|
 | `illustrator_document` | Unified document I/O: `action="create"` / `"open"` / `"save"` / `"close"` |
 | `illustrator_export_document` | Export to PNG, JPG, SVG, or PDF with optional visual feedback |
-| `illustrator_place_file` | Place an external file (PNG, JPG, EPS, AI, PDF) with optional editable embed |
+| `illustrator_place_file` | Place an external file (PNG, JPG, EPS, AI, PDF) with optional editable embed or Image Trace vectorization (`trace=True`) |
 | `illustrator_set_reference` | Place or clear a locked reference image on a background layer |
 
 ### Undo / Redo (1)

@@ -5,7 +5,7 @@ Verifies that all required components are properly wired:
 - geo_boolean.jsx registered in manifest with correct exports
 - path_boolean schema exists in contracts
 - pyclipper import is guarded with helpful error message
-- Python handler exists in execute.py
+- Python handler exists in path_boolean.py
 """
 
 import json
@@ -19,6 +19,7 @@ SCRIPTS_DIR = ROOT / "illustrator_mcp" / "resources" / "scripts"
 MANIFEST_PATH = SCRIPTS_DIR / "manifest.json"
 GEO_BOOLEAN_PATH = SCRIPTS_DIR / "geo_boolean.jsx"
 EXECUTE_PATH = ROOT / "illustrator_mcp" / "tools" / "execute.py"
+PATH_BOOLEAN_PATH = ROOT / "illustrator_mcp" / "tools" / "path_boolean.py"
 CONTRACTS_PATH = ROOT / "illustrator_mcp" / "schemas" / "contracts.py"
 GEOMETRY_PY_PATH = ROOT / "illustrator_mcp" / "geometry.py"
 PYPROJECT_PATH = ROOT / "pyproject.toml"
@@ -148,11 +149,11 @@ class TestPythonGeometryModule:
 
 
 class TestPythonHandler:
-    """Verify execute.py has the path_boolean handler."""
+    """Verify path_boolean.py has the path_boolean handler."""
 
     @pytest.fixture(autouse=True)
     def load_execute(self):
-        self.source = EXECUTE_PATH.read_text(encoding="utf-8")
+        self.source = PATH_BOOLEAN_PATH.read_text(encoding="utf-8")
 
     def test_handler_exists(self):
         assert "async def illustrator_path_boolean" in self.source

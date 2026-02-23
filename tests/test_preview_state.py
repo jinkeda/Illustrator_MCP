@@ -10,12 +10,17 @@ import json
 import pytest
 from pathlib import Path
 
-# Source file path
+# Source file paths (execute_task moved to path_boolean.py)
 EXECUTE_PY = (
     Path(__file__).parent.parent
     / "illustrator_mcp" / "tools" / "execute.py"
 )
+PATH_BOOLEAN_PY = (
+    Path(__file__).parent.parent
+    / "illustrator_mcp" / "tools" / "path_boolean.py"
+)
 EXECUTE_SRC = EXECUTE_PY.read_text(encoding="utf-8")
+PATH_BOOLEAN_SRC = PATH_BOOLEAN_PY.read_text(encoding="utf-8")
 
 
 class TestPreviewStateGuards:
@@ -39,8 +44,9 @@ class TestPreviewStateGuards:
 
     def test_preview_state_in_both_sites(self):
         """preview_state injection appears in both execute_script and execute_task."""
-        count = EXECUTE_SRC.count('"preview_state"')
-        assert count >= 2, f"Expected >=2 preview_state injections, found {count}"
+        # execute_script is in execute.py, execute_task is in path_boolean.py
+        assert '"preview_state"' in EXECUTE_SRC, "Missing preview_state in execute.py"
+        assert '"preview_state"' in PATH_BOOLEAN_SRC, "Missing preview_state in path_boolean.py"
 
     def test_diagnostics_preview_state_assignment(self):
         """B1: preview_state is set directly on diagnostics dict (no setdefault)."""

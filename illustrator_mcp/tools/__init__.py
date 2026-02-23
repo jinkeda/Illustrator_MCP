@@ -58,6 +58,9 @@ def register_tools(mcp):
     # SVG import tool (path_import_svg)
     from illustrator_mcp.tools import import_svg
 
-    return [execute, documents, context, query, import_svg]
+    # Path boolean + execute_task (split from execute.py)
+    from illustrator_mcp.tools import path_boolean
+
+    return [execute, documents, context, query, import_svg, path_boolean]
 
 __all__ = ["register_tools", "EXPECTED_TOOL_NAMES"]

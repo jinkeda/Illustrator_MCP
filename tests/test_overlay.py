@@ -1,13 +1,15 @@
 """
 Tests for VLM Debug Overlay (overlay.py + annotated preview integration).
 
-Tests coordinate mapping, compositing, graceful degradation, and annotation map.
+Tests coordinate mapping, compositing, contrast selection, pill placement,
+graceful degradation, and annotation map.
 """
 
 from __future__ import annotations
 
 import io
 import json
+import time
 import unittest
 from unittest.mock import patch
 
@@ -15,20 +17,32 @@ from illustrator_mcp.overlay import (
     map_bounds_to_pixels,
     composite_overlay,
     get_png_dimensions,
+    draw_grid_overlay,
+    draw_ruler_overlay,
+    _pick_interval,
     HAS_PILLOW,
-    OUTLINE_COLOR,
-    FILL_HINT,
+    OUTLINE_PALETTE,
+    FILL_ALPHA,
     MIN_FILL_AREA_PX,
+    _wcag_luminance,
+    _contrast_ratio,
+    _pick_contrast_color,
+    _compute_font_size,
+    _compute_outline_width,
+    _place_pill,
+    _in_bounds,
+    _rects_overlap,
+    _overlap_area,
 )
-from illustrator_mcp.tools.execute import _filter_items
+from illustrator_mcp.tools.preview import _filter_items
 
 
-def _make_blank_png(w: int, h: int) -> bytes:
-    """Create a minimal valid PNG (white, RGBA) for testing."""
+def _make_blank_png(w: int, h: int, color=(255, 255, 255, 255)) -> bytes:
+    """Create a minimal valid PNG (RGBA) for testing."""
     if not HAS_PILLOW:
         return b"PNG_STUB"
     from PIL import Image
-    img = Image.new("RGBA", (w, h), (255, 255, 255, 255))
+    img = Image.new("RGBA", (w, h), color)
     buf = io.BytesIO()
     img.save(buf, format="PNG")
     return buf.getvalue()
@@ -311,9 +325,9 @@ class TestFilterItems(unittest.TestCase):
         """PathItem with dimension below dynamic threshold is excluded.
         On 1200x800 artboard: min_dim = min(10, max(2, 800*0.005)) = 4pt."""
         items = [
-            {"name": "accent", "type": "PathItem", "bounds": [40, -120, 300, -123]},  # 3pt tall → filtered
-            {"name": "divider", "type": "PathItem", "bounds": [40, -100, 1160, -101]},  # 1pt tall → filtered
-            {"name": "bar", "type": "PathItem", "bounds": [80, -400, 140, -640]},  # 240pt tall → kept
+            {"name": "accent", "type": "PathItem", "bounds": [40, -120, 300, -123]},  # 3pt tall -> filtered
+            {"name": "divider", "type": "PathItem", "bounds": [40, -100, 1160, -101]},  # 1pt tall -> filtered
+            {"name": "bar", "type": "PathItem", "bounds": [80, -400, 140, -640]},  # 240pt tall -> kept
         ]
         kept, filtered = _filter_items(items, self.ARTBOARD)
         self.assertEqual(filtered, 2)
@@ -354,10 +368,10 @@ class TestFilterItems(unittest.TestCase):
         """Verify filtered_count = input - kept.
         On 1200x800 artboard: min_dim = 4pt. Items < 4pt are filtered."""
         items = [
-            {"name": "bg", "type": "PathItem", "bounds": [0, 0, 1200, -800]},       # canvas-span → filtered
-            {"name": "accent", "type": "PathItem", "bounds": [40, -120, 300, -123]}, # 3pt tall → filtered
-            {"name": "card", "type": "PathItem", "bounds": [40, -120, 300, -260]},   # normal → kept
-            {"name": "text", "type": "TextFrame", "bounds": [56, -140, 96, -153]},   # TextFrame → kept
+            {"name": "bg", "type": "PathItem", "bounds": [0, 0, 1200, -800]},       # canvas-span -> filtered
+            {"name": "accent", "type": "PathItem", "bounds": [40, -120, 300, -123]}, # 3pt tall -> filtered
+            {"name": "card", "type": "PathItem", "bounds": [40, -120, 300, -260]},   # normal -> kept
+            {"name": "text", "type": "TextFrame", "bounds": [56, -140, 96, -153]},   # TextFrame -> kept
         ]
         kept, filtered = _filter_items(items, self.ARTBOARD)
         self.assertEqual(filtered, 2)  # bg + accent
@@ -369,9 +383,9 @@ class TestFilterItems(unittest.TestCase):
         An 8pt-tall path should be filtered but a 12pt path should be kept."""
         large_artboard = [0, 0, 10000, -10000]  # 10,000x10,000pt
         items = [
-            # 8pt tall — below the 10pt cap → should be FILTERED
+            # 8pt tall — below the 10pt cap -> should be FILTERED
             {"name": "thin_line", "type": "PathItem", "bounds": [100, -100, 300, -108]},
-            # 12pt tall — above the 10pt cap → should be KEPT
+            # 12pt tall — above the 10pt cap -> should be KEPT
             {"name": "small_shape", "type": "PathItem", "bounds": [100, -100, 300, -112]},
             # 3pt tall TextFrame — IMMUNE to thin filter
             {"name": "tiny_text", "type": "TextFrame", "bounds": [100, -100, 120, -103]},
@@ -385,30 +399,207 @@ class TestFilterItems(unittest.TestCase):
         self.assertNotIn("thin_line", names)
 
 
+# ── NEW: Contrast / Font / Placement Tests ───────────────────────────
+
+class TestWCAGContrast(unittest.TestCase):
+    """Test WCAG luminance and contrast ratio calculations."""
+
+    def test_black_luminance(self):
+        lum = _wcag_luminance(0, 0, 0)
+        self.assertAlmostEqual(lum, 0.0, places=3)
+
+    def test_white_luminance(self):
+        lum = _wcag_luminance(255, 255, 255)
+        self.assertAlmostEqual(lum, 1.0, places=3)
+
+    def test_contrast_black_white(self):
+        """Black vs white should give max contrast ratio ~21."""
+        ratio = _contrast_ratio(
+            _wcag_luminance(0, 0, 0),
+            _wcag_luminance(255, 255, 255),
+        )
+        self.assertAlmostEqual(ratio, 21.0, places=0)
+
+    def test_contrast_same_color(self):
+        """Same color -> contrast ratio of 1.0."""
+        lum = _wcag_luminance(128, 128, 128)
+        ratio = _contrast_ratio(lum, lum)
+        self.assertAlmostEqual(ratio, 1.0, places=3)
+
+
+@unittest.skipUnless(HAS_PILLOW, "Pillow not installed")
+class TestContrastColorPicker(unittest.TestCase):
+    """Test border-ring contrast color selection."""
+
+    def test_white_bg_picks_black(self):
+        """Near-white background -> black outline selected."""
+        from PIL import Image
+        white_img = Image.new("RGBA", (100, 100), (255, 255, 255, 255))
+        color = _pick_contrast_color(white_img, [10, 10, 90, 90], (100, 100), (100, 100))
+        # Should pick black (0, 0, 0, 200) — highest contrast on white
+        self.assertEqual(color[:3], (0, 0, 0))
+
+    def test_black_bg_picks_white(self):
+        """Near-black background -> white outline selected."""
+        from PIL import Image
+        black_img = Image.new("RGBA", (100, 100), (0, 0, 0, 255))
+        color = _pick_contrast_color(black_img, [10, 10, 90, 90], (100, 100), (100, 100))
+        # Should pick white (255, 255, 255, 200) — highest contrast on black
+        self.assertEqual(color[:3], (255, 255, 255))
+
+    def test_magenta_bg_avoids_magenta(self):
+        """Magenta background -> should NOT pick magenta outline."""
+        from PIL import Image
+        mag_img = Image.new("RGBA", (100, 100), (255, 0, 255, 255))
+        color = _pick_contrast_color(mag_img, [10, 10, 90, 90], (100, 100), (100, 100))
+        # Should NOT be magenta
+        self.assertNotEqual(color[:3], (255, 0, 255))
+
+    def test_empty_box_returns_fallback(self):
+        """Empty box region returns first palette color (black)."""
+        from PIL import Image
+        img = Image.new("RGBA", (10, 10), (128, 128, 128, 255))
+        color = _pick_contrast_color(img, [0, 0, 0, 0], (10, 10), (10, 10))
+        # Should still return a valid palette color
+        self.assertIn(color, OUTLINE_PALETTE)
+
+
+class TestPalette(unittest.TestCase):
+    """Test the 6-color palette includes black and white."""
+
+    def test_palette_has_black(self):
+        black_entries = [c for c in OUTLINE_PALETTE if c[:3] == (0, 0, 0)]
+        self.assertEqual(len(black_entries), 1)
+
+    def test_palette_has_white(self):
+        white_entries = [c for c in OUTLINE_PALETTE if c[:3] == (255, 255, 255)]
+        self.assertEqual(len(white_entries), 1)
+
+    def test_palette_size(self):
+        self.assertEqual(len(OUTLINE_PALETTE), 6)
+
+    def test_all_have_alpha(self):
+        for c in OUTLINE_PALETTE:
+            self.assertEqual(len(c), 4, f"Color {c} should have 4 channels (RGBA)")
+            self.assertGreater(c[3], 0, f"Alpha should be > 0")
+
+
+class TestAdaptiveSizing(unittest.TestCase):
+    """Test font and outline scaling."""
+
+    def test_font_size_small_image(self):
+        """800px image -> font near lower bound."""
+        size = _compute_font_size(800, 600)
+        self.assertGreaterEqual(size, 12)
+        self.assertLessEqual(size, 16)
+
+    def test_font_size_large_image(self):
+        """2000px image -> font near upper bound."""
+        size = _compute_font_size(2000, 1500)
+        self.assertGreaterEqual(size, 25)
+        self.assertLessEqual(size, 28)
+
+    def test_font_size_clamped_min(self):
+        """Very small image -> clamped to 12."""
+        size = _compute_font_size(50, 50)
+        self.assertEqual(size, 12)
+
+    def test_outline_width_small(self):
+        """Small image -> 2px outline."""
+        w = _compute_outline_width(400, 300)
+        self.assertEqual(w, 2)
+
+    def test_outline_width_large(self):
+        """Large image -> 3-4px outline."""
+        w = _compute_outline_width(2400, 1800)
+        self.assertIn(w, [3, 4])
+
+
+class TestPillPlacement(unittest.TestCase):
+    """Test deterministic pill placement logic."""
+
+    def test_first_position_above_left(self):
+        """When no collisions, first position (above-left) is chosen."""
+        rect = _place_pill(50, 50, 150, 100, 40, 20, 400, 300, [])
+        # above-left: (50, 50 - 20 - 2) = (50, 28)
+        self.assertEqual(rect, (50, 28, 90, 48))
+
+    def test_avoids_collision(self):
+        """When first position collides, skips to next non-colliding."""
+        # Block the above-left position
+        placed = [(40, 20, 100, 55)]  # covers above-left region
+        rect = _place_pill(50, 50, 150, 100, 40, 20, 400, 300, placed)
+        # Should NOT use above-left (50, 28, 90, 48) -> collides with placed
+        self.assertFalse(_rects_overlap(rect, placed[0]))
+
+    def test_deterministic_same_input(self):
+        """Same input -> identical output across two calls."""
+        placed = [(10, 10, 60, 30)]
+        r1 = _place_pill(50, 50, 150, 100, 40, 20, 400, 300, placed)
+        r2 = _place_pill(50, 50, 150, 100, 40, 20, 400, 300, placed)
+        self.assertEqual(r1, r2)
+
+    def test_all_corners_blocked_picks_least_overlap(self):
+        """When all 8 positions collide, picks smallest overlap."""
+        # Fill most of the image with placed pills
+        placed = [(x, y, x+80, y+40) for x in range(0, 400, 80) for y in range(0, 300, 40)]
+        # Should not crash; returns some rect
+        rect = _place_pill(50, 50, 150, 100, 40, 20, 400, 300, placed)
+        self.assertEqual(len(rect), 4)
+
+
+class TestHelpers(unittest.TestCase):
+    """Test geometry utility functions."""
+
+    def test_in_bounds_true(self):
+        self.assertTrue(_in_bounds((10, 10, 50, 50), 100, 100))
+
+    def test_in_bounds_false_negative(self):
+        self.assertFalse(_in_bounds((-5, 10, 50, 50), 100, 100))
+
+    def test_in_bounds_false_overflow(self):
+        self.assertFalse(_in_bounds((10, 10, 110, 50), 100, 100))
+
+    def test_rects_overlap_true(self):
+        self.assertTrue(_rects_overlap((0, 0, 50, 50), (25, 25, 75, 75)))
+
+    def test_rects_overlap_false(self):
+        self.assertFalse(_rects_overlap((0, 0, 50, 50), (60, 60, 100, 100)))
+
+    def test_rects_overlap_adjacent(self):
+        """Adjacent rects (touching edges) do NOT overlap."""
+        self.assertFalse(_rects_overlap((0, 0, 50, 50), (50, 0, 100, 50)))
+
+    def test_overlap_area(self):
+        area = _overlap_area((0, 0, 50, 50), [(25, 25, 75, 75)])
+        self.assertEqual(area, 25 * 25)
+
+    def test_overlap_area_no_overlap(self):
+        area = _overlap_area((0, 0, 50, 50), [(60, 60, 100, 100)])
+        self.assertEqual(area, 0)
+
 
 @unittest.skipUnless(HAS_PILLOW, "Pillow not installed")
 class TestVisualConstants(unittest.TestCase):
     """Verify updated visual constants for overlay refinements."""
 
-    def test_outline_alpha(self):
-        """Outline should be semi-transparent (alpha < 255)."""
-        self.assertEqual(len(OUTLINE_COLOR), 4)
-        self.assertLess(OUTLINE_COLOR[3], 255, "Outline should be semi-transparent")
-        self.assertEqual(OUTLINE_COLOR[3], 160)
+    def test_palette_alpha(self):
+        """All palette entries should have alpha 200."""
+        for c in OUTLINE_PALETTE:
+            self.assertEqual(c[3], 200, f"Palette entry {c} should have alpha=200")
 
-    def test_fill_hint_alpha(self):
-        """Fill hint should be very subtle (<10% alpha)."""
-        self.assertEqual(len(FILL_HINT), 4)
-        self.assertLessEqual(FILL_HINT[3], 25, "Fill hint alpha should be <=10%")
+    def test_fill_alpha_subtle(self):
+        """Fill alpha should be very subtle (<10%)."""
+        self.assertLessEqual(FILL_ALPHA, 25, "Fill alpha should be <=10%")
 
     def test_fill_hint_min_area(self):
         """Fill skipped for boxes below MIN_FILL_AREA_PX."""
         png = _make_blank_png(200, 200)
-        # Small box (10x10 = 100px² < 400)
+        # Small box (10x10 = 100px^2 < 400)
         small_ann = [{"label": "1", "bounds_px": [5, 5, 15, 15]}]
         result_small = composite_overlay(png, small_ann)
 
-        # Large box (50x50 = 2500px² >= 400)
+        # Large box (50x50 = 2500px^2 >= 400)
         large_ann = [{"label": "2", "bounds_px": [10, 10, 60, 60]}]
         result_large = composite_overlay(png, large_ann)
 
@@ -418,6 +609,143 @@ class TestVisualConstants(unittest.TestCase):
         Image.open(io.BytesIO(result_large))
         # Large box output should differ from small (fill adds bytes)
         self.assertNotEqual(result_small, result_large)
+
+
+@unittest.skipUnless(HAS_PILLOW, "Pillow not installed")
+class TestGridOverlay(unittest.TestCase):
+    """Test grid overlay function."""
+
+    def test_adaptive_default_grid(self):
+        """Default cols/rows=0 produces adaptive grid."""
+        png = _make_blank_png(800, 600)
+        result = draw_grid_overlay(png, [0, 600, 800, 0], (800, 600))
+        from PIL import Image
+        out = Image.open(io.BytesIO(result))
+        self.assertEqual(out.size, (800, 600))
+        # Should differ from input (grid lines drawn)
+        self.assertNotEqual(result, png)
+
+    def test_explicit_grid_size(self):
+        """Explicit cols/rows are respected."""
+        png = _make_blank_png(400, 400)
+        result = draw_grid_overlay(png, [0, 400, 400, 0], (400, 400), cols=2, rows=2)
+        from PIL import Image
+        out = Image.open(io.BytesIO(result))
+        self.assertEqual(out.size, (400, 400))
+
+    def test_zero_artboard_returns_original(self):
+        """Zero-size artboard -> returns original."""
+        png = _make_blank_png(200, 200)
+        result = draw_grid_overlay(png, [0, 0, 0, 0], (200, 200))
+        self.assertEqual(result, png)
+
+
+@unittest.skipUnless(HAS_PILLOW, "Pillow not installed")
+class TestStress(unittest.TestCase):
+    """Performance / stress tests."""
+
+    def test_200_boxes_completes(self):
+        """200 random boxes should complete without error and within 5s."""
+        import random
+        random.seed(42)
+        png = _make_blank_png(1200, 800)
+        annotations = []
+        for i in range(200):
+            x1 = random.randint(0, 1100)
+            y1 = random.randint(0, 700)
+            x2 = x1 + random.randint(20, 100)
+            y2 = y1 + random.randint(20, 100)
+            annotations.append({"label": str(i+1), "bounds_px": [x1, y1, min(x2, 1199), min(y2, 799)]})
+
+        start = time.time()
+        result = composite_overlay(png, annotations)
+        elapsed = time.time() - start
+
+        from PIL import Image
+        out = Image.open(io.BytesIO(result))
+        self.assertEqual(out.size, (1200, 800))
+        self.assertLess(elapsed, 5.0, f"200 boxes took {elapsed:.1f}s (budget: 5s)")
+
+@unittest.skipUnless(HAS_PILLOW, "Pillow not installed")
+class TestRulerOverlay(unittest.TestCase):
+    """Test coordinate ruler overlay."""
+
+    def test_ruler_default_ticks(self):
+        """Adaptive tick interval on 800×600pt → valid PNG, differs from input."""
+        png = _make_blank_png(800, 600)
+        result = draw_ruler_overlay(png, 800.0, 600.0)
+        from PIL import Image
+        out = Image.open(io.BytesIO(result))
+        self.assertEqual(out.size, (800, 600))
+        self.assertNotEqual(result, png)
+
+    def test_ruler_explicit_interval(self):
+        """Explicit tick_interval_pt=50 → valid output."""
+        png = _make_blank_png(400, 400)
+        result = draw_ruler_overlay(png, 400.0, 400.0, tick_interval_pt=50)
+        from PIL import Image
+        out = Image.open(io.BytesIO(result))
+        self.assertEqual(out.size, (400, 400))
+        self.assertNotEqual(result, png)
+
+    def test_ruler_zero_artboard(self):
+        """Zero-size artboard → returns original bytes unchanged."""
+        png = _make_blank_png(200, 200)
+        result = draw_ruler_overlay(png, 0.0, 0.0)
+        self.assertEqual(result, png)
+
+    def test_ruler_no_pillow(self):
+        """Pillow patched out → returns original bytes."""
+        png = _make_blank_png(400, 400)
+        import illustrator_mcp.overlay as ov
+        old = ov.HAS_PILLOW
+        try:
+            ov.HAS_PILLOW = False
+            result = draw_ruler_overlay(png, 400.0, 400.0)
+            self.assertEqual(result, png)
+        finally:
+            ov.HAS_PILLOW = old
+
+    def test_ruler_large_artboard(self):
+        """4000×4000pt → interval auto-scales, ≤12 labels per axis."""
+        iv = _pick_interval(4000.0)
+        self.assertLessEqual(4000.0 / iv, 12)
+        png = _make_blank_png(800, 800)
+        result = draw_ruler_overlay(png, 4000.0, 4000.0)
+        from PIL import Image
+        out = Image.open(io.BytesIO(result))
+        self.assertEqual(out.size, (800, 800))
+        self.assertNotEqual(result, png)
+
+    def test_ruler_small_image_completes(self):
+        """Small image (100×100px) completes without crash and produces output."""
+        png = _make_blank_png(100, 100)
+        result = draw_ruler_overlay(png, 100.0, 100.0)
+        from PIL import Image
+        out = Image.open(io.BytesIO(result))
+        self.assertEqual(out.size, (100, 100))
+        self.assertNotEqual(result, png)
+
+
+class TestPickInterval(unittest.TestCase):
+    """Test interval heuristic."""
+
+    def test_small_artboard(self):
+        self.assertEqual(_pick_interval(200), 25)
+
+    def test_medium_artboard(self):
+        iv = _pick_interval(800)
+        self.assertLessEqual(800 / iv, 12)
+
+    def test_huge_artboard(self):
+        iv = _pick_interval(50000)
+        self.assertEqual(iv, 10000)  # fallback to largest
+
+    def test_all_candidates_within_limit(self):
+        for dim in [50, 300, 600, 1200, 2400, 6000, 12000, 100000]:
+            iv = _pick_interval(dim)
+            self.assertLessEqual(dim / iv, 12,
+                                 f"dim={dim} iv={iv} gives {dim/iv} labels")
 
 
 if __name__ == "__main__":

@@ -7,6 +7,7 @@ These tools use execute_script internally to run JavaScript in Illustrator.
 import json
 import logging
 import os
+import uuid
 from typing import Literal, Optional, Union
 from enum import Enum
 
@@ -73,7 +74,10 @@ async def _place_item_impl(
     command_type: str,
     tool_name: str,
     error_prefix: str = "File",
-    embed_editable: bool = False
+    embed_editable: bool = False,
+    trace: bool = False,
+    trace_preset: str | None = None,
+    expand: bool = True,
 ) -> str:
     """Shared implementation for placing files (images, EPS, AI, PDF) into the document.
     
@@ -82,6 +86,8 @@ async def _place_item_impl(
                        instead of placing as a linked/embedded item.
     """
     path = escape_path_for_jsx(file_path)
+    trace_marker = f"@mcp:trace_target={uuid.uuid4().hex[:12]}" if trace else None
+    marker_line = f'placed.note = "{trace_marker}";' if trace_marker else ""
     
     if embed_editable:
         # Open/copy/paste workflow for editable content
@@ -154,15 +160,33 @@ async def _place_item_impl(
             y=y,
             linked=str(linked).lower(),
             embed_line=embed_line,
+            marker_line=marker_line,
             error_prefix=error_prefix
         )
     
-    return await execute_jsx_tool(
+    place_result = await execute_jsx_tool(
         script=script,
         command_type=command_type,
         tool_name=tool_name,
         params={"file_path": file_path, "x": x, "y": y, "linked": linked, "embed_editable": embed_editable}
     )
+
+    # Step 2: Image Trace (if requested)
+    if trace and trace_marker:
+        preset_json = json.dumps(trace_preset)  # null or '"6 Colors"'
+        trace_script = templates.TRACE_PLACED_IMAGE.substitute(
+            marker=trace_marker,
+            preset=preset_json,
+            expand=str(expand).lower(),
+        )
+        return await execute_jsx_tool(
+            script=trace_script,
+            command_type="trace_image",
+            tool_name=tool_name,
+            params={"trace_preset": trace_preset, "expand": expand},
+        )
+
+    return place_result
 
 
 # Unified document CRUD tool
@@ -531,6 +555,9 @@ async def illustrator_history(params: HistoryInput) -> str:
 
 
 # Pydantic models for place/embed
+_TRACEABLE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".tif", ".tiff", ".bmp", ".gif", ".psd"}
+
+
 class PlaceFileInput(ToolInputBase):
     """Input for placing a file."""
     file_path: str = Field(..., description="Full path to file (EPS, AI, PDF, PNG, etc.)", min_length=1)
@@ -538,6 +565,30 @@ class PlaceFileInput(ToolInputBase):
     y: float = Field(default=0, description="Y position")
     linked: bool = Field(default=True, description="Keep linked (True) or embed immediately (False)")
     embed_editable: bool = Field(default=False, description="Open PDF and paste as editable vectors (slower but fully editable)")
+    trace: bool = Field(default=False, description="Run Image Trace on placed raster to convert to vectors")
+    trace_preset: Optional[str] = Field(
+        default=None,
+        description="Image Trace preset: '3 Colors', '6 Colors', '16 Colors', 'High Fidelity Photo', "
+                    "'Low Fidelity Photo', 'Black and White Logo', 'Silhouettes', 'Line Art', "
+                    "'Technical Drawing', 'Sketched Art'. None = Illustrator default."
+    )
+    expand: bool = Field(
+        default=True,
+        description="Expand traced result to editable paths (True, more DOM but fully editable) "
+                    "or keep as live trace PluginItem (False, lighter but limited editability)"
+    )
+
+    def model_post_init(self, __context) -> None:
+        """Validate trace-specific constraints."""
+        if self.trace and self.embed_editable:
+            raise ValueError("Cannot use both trace=True and embed_editable=True")
+        if self.trace:
+            ext = os.path.splitext(self.file_path)[1].lower()
+            if ext not in _TRACEABLE_EXTENSIONS:
+                raise ValueError(
+                    f"trace=True requires a raster image "
+                    f"({', '.join(sorted(_TRACEABLE_EXTENSIONS))}), got '{ext}'"
+                )
 
 
 @mcp.tool(
@@ -554,6 +605,16 @@ async def illustrator_place_file(params: PlaceFileInput) -> str:
     - linked=True (drafting): File updates automatically when source changes
     - linked=False (final): File is embedded and fully editable
     - embed_editable=True: Opens PDF, copies content as editable vectors (slower)
+    - trace=True: Place raster image, then run Image Trace to vectorize it.
+      The AI acts as art director (selecting presets, recoloring, simplifying)
+      rather than manually computing paths.
+    
+    Trace notes:
+    - expand=True (default): Converts to editable PathItem/CompoundPathItem group.
+      Higher DOM complexity, but paths are fully editable and support boolean ops.
+    - expand=False: Keeps live trace PluginItem. Lighter DOM, but limited editability.
+    - High-complexity images may produce thousands of paths. A warning is emitted
+      if the expanded group exceeds 2000 items.
     
     Use linked=True during iterative work (e.g., updating MATLAB plots),
     then embed when ready for submission.
@@ -566,7 +627,10 @@ async def illustrator_place_file(params: PlaceFileInput) -> str:
         command_type="place_file",
         tool_name="illustrator_place_file",
         error_prefix="File",
-        embed_editable=params.embed_editable
+        embed_editable=params.embed_editable,
+        trace=params.trace,
+        trace_preset=params.trace_preset,
+        expand=params.expand,
     )
 
 
@@ -682,6 +746,11 @@ _SET_REFERENCE_JSX = """
             width: pItem.width, height: pItem.height,
             center_x: pItem.left + pItem.width / 2,
             center_y: pItem.top - pItem.height / 2
+        },
+        spatial_context: {
+            artboard: "X: 0 to " + Math.round(abW) + ", Y: 0 to " + Math.round(abH),
+            reference_bounds: "X: " + Math.round(pItem.left - abRect[0]) + ", Y: " + Math.round(abRect[1] - pItem.top) + ", Width: " + Math.round(pItem.width) + ", Height: " + Math.round(pItem.height),
+            instruction: "Use Y-down user coordinates (origin at artboard top-left). Keep all generated path coordinates within the artboard bounds."
         }
     });
 })(%s);

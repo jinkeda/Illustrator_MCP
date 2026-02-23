@@ -438,9 +438,9 @@ class TestReviewFixes(unittest.TestCase):
         }
         mock_response = {"result": json.dumps(mock_report), "error": None}
 
-        with patch("illustrator_mcp.tools.execute.execute_script_with_context",
+        with patch("illustrator_mcp.tools.path_boolean.execute_script_with_context",
                     new_callable=AsyncMock, return_value=mock_response), \
-             patch("illustrator_mcp.tools.execute._capture_artboard_png",
+             patch("illustrator_mcp.tools.path_boolean._capture_artboard",
                     new_callable=AsyncMock) as mock_capture:
 
             result = asyncio.get_event_loop().run_until_complete(
@@ -484,9 +484,9 @@ class TestReviewFixes(unittest.TestCase):
         }
         mock_response = {"result": json.dumps(mock_report), "error": None}
 
-        with patch("illustrator_mcp.tools.execute.execute_script_with_context",
+        with patch("illustrator_mcp.tools.path_boolean.execute_script_with_context",
                     new_callable=AsyncMock, return_value=mock_response), \
-             patch("illustrator_mcp.tools.execute._capture_artboard_png",
+             patch("illustrator_mcp.tools.path_boolean._capture_artboard",
                     new_callable=AsyncMock) as mock_capture:
 
             result = asyncio.get_event_loop().run_until_complete(
@@ -497,8 +497,10 @@ class TestReviewFixes(unittest.TestCase):
         mock_capture.assert_not_called()
 
     def test_path_boolean_increments_counter(self):
-        """illustrator_path_boolean should increment _mutation_count on success,
-        but decrement on failure (B18 fix: failed booleans don't inflate cadence)."""
+        """illustrator_path_boolean should increment _mutation_count on entry.
+        Error-return paths (like ImportError) leave the counter incremented,
+        consistent with execute_script/execute_task semantics. Only raised
+        exceptions trigger the outer wrapper's decrement."""
         from illustrator_mcp.tools import execute
 
         reset_mutation_count()
@@ -506,8 +508,8 @@ class TestReviewFixes(unittest.TestCase):
             execute._counter.increment()
 
         # Mock the import of geometry module to fail cleanly at import guard.
-        # B18: the counter is incremented then decremented on ImportError,
-        # so the net effect is zero (counter stays at 7).
+        # The counter is incremented in the outer wrapper and NOT decremented
+        # on error-return paths — net effect is +1 (counter goes to 8).
         with patch.dict('sys.modules', {'illustrator_mcp.geometry': None}):
             try:
                 from illustrator_mcp.tools.execute import PathBooleanInput, illustrator_path_boolean
@@ -522,8 +524,8 @@ class TestReviewFixes(unittest.TestCase):
             except Exception:
                 pass  # Geometry import may fail — that's fine
 
-        # B18: Counter should be unchanged (7) — failed boolean decremented
-        self.assertEqual(get_mutation_count(), 7)
+        # Counter should be 8: incremented on entry, not decremented on error-return
+        self.assertEqual(get_mutation_count(), 8)
 
 
 # ======================== Audit v6: execute_task tri-state + preview_mode ========================

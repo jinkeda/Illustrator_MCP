@@ -330,23 +330,121 @@ function spatialScanFilter(item) {
 }
 
 /**
- * Collect all scannable PageItems from the document for spatial queries.
- * Recurses into groups, skips hidden/guides.
+ * Collect spatial candidates with pre-snapshotted bounds in one pass.
+ *
+ * SEMANTIC NOTE: Uses geometricBounds (path geometry only, excludes strokes/effects).
+ * Spatial predicates operate on item center points computed from geometricBounds.
+ * This is faster and more stable than visibleBounds but may differ from visual extent.
+ *
+ * Locked layers are NOT skipped (users may query locked reference elements).
+ * Locked items may be skipped if bounds access throws.
+ *
+ * @param {Document} doc
+ * @param {string|null} layerFilter - Optional layer name to restrict scan
+ * @returns {Array<{item: PageItem, cx: number, cy: number, L: number, T: number, R: number, B: number}>}
+ */
+function collectSpatialCandidatesWithBounds(doc, layerFilter) {
+    var result = [];
+    for (var i = 0; i < doc.layers.length; i++) {
+        if (!doc.layers[i].visible) continue;
+        if (layerFilter && doc.layers[i].name !== layerFilter) continue;  // P0: early layer filter
+        var layerItems = collectLayerItems(doc.layers[i], true);
+        for (var j = 0; j < layerItems.length; j++) {
+            if (!spatialScanFilter(layerItems[j])) continue;
+            try {
+                var b = layerItems[j].geometricBounds;  // single COM call per item
+                result.push({
+                    item: layerItems[j],
+                    cx: (b[0] + b[2]) / 2, cy: (b[1] + b[3]) / 2,
+                    L: b[0], T: b[1], R: b[2], B: b[3]
+                });
+            } catch (e) { /* locked/special items may throw on bounds access */ }
+        }
+    }
+    return result;
+}
+
+/**
+ * Backward-compatible wrapper preserving old API.
+ * Note: inherits new semantics (early layer-visibility filtering, try/catch bounds).
  * @param {Document} doc
  * @returns {Array<PageItem>}
  */
 function collectSpatialCandidates(doc) {
-    var candidates = [];
-    for (var i = 0; i < doc.layers.length; i++) {
-        if (!doc.layers[i].visible) continue;  // Skip hidden layers
-        var layerItems = collectLayerItems(doc.layers[i], true);
-        for (var j = 0; j < layerItems.length; j++) {
-            if (spatialScanFilter(layerItems[j])) {
-                candidates.push(layerItems[j]);
-            }
+    var wb = collectSpatialCandidatesWithBounds(doc, null);
+    var items = [];
+    for (var i = 0; i < wb.length; i++) items.push(wb[i].item);
+    return items;
+}
+
+// ==================== Grid Spatial Index (P1) ====================
+
+/**
+ * Clamp a value between min and max.
+ * @param {number} val
+ * @param {number} lo
+ * @param {number} hi
+ * @returns {number}
+ */
+function _clamp(val, lo, hi) {
+    return val < lo ? lo : (val > hi ? hi : val);
+}
+
+/**
+ * Build a grid spatial index over pre-snapshotted candidates.
+ * Grid resolution adapts to candidate count: cols = rows = clamp(4, 12, round(sqrt(N)/2)).
+ * Only used for within/nearTo predicates when candidatesWB.length >= 50.
+ *
+ * @param {Array} candidatesWB - Output of collectSpatialCandidatesWithBounds
+ * @param {Array} abRect - Artboard rect [L, T, R, B]
+ * @returns {{grid: Array, cellW: number, cellH: number, cols: number, rows: number}}
+ */
+function buildSpatialGrid(candidatesWB, abRect) {
+    var n = candidatesWB.length;
+    var dim = _clamp(Math.round(Math.sqrt(n) / 2), 4, 12);
+    var cols = dim, rows = dim;
+    var abW = abRect[2] - abRect[0];
+    var abH = abRect[1] - abRect[3];  // AI coords: T > B
+    if (abW <= 0 || abH <= 0) return null;
+    var cellW = abW / cols;
+    var cellH = abH / rows;
+    var grid = [];
+    for (var r = 0; r < rows; r++) {
+        grid[r] = [];
+        for (var c = 0; c < cols; c++) grid[r][c] = [];
+    }
+    for (var i = 0; i < n; i++) {
+        var col = Math.floor((candidatesWB[i].cx - abRect[0]) / cellW);
+        var row = Math.floor((abRect[1] - candidatesWB[i].cy) / cellH);
+        col = _clamp(col, 0, cols - 1);
+        row = _clamp(row, 0, rows - 1);
+        grid[row][col].push(i);
+    }
+    return { grid: grid, cellW: cellW, cellH: cellH, cols: cols, rows: rows };
+}
+
+/**
+ * Query a spatial grid for candidate indices whose centers fall in overlapping cells.
+ * Returns indices into the candidatesWB array.
+ *
+ * @param {Object} sg - Spatial grid from buildSpatialGrid
+ * @param {{L,T,R,B}} normRect - Normalized query rect
+ * @param {Array} abRect - Artboard rect [L, T, R, B]
+ * @returns {Array<number>} Candidate indices
+ */
+function querySpatialGrid(sg, normRect, abRect) {
+    var c0 = _clamp(Math.floor((normRect.L - abRect[0]) / sg.cellW), 0, sg.cols - 1);
+    var c1 = _clamp(Math.floor((normRect.R - abRect[0]) / sg.cellW), 0, sg.cols - 1);
+    var r0 = _clamp(Math.floor((abRect[1] - normRect.T) / sg.cellH), 0, sg.rows - 1);
+    var r1 = _clamp(Math.floor((abRect[1] - normRect.B) / sg.cellH), 0, sg.rows - 1);
+    var indices = [];
+    for (var r = r0; r <= r1; r++) {
+        for (var c = c0; c <= c1; c++) {
+            var bucket = sg.grid[r][c];
+            for (var b = 0; b < bucket.length; b++) indices.push(bucket[b]);
         }
     }
-    return candidates;
+    return indices;
 }
 
 /**
@@ -428,6 +526,7 @@ function collectTargets(doc, target) {
     }
     else if (type === "spatial") {
         // C3: Spatial query targets
+        // Spatial predicates operate on item center points computed from geometricBounds.
         var hasWithin = target.within;
         var hasNearTo = target.nearTo;
         var hasOutside = target.outside;
@@ -452,32 +551,70 @@ function collectTargets(doc, target) {
                 "target.layer must be a string, got " + typeof target.layer, "collect"));
         }
 
-        var candidates = collectSpatialCandidates(doc);
-
-        // P1: Optional layer filter for spatial targets
-        var spatialLayer = target.layer || null;
-        if (spatialLayer) {
-            var filtered = [];
-            for (var fi = 0; fi < candidates.length; fi++) {
-                try { if (candidates[fi].layer.name === spatialLayer) filtered.push(candidates[fi]); } catch (e) { }
-            }
-            candidates = filtered;
-        }
+        // One-pass scan with snapshotted bounds + early layer filter
+        var candidatesWB = collectSpatialCandidatesWithBounds(doc, target.layer || null);
 
         // Spatial predicates are combined as OR (union):
         // - within + nearTo → items inside rect OR near reference
         // - within + outside on same rect degenerates to all candidates
         // Runtime guard intentionally duplicates validatePayload checks for safety.
-        if (hasWithin || hasOutside) {
-            var rectSpec = hasWithin || hasOutside;
-            var norm = normalizeRect(rectSpec, doc, target.coord || "user");
-            if (!norm.ok) throwStructured(norm);
 
-            for (var si = 0; si < candidates.length; si++) {
-                var c = itemCenter(candidates[si]);
-                var inside = c[0] >= norm.L && c[0] <= norm.R && c[1] <= norm.T && c[1] >= norm.B;
-                if (hasWithin && inside) items.push(candidates[si]);
-                if (hasOutside && !inside) items.push(candidates[si]);
+        // Helper: get artboard rect for grid index (lazily resolved)
+        var _abRect = null;
+        function _getAbRect() {
+            if (!_abRect) {
+                try {
+                    var idx = doc.artboards.getActiveArtboardIndex();
+                    _abRect = doc.artboards[idx].artboardRect;
+                } catch (e) { _abRect = [0, 0, 0, 0]; }
+            }
+            return _abRect;
+        }
+
+        if (hasWithin) {
+            var normW = normalizeRect(hasWithin, doc, target.coord || "user");
+            if (!normW.ok) throwStructured(normW);
+
+            // P1: Use grid index for large candidate sets
+            if (candidatesWB.length >= 50) {
+                var sgW = buildSpatialGrid(candidatesWB, _getAbRect());
+                if (sgW) {
+                    var cellIdxs = querySpatialGrid(sgW, normW, _getAbRect());
+                    for (var gi = 0; gi < cellIdxs.length; gi++) {
+                        var cw = candidatesWB[cellIdxs[gi]];
+                        if (cw.cx >= normW.L && cw.cx <= normW.R && cw.cy <= normW.T && cw.cy >= normW.B) {
+                            items.push(cw.item);
+                        }
+                    }
+                } else {
+                    // Grid build failed (zero-size artboard), fall through to linear
+                    for (var si = 0; si < candidatesWB.length; si++) {
+                        if (candidatesWB[si].cx >= normW.L && candidatesWB[si].cx <= normW.R &&
+                            candidatesWB[si].cy <= normW.T && candidatesWB[si].cy >= normW.B) {
+                            items.push(candidatesWB[si].item);
+                        }
+                    }
+                }
+            } else {
+                // Small candidate set → linear scan (no grid overhead)
+                for (var si = 0; si < candidatesWB.length; si++) {
+                    if (candidatesWB[si].cx >= normW.L && candidatesWB[si].cx <= normW.R &&
+                        candidatesWB[si].cy <= normW.T && candidatesWB[si].cy >= normW.B) {
+                        items.push(candidatesWB[si].item);
+                    }
+                }
+            }
+        }
+
+        if (hasOutside) {
+            // Outside stays linear — complement set doesn't benefit from grid index
+            var normO = normalizeRect(hasOutside, doc, target.coord || "user");
+            if (!normO.ok) throwStructured(normO);
+
+            for (var oi = 0; oi < candidatesWB.length; oi++) {
+                var inside = candidatesWB[oi].cx >= normO.L && candidatesWB[oi].cx <= normO.R &&
+                    candidatesWB[oi].cy <= normO.T && candidatesWB[oi].cy >= normO.B;
+                if (!inside) items.push(candidatesWB[oi].item);
             }
         }
 
@@ -502,16 +639,41 @@ function collectTargets(doc, target) {
                     "nearTo requires exactly one reference item, found " + refItems.length, "collect"));
             }
             var refCenter = itemCenter(refItems[0]);
-            var r = hasNearTo.radius;
-            var r2 = r * r;
+            var rad = hasNearTo.radius;
+            var r2 = rad * rad;
 
-            for (var ni = 0; ni < candidates.length; ni++) {
-                // Skip the reference item itself
-                if (candidates[ni] === refItems[0]) continue;
-                var nc = itemCenter(candidates[ni]);
-                var dx = nc[0] - refCenter[0];
-                var dy = nc[1] - refCenter[1];
-                if (dx * dx + dy * dy <= r2) items.push(candidates[ni]);
+            // P1: Grid prefilter for nearTo — expand ref center by radius to bounding rect
+            if (candidatesWB.length >= 50) {
+                var nearNorm = {
+                    L: refCenter[0] - rad, R: refCenter[0] + rad,
+                    T: refCenter[1] + rad, B: refCenter[1] - rad
+                };
+                var sgN = buildSpatialGrid(candidatesWB, _getAbRect());
+                if (sgN) {
+                    var nearIdxs = querySpatialGrid(sgN, nearNorm, _getAbRect());
+                    for (var ngi = 0; ngi < nearIdxs.length; ngi++) {
+                        var cn = candidatesWB[nearIdxs[ngi]];
+                        if (cn.item === refItems[0]) continue;  // Skip ref item
+                        var dx = cn.cx - refCenter[0];
+                        var dy = cn.cy - refCenter[1];
+                        if (dx * dx + dy * dy <= r2) items.push(cn.item);
+                    }
+                } else {
+                    // Grid failed, linear fallback
+                    for (var ni = 0; ni < candidatesWB.length; ni++) {
+                        if (candidatesWB[ni].item === refItems[0]) continue;
+                        var dx = candidatesWB[ni].cx - refCenter[0];
+                        var dy = candidatesWB[ni].cy - refCenter[1];
+                        if (dx * dx + dy * dy <= r2) items.push(candidatesWB[ni].item);
+                    }
+                }
+            } else {
+                for (var ni = 0; ni < candidatesWB.length; ni++) {
+                    if (candidatesWB[ni].item === refItems[0]) continue;
+                    var dx = candidatesWB[ni].cx - refCenter[0];
+                    var dy = candidatesWB[ni].cy - refCenter[1];
+                    if (dx * dx + dy * dy <= r2) items.push(candidatesWB[ni].item);
+                }
             }
         }
     }

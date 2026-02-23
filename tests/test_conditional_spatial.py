@@ -281,18 +281,18 @@ class TestSpatialScanRules:
 
     def test_hidden_items_skipped(self):
         start = TARGETS_JSX.index("function spatialScanFilter(")
-        fn_end = TARGETS_JSX.index("function collectSpatialCandidates(")
+        fn_end = TARGETS_JSX.index("function collectSpatialCandidatesWithBounds(")
         body = TARGETS_JSX[start:fn_end]
         assert "item.hidden" in body
 
     def test_hidden_layers_skipped(self):
-        start = TARGETS_JSX.index("function collectSpatialCandidates(")
-        body = TARGETS_JSX[start:start + 400]
+        start = TARGETS_JSX.index("function collectSpatialCandidatesWithBounds(")
+        body = TARGETS_JSX[start:start + 600]
         assert "layers[i].visible" in body or "layer.visible" in body
 
     def test_guides_skipped(self):
         start = TARGETS_JSX.index("function spatialScanFilter(")
-        fn_end = TARGETS_JSX.index("function collectSpatialCandidates(")
+        fn_end = TARGETS_JSX.index("function collectSpatialCandidatesWithBounds(")
         body = TARGETS_JSX[start:fn_end]
         assert "item.guides" in body
 
@@ -329,16 +329,18 @@ class TestSpatialPredicateLogic:
 
     def test_within_uses_ltrb(self):
         body = _get_spatial_branch()
-        assert "norm.L" in body
-        assert "norm.R" in body
-        assert "norm.T" in body
-        assert "norm.B" in body
+        # Within predicate uses normalized L/T/R/B (now via normW or normO)
+        assert "normW.L" in body or "norm.L" in body
+        assert "normW.R" in body or "norm.R" in body
+        assert "normW.T" in body or "norm.T" in body
+        assert "normW.B" in body or "norm.B" in body
 
     def test_outside_is_complement(self):
         """outside uses !inside — exact complement of within."""
         body = _get_spatial_branch()
-        assert "hasWithin && inside" in body or "hasWithin \x26\x26 inside" in body
-        assert "hasOutside && !inside" in body or "hasOutside \x26\x26 !inside" in body
+        # Outside branch: linear scan with !inside check
+        assert "hasOutside" in body
+        assert "!inside" in body
 
     def test_distance_squared_for_nearTo(self):
         """nearTo should use squared distance to avoid sqrt."""
@@ -524,4 +526,139 @@ class TestThrowStructuredHelper:
 
     def test_preserves_meta(self):
         assert "err.meta" in TARGETS_JSX
+
+
+# ======================== Spatial Performance Tests (24-31) ========================
+
+
+class TestBoundsSnapshotFunction:
+    """Test 24: collectSpatialCandidatesWithBounds exists and has correct structure."""
+
+    def test_withBounds_exists(self):
+        assert "function collectSpatialCandidatesWithBounds(" in TARGETS_JSX
+
+    def test_withBounds_has_try_catch(self):
+        """Bounds read must be inside try/catch for locked items."""
+        start = TARGETS_JSX.index("function collectSpatialCandidatesWithBounds(")
+        end = TARGETS_JSX.index("function collectSpatialCandidates(", start)
+        body = TARGETS_JSX[start:end]
+        assert "try {" in body
+        assert "geometricBounds" in body
+        assert "} catch (e)" in body
+
+    def test_withBounds_has_layer_filter_param(self):
+        """Function accepts layerFilter as second parameter."""
+        start = TARGETS_JSX.index("function collectSpatialCandidatesWithBounds(")
+        sig_end = TARGETS_JSX.index(")", start)
+        sig = TARGETS_JSX[start:sig_end]
+        assert "layerFilter" in sig
+
+    def test_withBounds_returns_object_with_fields(self):
+        """Return objects should have cx, cy, L, T, R, B, item fields."""
+        start = TARGETS_JSX.index("function collectSpatialCandidatesWithBounds(")
+        end = TARGETS_JSX.index("function collectSpatialCandidates(", start)
+        body = TARGETS_JSX[start:end]
+        for field in ["cx:", "cy:", "L:", "T:", "R:", "B:", "item:"]:
+            assert field in body, f"Missing field {field} in bounds snapshot return"
+
+
+class TestEarlyLayerFilter:
+    """Test 25: Layer filter is applied before item iteration."""
+
+    def test_layer_filter_before_item_scan(self):
+        """layerFilter comparison must come before collectLayerItems call."""
+        start = TARGETS_JSX.index("function collectSpatialCandidatesWithBounds(")
+        end = TARGETS_JSX.index("function collectSpatialCandidates(", start)
+        body = TARGETS_JSX[start:end]
+        filter_pos = body.index("layerFilter")
+        scan_pos = body.index("collectLayerItems")
+        assert filter_pos < scan_pos, "Layer filter must precede item scan"
+
+
+class TestSpatialBranchUsesWithBounds:
+    """Test 26: Spatial branch uses new function, not old collectSpatialCandidates."""
+
+    def test_spatial_branch_calls_withBounds(self):
+        body = _get_spatial_branch()
+        assert "collectSpatialCandidatesWithBounds" in body
+
+    def test_no_itemCenter_in_spatial_predicates(self):
+        """Spatial predicates should use snapshotted cx/cy, not itemCenter."""
+        body = _get_spatial_branch()
+        # itemCenter may still be used for nearTo ref point resolution,
+        # but should not be called on candidates array
+        assert "itemCenter(candidates" not in body
+        assert "itemCenter(candidatesWB" not in body
+
+
+class TestGeometricBoundsDocumented:
+    """Test 27: geometricBounds semantics documented in spatial helpers."""
+
+    def test_bounds_semantic_note(self):
+        start = TARGETS_JSX.index("function collectSpatialCandidatesWithBounds(")
+        # Look backward for the JSDoc comment
+        doc_start = TARGETS_JSX.rfind("/**", 0, start)
+        doc = TARGETS_JSX[doc_start:start]
+        assert "geometricBounds" in doc
+
+    def test_center_based_semantics_documented(self):
+        """Spatial predicates must document center-point semantics."""
+        # Check either in the function JSDoc or in the spatial branch comment
+        assert "center points" in TARGETS_JSX or "center point" in TARGETS_JSX
+
+
+class TestBackwardCompatWrapper:
+    """Test 28: Old collectSpatialCandidates delegates to new function."""
+
+    def test_wrapper_exists(self):
+        assert "function collectSpatialCandidates(" in TARGETS_JSX
+
+    def test_wrapper_delegates(self):
+        start = TARGETS_JSX.index("function collectSpatialCandidates(")
+        end = start + 300
+        body = TARGETS_JSX[start:end]
+        assert "collectSpatialCandidatesWithBounds" in body
+
+
+class TestGridSpatialIndex:
+    """Test 29: Grid spatial index functions exist and use adaptive density."""
+
+    def test_buildSpatialGrid_exists(self):
+        assert "function buildSpatialGrid(" in TARGETS_JSX
+
+    def test_querySpatialGrid_exists(self):
+        assert "function querySpatialGrid(" in TARGETS_JSX
+
+    def test_adaptive_grid_density(self):
+        """Grid uses sqrt-based adaptive sizing, not hardcoded."""
+        start = TARGETS_JSX.index("function buildSpatialGrid(")
+        end = TARGETS_JSX.index("function querySpatialGrid(", start)
+        body = TARGETS_JSX[start:end]
+        assert "Math.sqrt" in body
+        assert "_clamp" in body
+
+    def test_grid_only_for_within_and_nearTo(self):
+        """Grid index must not be used for outside predicate."""
+        body = _get_spatial_branch()
+        # Find the outside block — it should NOT contain buildSpatialGrid
+        outside_start = body.index("hasOutside")
+        # Find the next predicate block (nearTo) or end
+        nearTo_start = body.index("hasNearTo", outside_start)
+        outside_block = body[outside_start:nearTo_start]
+        assert "buildSpatialGrid" not in outside_block, \
+            "outside predicate must not use grid index"
+
+    def test_threshold_guard(self):
+        """Grid index should only activate above a candidate threshold."""
+        body = _get_spatial_branch()
+        assert "candidatesWB.length >= 50" in body
+
+    def test_nearTo_radius_prefilter(self):
+        """nearTo must expand ref center by radius to bounding rect for grid prefilter."""
+        body = _get_spatial_branch()
+        # Should build a nearNorm rect from refCenter +/- radius
+        assert "refCenter[0] - rad" in body
+        assert "refCenter[0] + rad" in body
+        assert "refCenter[1] + rad" in body
+        assert "refCenter[1] - rad" in body
 
