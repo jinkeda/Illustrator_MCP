@@ -44,9 +44,17 @@ class ResponseClassification:
     raw: Any = None
 
 
-
 from illustrator_mcp.errors import ERROR_PREFIXES as _ERROR_PREFIXES
 
+
+def _is_batch_report(d: dict) -> bool:
+    """Detect SOC batch report shape ({ok, stats, ops, ...}).
+
+    Returns True if the dict looks like an executeOpBatch result,
+    which always contains 'stats' and 'ops' keys.  This distinguishes
+    batch partial-failures from generic {ok:false} error dicts.
+    """
+    return "stats" in d and "ops" in d
 
 
 def classify_response(
@@ -126,27 +134,14 @@ def classify_response(
                 raw=raw,
             )
         # 4b. Batch report with explicit ok: false (no singular 'error' key)
-        if result.get("ok") is False:
-            errors = result.get("errors") or []
-            stats = result.get("stats") or {}
-            if errors:
-                parts = []
-                for e in errors[:3]:
-                    parts.append(
-                        str(e.get("error", e)) if isinstance(e, dict) else str(e)
-                    )
-                error_msg = "; ".join(parts)
-            elif stats.get("failed", 0) > 0:
-                error_msg = (
-                    f"Batch: {stats['failed']}/{stats.get('total', '?')} ops failed"
-                )
-            else:
-                error_msg = "Batch reported ok:false with no error details"
-            code_obj = classify_error(error_msg)
+        # SOC batch reports contain per-op details in "ops" + aggregate "stats".
+        # Pass them through as success so callers get the full result instead
+        # of a lossy summary string.  The envelope's ok is set to False
+        # downstream (format_envelope) so callers still know something failed.
+        if result.get("ok") is False and _is_batch_report(result):
             return ResponseClassification(
-                ok=False,
-                error_message=error_msg,
-                error_code=code_obj.value if code_obj else "BATCH_FAILURE",
+                ok=True,
+                result=result,
                 raw=raw,
             )
 

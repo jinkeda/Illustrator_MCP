@@ -579,9 +579,12 @@ def format_envelope(
     if error_str is not None:
         return _error_envelope(error_str)
 
-    # Success case
+    # Success case — reflect batch-level ok:false in the envelope
+    envelope_ok = True
+    if isinstance(result, dict) and result.get("ok") is False:
+        envelope_ok = False
     return json.dumps({
-        "ok": True,
+        "ok": envelope_ok,
         "warnings": warnings,
         "error": None,
         "diagnostics": diagnostics,

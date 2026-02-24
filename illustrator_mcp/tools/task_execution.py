@@ -254,7 +254,7 @@ JSON.stringify(report);
                 mode = "annotated"
 
             envelope = json.dumps({
-                "ok": True,
+                "ok": report.ok,
                 "warnings": warnings,
                 "error": None,
                 "diagnostics": diagnostics,

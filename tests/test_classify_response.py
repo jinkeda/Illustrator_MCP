@@ -156,34 +156,51 @@ class TestClassifyOptions:
 class TestClassifyResponseBatchReport:
     """Test batch report classification (step 4b)."""
 
-    def test_batch_ok_false_with_errors(self):
-        """Batch report {ok:false, errors:[{...}]} is classified as failure."""
+    def test_batch_ok_false_passed_through(self):
+        """Batch report with ok:false + ops/stats is passed through (not error)."""
         resp = {"result": {
             "ok": False,
-            "errors": [{"index": 0, "task": "element_create", "error": "Layer locked"}],
+            "ops": [
+                {"index": 0, "task": "element_create", "ok": False, "error": "Layer locked"},
+                {"index": 1, "task": "style_set_fill", "ok": True},
+            ],
+            "stats": {"total": 2, "passed": 1, "failed": 1},
+        }}
+        c = classify_response(resp)
+
+        assert c.ok is True  # pass-through — NOT classified as error
+        assert c.result["ok"] is False  # batch's own ok preserved
+        assert len(c.result["ops"]) == 2  # per-op details preserved
+
+    def test_batch_ok_false_empty_ops_passed_through(self):
+        """Batch with ok:false, empty ops, and stats is still passed through."""
+        resp = {"result": {
+            "ok": False,
+            "ops": [],
             "stats": {"total": 5, "failed": 1},
         }}
         c = classify_response(resp)
 
-        assert c.ok is False
-        assert "Layer locked" in c.error_message
+        assert c.ok is True
+        assert c.result["stats"]["failed"] == 1
 
-    def test_batch_ok_false_empty_errors(self):
-        """Batch report {ok:false, errors:[], stats:{failed:1}} is classified as failure."""
+    def test_non_batch_ok_false_still_errors(self):
+        """Dict with ok:false but NO ops/stats is NOT a batch — falls through to step 5+."""
         resp = {"result": {
             "ok": False,
-            "errors": [],
-            "stats": {"total": 5, "failed": 1},
+            "error": "Something failed",
         }}
         c = classify_response(resp)
 
+        # step 3 catches this via the inner "error" key
         assert c.ok is False
-        assert "1/5" in c.error_message
+        assert "Something failed" in c.error_message
 
     def test_batch_ok_true_passes(self):
         """Batch report {ok:true} passes through as success."""
         resp = {"result": {
             "ok": True,
+            "ops": [{"index": 0, "task": "element_create", "ok": True}],
             "stats": {"total": 5, "passed": 5, "failed": 0},
             "createdIds": ["id1", "id2"],
         }}
@@ -196,6 +213,11 @@ class TestClassifyResponseBatchReport:
         """Batch with ok:true AND non-empty errors trusts ok (partial success)."""
         resp = {"result": {
             "ok": True,
+            "ops": [
+                {"index": 0, "ok": True},
+                {"index": 1, "ok": True},
+                {"index": 2, "task": "style_set_fill", "ok": False, "error": "skipped"},
+            ],
             "errors": [{"index": 2, "task": "style_set_fill", "error": "skipped"}],
             "stats": {"total": 5, "passed": 4, "failed": 1},
         }}
@@ -209,4 +231,5 @@ class TestClassifyResponseBatchReport:
         c = classify_response(resp)
 
         assert c.ok is True
+
 
