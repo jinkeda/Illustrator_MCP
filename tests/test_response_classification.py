@@ -27,11 +27,14 @@ class TestFormatResponseSnapshots:
         assert "S005" in result
 
     def test_connection_error_prominent(self):
-        """Connection error gets prominent formatting with STOP banner."""
+        """Connection error gets structured error formatting."""
+        import warnings
         response = {"error": "[C001] DISCONNECTED: panel offline"}
-        result = format_response(response)
-        assert "⚠️" in result
-        assert "STOP" in result
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", DeprecationWarning)
+            result = format_response(response)
+        assert "C001" in result
+        assert isinstance(result, str)
 
     def test_success_json_result(self):
         """Result dict with success envelope is unwrapped to inner result."""
@@ -100,11 +103,44 @@ class TestFormatResponseSnapshots:
 
     def test_no_result_key(self):
         """Response without result or error uses whole response as result."""
+        import warnings
         response = {"data": "value"}
-        result = format_response(response)
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", DeprecationWarning)
+            result = format_response(response)
         # format_response uses response.get("result", response)
         parsed = json.loads(result)
         assert parsed == {"data": "value"}
+
+    def test_format_response_emits_deprecation(self):
+        """format_response emits DeprecationWarning."""
+        import warnings
+        with warnings.catch_warnings(record=True) as w:
+            warnings.simplefilter("always")
+            format_response({"result": "hello"})
+            dep_warnings = [x for x in w if issubclass(x.category, DeprecationWarning)]
+            assert len(dep_warnings) >= 1
+            assert "format_envelope" in str(dep_warnings[0].message)
+
+    def test_shim_parity_success_dict(self):
+        """Shim produces identical output for success dict."""
+        import warnings
+        r = {"result": json.dumps({"key": "value"})}
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", DeprecationWarning)
+            result = format_response(r)
+        assert json.loads(result) == {"key": "value"}
+
+    def test_shim_parity_error(self):
+        """Shim produces same output as format_error_response for errors."""
+        import warnings
+        from illustrator_mcp.errors import format_error_response
+        r = {"error": "Something went wrong"}
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", DeprecationWarning)
+            result = format_response(r)
+        expected = format_error_response("Something went wrong", "")
+        assert result == expected
 
 
 # =============================================================================

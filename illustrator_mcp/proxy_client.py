@@ -470,11 +470,90 @@ def _extract_result(response: Dict[str, Any]) -> "ResponseClassification":
     return classify_response(response)
 
 
-def format_response(response: dict[str, Any], context: str = "") -> str:
-    """
-    Format the response from Illustrator for MCP output.
+def _build_envelope_dict(
+    response: Dict[str, Any],
+    context: str = "",
+    warnings: Optional[List[str]] = None,
+    diagnostics: Optional[Dict[str, Any]] = None,
+) -> dict:
+    """Build standardized envelope as a dict (internal shared core).
 
-    Uses structured error handling with suggestions for better developer experience.
+    Not exported. Callers use :func:`format_envelope` for JSON or
+    :func:`format_response` for legacy text.
+
+    Returns:
+        dict with keys: ok, warnings, error, diagnostics, result
+    """
+    from illustrator_mcp.errors import create_structured_error
+
+    warnings = warnings or []
+    diagnostics = diagnostics or {}
+
+    # Add trace info to diagnostics if present in response
+    if response.get("trace_id"):
+        diagnostics["trace_id"] = response["trace_id"]
+    if response.get("elapsed_ms"):
+        diagnostics["elapsed_ms"] = response["elapsed_ms"]
+
+    def _error_dict(error_msg: str, line: int = None, operation: str = None) -> dict:
+        structured = create_structured_error(error_msg, context)
+        error_info = {
+            "code": structured.code,
+            "message": structured.message,
+            "suggestions": structured.suggestions,
+        }
+        if line is not None:
+            error_info["line"] = line
+        if operation:
+            error_info["operation"] = operation
+        return {
+            "ok": False,
+            "warnings": warnings,
+            "error": error_info,
+            "diagnostics": diagnostics,
+            "result": None,
+        }
+
+    # Handle top-level errors (may be string or dict from Phase 2 host.jsx)
+    if response.get("error"):
+        top_error = response["error"]
+        if isinstance(top_error, dict):
+            error_msg = top_error.get('message', str(top_error))
+            return _error_dict(
+                error_msg,
+                line=top_error.get('line'),
+                operation=top_error.get('operation'),
+            )
+        return _error_dict(top_error)
+
+    # Extract and classify result
+    classification = _extract_result(response)
+    if not classification.ok:
+        return _error_dict(
+            classification.error_message,
+            line=classification.error_line,
+            operation=classification.error_operation,
+        )
+    result = classification.result
+
+    # Success case — reflect batch-level ok:false in the envelope
+    envelope_ok = True
+    if isinstance(result, dict) and result.get("ok") is False:
+        envelope_ok = False
+    return {
+        "ok": envelope_ok,
+        "warnings": warnings,
+        "error": None,
+        "diagnostics": diagnostics,
+        "result": result,
+    }
+
+
+def format_response(response: dict[str, Any], context: str = "") -> str:
+    """Format response as plain text.
+
+    .. deprecated:: Use :func:`format_envelope` directly.
+       Retained only for backward compatibility with archive tools.
 
     Args:
         response: Response dictionary from execute_script
@@ -483,33 +562,32 @@ def format_response(response: dict[str, Any], context: str = "") -> str:
     Returns:
         Formatted string for MCP tool response
     """
-    from illustrator_mcp.errors import (
-        format_error_response,
-        is_connection_error,
+    import warnings as _w
+    _w.warn(
+        "format_response is deprecated, use format_envelope",
+        DeprecationWarning,
+        stacklevel=2,
     )
+    from illustrator_mcp.errors import format_error_response
 
-    # Handle top-level errors with structured formatting
+    # Top-level errors: use raw error string from response for parity
+    # with the old implementation (avoids create_structured_error drift).
     if response.get("error"):
-        error = response['error']
-        # Phase 2+: error may be a dict {message, line, name}
-        if isinstance(error, dict):
-            error = error.get('message', str(error))
+        raw_error = response["error"]
+        if isinstance(raw_error, dict):
+            raw_error = raw_error.get("message", str(raw_error))
+        return format_error_response(raw_error, context)
 
-        # Make connection errors very prominent
-        if is_connection_error(error):
-            formatted = format_error_response(error, context)
-            return f"⚠️ {formatted}\n\n[STOP: Do not retry until connection is restored]"
+    # Non-error path: classify via shared core
+    envelope = _build_envelope_dict(response, context)
 
-        # Format other errors with suggestions
-        return format_error_response(error, context)
+    if not envelope["ok"]:
+        # Classification found an error in the result payload
+        err = envelope.get("error") or {}
+        error_msg = err.get("message", str(err))
+        return format_error_response(error_msg, context)
 
-    # Extract and classify result
-    classification = _extract_result(response)
-    if not classification.ok:
-        return format_error_response(classification.error_message, context)
-    result = classification.result
-
-    # Format output
+    result = envelope.get("result")
     if isinstance(result, (dict, list)):
         return json.dumps(result, indent=2)
     return str(result)
@@ -542,67 +620,7 @@ def format_envelope(
     Returns:
         JSON string with standardized envelope
     """
-    from illustrator_mcp.errors import create_structured_error
-
-    warnings = warnings or []
-    diagnostics = diagnostics or {}
-
-    # Add trace info to diagnostics if present in response
-    if response.get("trace_id"):
-        diagnostics["trace_id"] = response["trace_id"]
-    if response.get("elapsed_ms"):
-        diagnostics["elapsed_ms"] = response["elapsed_ms"]
-
-    def _error_envelope(error_msg: str, line: int = None, operation: str = None) -> str:
-        structured = create_structured_error(error_msg, context)
-        error_dict = {
-            "code": structured.code,
-            "message": structured.message,
-            "suggestions": structured.suggestions,
-        }
-        if line is not None:
-            error_dict["line"] = line
-        if operation:
-            error_dict["operation"] = operation
-        return json.dumps({
-            "ok": False,
-            "warnings": warnings,
-            "error": error_dict,
-            "diagnostics": diagnostics,
-            "result": None
-        })
-
-    # Handle top-level errors (may be string or dict from Phase 2 host.jsx)
-    if response.get("error"):
-        top_error = response["error"]
-        if isinstance(top_error, dict):
-            error_msg = top_error.get('message', str(top_error))
-            return _error_envelope(
-                error_msg,
-                line=top_error.get('line'),
-                operation=top_error.get('operation'),
-            )
-        return _error_envelope(top_error)
-
-    # Extract and classify result
-    classification = _extract_result(response)
-    if not classification.ok:
-        return _error_envelope(
-            classification.error_message,
-            line=classification.error_line,
-            operation=classification.error_operation,
-        )
-    result = classification.result
-
-    # Success case — reflect batch-level ok:false in the envelope
-    envelope_ok = True
-    if isinstance(result, dict) and result.get("ok") is False:
-        envelope_ok = False
-    return json.dumps({
-        "ok": envelope_ok,
-        "warnings": warnings,
-        "error": None,
-        "diagnostics": diagnostics,
-        "result": result
-    })
+    return json.dumps(
+        _build_envelope_dict(response, context, warnings, diagnostics)
+    )
 

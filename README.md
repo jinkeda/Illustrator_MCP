@@ -606,7 +606,7 @@ Illustrator_MCP/
 │   ├── shared.py                 # FastMCP instance + lifespan management
 │   ├── config.py                 # Pydantic Settings (ws_port, timeout)
 │   ├── runtime.py                # Dependency injection for bridge
-│   ├── proxy_client.py           # Script execution client + response envelope
+│   ├── proxy_client.py           # Script execution + response envelope (format_envelope)
 │   ├── websocket_bridge.py       # WebSocket bridge facade
 │   ├── libraries.py              # Library resolver + manifest-driven injection
 │   ├── protocol.py               # Task Protocol v2.3 Pydantic models
@@ -617,7 +617,7 @@ Illustrator_MCP/
 │   ├── vlm_grounding.py          # VLM QA pipeline: hybrid grounding, hypothesis verifier, DOM diffing
 │   ├── svgd.py                   # SVG path data parser (d attribute → geometry IR, arc→cubic)
 │   ├── curves.py                 # Bézier curve helpers (rounded polygon, arc points)
-│   ├── utils.py                  # Path escaping, validation helpers
+│   ├── utils_funcs.py            # Path escaping helper (re-exported via utils/)
 │   ├── log_config.py             # Structured logging config
 │   ├── bridge/
 │   │   ├── server.py             # WebSocket server transport
@@ -625,7 +625,8 @@ Illustrator_MCP/
 │   ├── logging/
 │   │   └── request_log.py        # JSON-lines logger
 │   ├── utils/
-│   │   └── chunking.py           # Auto-split large op batches
+│   │   ├── chunking.py           # Auto-split large op batches
+│   │   └── response.py           # JSON parsing + envelope unwrapping
 │   ├── schemas/                  # Generated JSON schemas
 │   ├── tools/
 │   │   ├── __init__.py           # Tool registration
@@ -660,7 +661,7 @@ Illustrator_MCP/
 │   │   ├── components/MCPControlPanel.tsx
 │   │   └── hooks/useMCP.ts       # WebSocket connection hook
 │   └── vite.config.ts
-├── tests/                        # Unit tests (pytest, 1255+ tests)
+├── tests/                        # Unit tests (pytest, 1270+ tests)
 │   ├── conftest.py               # Shared fixtures + collection-error guard
 │   ├── test_execute.py
 │   ├── test_documents.py

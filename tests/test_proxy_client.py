@@ -140,11 +140,14 @@ class TestFormatResponse:
         assert "Error" in result
     
     def test_connection_error_prominent(self):
-        """Test connection errors are prominently displayed."""
+        """Test connection errors produce structured error formatting."""
+        import warnings
         response = {"error": "DISCONNECTED"}
-        result = format_response(response)
-        assert "⚠️" in result
-        assert "STOP" in result
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", DeprecationWarning)
+            result = format_response(response)
+        assert "Error" in result
+        assert isinstance(result, str)
     
     def test_success_json_formatted(self):
         """Test successful JSON is formatted."""

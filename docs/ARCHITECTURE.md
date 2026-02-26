@@ -97,6 +97,20 @@ class RuntimeContext:
 
 This avoids eager imports and enables testing with mock bridges.
 
+## Response Formatting Architecture
+
+`proxy_client.py` uses a layered formatter design with a single shared core:
+
+```
+_build_envelope_dict(response, context, warnings, diagnostics) → dict
+    ├── format_envelope()  → json.dumps(dict)    # ALL active tools use this
+    └── format_response()  → legacy text (deprecated)  # archive tools only
+```
+
+- **`_build_envelope_dict()`** is the single source of truth for envelope semantics (error classification via `create_structured_error`, trace_id/elapsed_ms enrichment, batch-level ok:false reflection). Private, not exported.
+- **`format_envelope()`** wraps the dict in `json.dumps`. Used by all 12 registered tools.
+- **`format_response()`** *(deprecated)* — emits `DeprecationWarning`, delegates error formatting to `format_error_response()`, uses `_build_envelope_dict` for result classification. Retained for backward compatibility with unregistered archive tools.
+
 ## Testing Implications
 
 - Mock at `runtime.get_runtime()` for complete isolation
