@@ -459,22 +459,15 @@ async def execute_op_batch_chunked(
 # ==================== Shared Result Extraction ====================
 
 
-def _extract_result(response: Dict[str, Any]) -> tuple:
-    """Parse, unwrap, and classify a response into (result, error_str | None).
+def _extract_result(response: Dict[str, Any]) -> "ResponseClassification":
+    """Parse, unwrap, and classify a response.
 
-    Delegates to classify_response (single source of truth) and adapts
-    its ResponseClassification into the legacy (result, error_str) tuple
-    expected by format_response and format_envelope.
-
-    Returns:
-        (result, None) on success, or (None, error_string) on detected error.
+    Returns the full ResponseClassification so callers can access
+    error_line, error_operation, etc.
     """
     from illustrator_mcp.response_classification import classify_response
 
-    classification = classify_response(response)
-    if classification.ok:
-        return classification.result, None
-    return None, classification.error_message
+    return classify_response(response)
 
 
 def format_response(response: dict[str, Any], context: str = "") -> str:
@@ -498,6 +491,9 @@ def format_response(response: dict[str, Any], context: str = "") -> str:
     # Handle top-level errors with structured formatting
     if response.get("error"):
         error = response['error']
+        # Phase 2+: error may be a dict {message, line, name}
+        if isinstance(error, dict):
+            error = error.get('message', str(error))
 
         # Make connection errors very prominent
         if is_connection_error(error):
@@ -508,9 +504,10 @@ def format_response(response: dict[str, Any], context: str = "") -> str:
         return format_error_response(error, context)
 
     # Extract and classify result
-    result, error_str = _extract_result(response)
-    if error_str is not None:
-        return format_error_response(error_str, context)
+    classification = _extract_result(response)
+    if not classification.ok:
+        return format_error_response(classification.error_message, context)
+    result = classification.result
 
     # Format output
     if isinstance(result, (dict, list)):
@@ -556,28 +553,46 @@ def format_envelope(
     if response.get("elapsed_ms"):
         diagnostics["elapsed_ms"] = response["elapsed_ms"]
 
-    def _error_envelope(error_msg: str) -> str:
+    def _error_envelope(error_msg: str, line: int = None, operation: str = None) -> str:
         structured = create_structured_error(error_msg, context)
+        error_dict = {
+            "code": structured.code,
+            "message": structured.message,
+            "suggestions": structured.suggestions,
+        }
+        if line is not None:
+            error_dict["line"] = line
+        if operation:
+            error_dict["operation"] = operation
         return json.dumps({
             "ok": False,
             "warnings": warnings,
-            "error": {
-                "code": structured.code,
-                "message": structured.message,
-                "suggestions": structured.suggestions
-            },
+            "error": error_dict,
             "diagnostics": diagnostics,
             "result": None
         })
 
-    # Handle top-level errors
+    # Handle top-level errors (may be string or dict from Phase 2 host.jsx)
     if response.get("error"):
-        return _error_envelope(response["error"])
+        top_error = response["error"]
+        if isinstance(top_error, dict):
+            error_msg = top_error.get('message', str(top_error))
+            return _error_envelope(
+                error_msg,
+                line=top_error.get('line'),
+                operation=top_error.get('operation'),
+            )
+        return _error_envelope(top_error)
 
     # Extract and classify result
-    result, error_str = _extract_result(response)
-    if error_str is not None:
-        return _error_envelope(error_str)
+    classification = _extract_result(response)
+    if not classification.ok:
+        return _error_envelope(
+            classification.error_message,
+            line=classification.error_line,
+            operation=classification.error_operation,
+        )
+    result = classification.result
 
     # Success case — reflect batch-level ok:false in the envelope
     envelope_ok = True

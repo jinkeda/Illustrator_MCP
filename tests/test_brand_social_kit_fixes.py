@@ -610,41 +610,41 @@ class TestExportDimensions:
 
     def test_png_export_script_has_dimension_vars(self):
         """PNG export JSX computes exportWidth and exportHeight."""
-        source = _export_source()
+        source = templates.EXPORT_STANDARD.template
         assert "exportWidth" in source
         assert "exportHeight" in source
 
     def test_dimension_formula_uses_artboard_rect(self):
         """Dimensions are derived from artboardRect, not document size."""
-        source = _export_source()
+        source = templates.EXPORT_STANDARD.template
         assert "abRect[2] - abRect[0]" in source   # width from artboard
         assert "abRect[3] - abRect[1]" in source    # height from artboard
 
     def test_dimension_formula_divides_by_100(self):
         """Scale is applied as percentage (divide by 100)."""
-        source = _export_source()
+        source = templates.EXPORT_STANDARD.template
         assert "/ 100" in source
 
     def test_dimension_uses_math_round(self):
         """Pixel dimensions are rounded to integers."""
-        source = _export_source()
+        source = templates.EXPORT_STANDARD.template
         assert "Math.round" in source
 
     def test_dimensions_returned_in_json(self):
         """width and height appear in the return JSON."""
-        source = _export_source()
+        source = templates.EXPORT_STANDARD.template
         assert "width: exportWidth" in source
         assert "height: exportHeight" in source
 
     def test_jpg_export_also_has_dimensions(self):
-        """JPG uses same exportFile path as PNG, so also gets dimensions."""
+        """JPG uses same EXPORT_STANDARD template as PNG, so also gets dimensions."""
         # JPG format uses config["type"] which is truthy, so it enters the same code path
         source = _export_source()
         # The dimension code is in the if config["type"] block which covers PNG, JPG, SVG
         assert "ExportOptionsJPEG" in source
 
     def test_svg_export_also_has_dimensions(self):
-        """SVG uses same exportFile path, so also gets dimensions."""
+        """SVG uses same EXPORT_STANDARD template, so also gets dimensions."""
         source = _export_source()
         assert "ExportOptionsSVG" in source
 
@@ -701,10 +701,12 @@ class TestExportDimensions:
         rendered = templates.EXPORT_PDF.substitute(path="/test/output.pdf")
         assert "Math.abs(abRect[3] - abRect[1])" in rendered
 
-    def test_pdf_template_still_has_success(self):
-        """PDF template still returns success: true."""
+    def test_pdf_template_uses_ok_data_envelope(self):
+        """PDF template returns {ok: true, data: {...}, operation: ...}."""
         rendered = templates.EXPORT_PDF.substitute(path="/test/output.pdf")
-        assert "success: true" in rendered
+        assert "ok: true" in rendered
+        assert "data:" in rendered
+        assert "operation:" in rendered
 
     def test_pdf_template_still_has_format(self):
         """PDF template still returns format: "PDF"."""

@@ -233,3 +233,38 @@ class TestClassifyResponseBatchReport:
         assert c.ok is True
 
 
+class TestClassifyStructuredErrors:
+    """Tests for structured error object preservation (Phase 1b)."""
+
+    def test_dict_error_preserves_line(self):
+        """Structured error {message, line} preserves line number."""
+        resp = {"result": '{"ok": false, "error": {"message": "fail", "line": 42}}'}
+        c = classify_response(resp)
+        assert c.ok is False
+        assert c.error_line == 42
+
+    def test_dict_error_preserves_operation_nested(self):
+        """wrap_script shape: operation inside error dict."""
+        resp = {"result": '{"ok": false, "error": {"message": "f", "operation": "draw"}}'}
+        c = classify_response(resp)
+        assert c.error_operation == "draw"
+
+    def test_legacy_line_as_sibling(self):
+        """host.jsx puts line as sibling of error string."""
+        resp = {"result": '{"error": "fail", "line": 10}'}
+        c = classify_response(resp)
+        assert c.error_line == 10
+
+    def test_legacy_operation_as_sibling(self):
+        """Template shape: operation as sibling of error."""
+        resp = {"result": '{"error": "fail", "operation": "export"}'}
+        c = classify_response(resp)
+        assert c.error_operation == "export"
+
+    def test_string_error_no_metadata(self):
+        """Simple string error has no line or operation."""
+        resp = {"result": '{"error": "No document open"}'}
+        c = classify_response(resp)
+        assert c.ok is False
+        assert c.error_line is None
+        assert c.error_operation is None

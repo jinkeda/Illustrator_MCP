@@ -84,6 +84,51 @@ class TestUnwrapResult:
         assert unwrap_result(result) == result
 
 
+class TestUnwrapOkDataEnvelope:
+    """Tests for {ok, data} envelope unwrapping (Phase 1a)."""
+
+    def test_ok_data_unwrapped(self):
+        """Standard {ok:true, data:…} is unwrapped to data."""
+        result = {"ok": True, "data": {"width": 800}, "operation": "test"}
+        assert unwrap_result(result) == {"width": 800}
+
+    def test_ok_value_unwrapped(self):
+        """SOC {ok:true, value:…} is unwrapped to value."""
+        result = {"ok": True, "value": 42}
+        assert unwrap_result(result) == 42
+
+    def test_ok_false_not_unwrapped(self):
+        """Error envelope {ok:false} passes through untouched."""
+        result = {"ok": False, "error": {"message": "fail"}}
+        assert unwrap_result(result) == result
+
+    def test_ok_false_with_data_not_unwrapped(self):
+        """Edge case: {ok:false, data:{...}} must NOT unwrap."""
+        result = {"ok": False, "data": {"x": 1}, "error": "partial"}
+        assert unwrap_result(result) == result
+
+    def test_batch_report_not_unwrapped(self):
+        """Batch {ok:true, stats:…, ops:…} (no data key) passes through."""
+        result = {"ok": True, "stats": {"total": 5}, "ops": []}
+        assert unwrap_result(result) == result
+
+    def test_double_wrapped_ok_data(self):
+        """{success:true, result: '{"ok":true, "data":{…}}'} fully unwraps."""
+        inner = json.dumps({"ok": True, "data": {"key": "val"}, "operation": "x"})
+        outer = {"success": True, "result": inner}
+        assert unwrap_result(outer) == {"key": "val"}
+
+    def test_empty_string_error_stops_unwrap(self):
+        """Key presence, not truthiness: empty string error stops unwrapping."""
+        result = {"error": "", "result": "should_not_reach"}
+        assert unwrap_result(result) == result
+
+    def test_empty_dict_error_stops_unwrap(self):
+        """Key presence: empty dict error stops unwrapping."""
+        result = {"error": {}, "result": "should_not_reach"}
+        assert unwrap_result(result) == result
+
+
 class TestFormatResponse:
     """Tests for format_response function."""
     

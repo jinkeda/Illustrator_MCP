@@ -211,3 +211,83 @@ class TestFormatEnvelopeSnapshots:
         response = {"error": "fail"}
         result = self._parse(format_envelope(response))
         assert set(result.keys()) == {"ok", "warnings", "error", "diagnostics", "result"}
+
+
+class TestFormatEnvelopeNewShapes:
+    """End-to-end tests for {ok, data/value} unwrapping through format_envelope."""
+
+    def _parse(self, result: str) -> dict:
+        return json.loads(result)
+
+    def test_scalar_via_value(self):
+        """SOC {ok:true, value:42} unwraps to result=42."""
+        resp = {"result": '{"ok": true, "value": 42}'}
+        env = self._parse(format_envelope(resp))
+        assert env["ok"] is True
+        assert env["result"] == 42
+
+    def test_scalar_via_data(self):
+        """{ok:true, data:42} unwraps to result=42."""
+        resp = {"result": '{"ok": true, "data": 42}'}
+        env = self._parse(format_envelope(resp))
+        assert env["ok"] is True
+        assert env["result"] == 42
+
+    def test_dict_data_unwrapped(self):
+        """{ok:true, data:{...}} unwraps to result={...} (no inner ok leak)."""
+        resp = {"result": '{"ok": true, "data": {"width": 800}, "operation": "test"}'}
+        env = self._parse(format_envelope(resp))
+        assert env["ok"] is True
+        assert env["result"] == {"width": 800}
+
+    def test_error_surfaces_line_and_operation(self):
+        """Structured error line/operation surfaces in external envelope."""
+        resp = {"result": '{"ok":false,"error":{"message":"bad","line":7,"operation":"draw"}}'}
+        env = self._parse(format_envelope(resp))
+        assert env["ok"] is False
+        assert env["error"]["line"] == 7
+        assert env["error"]["operation"] == "draw"
+
+    def test_warnings_always_present(self):
+        """warnings is always a list, never omitted."""
+        env = self._parse(format_envelope({"result": '{"ok":true,"data":"x"}'}))
+        assert "warnings" in env
+        assert isinstance(env["warnings"], list)
+
+
+class TestBridgeShapePostPhase2:
+    """Verify format_envelope handles Phase 2 host.jsx response shapes."""
+
+    def _parse(self, result: str) -> dict:
+        return json.loads(result)
+
+    def test_passthrough_not_double_wrapped(self):
+        """wrap_script JSON arrives as {"result": {ok:true, data:...}} after CEP parse."""
+        # CEP panel does JSON.parse on host.jsx output, then sends parsedResult
+        # as result (since parsedResult.result is undefined for new shape)
+        resp = {"result": {"ok": True, "data": {"x": 1}, "operation": "test"}}
+        env = self._parse(format_envelope(resp))
+        assert env["ok"] is True
+        assert env["result"] == {"x": 1}
+
+    def test_bare_value_wrapped_by_host(self):
+        """Bare return wrapped by host.jsx: {ok:true, data:42}."""
+        resp = {"result": {"ok": True, "data": 42}}
+        env = self._parse(format_envelope(resp))
+        assert env["ok"] is True
+        assert env["result"] == 42
+
+    def test_host_error_structured_top_level(self):
+        """host.jsx catch: top-level error is a dict {message, line, name}."""
+        resp = {"error": {"message": "ReferenceError: foo", "line": 5, "name": "ReferenceError"}}
+        env = self._parse(format_envelope(resp))
+        assert env["ok"] is False
+        assert "ReferenceError" in env["error"]["message"]
+        assert env["error"]["line"] == 5
+
+    def test_host_error_via_result_path(self):
+        """host.jsx catch also arrives as result (CEP panel fallback)."""
+        resp = {"result": {"ok": False, "error": {"message": "bad", "line": 7}}}
+        env = self._parse(format_envelope(resp))
+        assert env["ok"] is False
+        assert env["error"]["line"] == 7

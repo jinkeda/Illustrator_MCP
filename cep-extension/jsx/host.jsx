@@ -11,7 +11,7 @@ if (typeof JSON === 'undefined') {
         stringify: function (obj) {
             var t = typeof obj;
             if (t !== 'object' || obj === null) {
-                if (t === 'string') return '"' + obj.replace(/"/g, '\\"').replace(/\n/g, '\\n').replace(/\r/g, '\\r') + '"';
+                if (t === 'string') return '"' + obj.replace(/\\/g, '\\\\').replace(/"/g, '\\"').replace(/\n/g, '\\n').replace(/\r/g, '\\r').replace(/\t/g, '\\t') + '"';
                 if (t === 'number' || t === 'boolean') return String(obj);
                 if (obj === null) return 'null';
                 return undefined;
@@ -22,7 +22,7 @@ if (typeof JSON === 'undefined') {
                 v = obj[n];
                 t = typeof v;
                 if (t === 'undefined' || t === 'function') continue;
-                if (t === 'string') v = '"' + v.replace(/"/g, '\\"').replace(/\n/g, '\\n').replace(/\r/g, '\\r') + '"';
+                if (t === 'string') v = '"' + v.replace(/\\/g, '\\\\').replace(/"/g, '\\"').replace(/\n/g, '\\n').replace(/\r/g, '\\r').replace(/\t/g, '\\t') + '"';
                 else if (t === 'object' && v !== null) v = JSON.stringify(v);
                 else if (t === 'number' || t === 'boolean') v = String(v);
                 else if (v === null) v = 'null';
@@ -100,23 +100,37 @@ function executeScript(scriptStr) {
         // Execute the script
         var result = eval(safeScript);
 
-        // Convert result to JSON-safe format
-        if (result === undefined) {
-            return JSON.stringify({ success: true, result: null });
+        // Contract-validated passthrough: if the script already returned
+        // a JSON string matching the internal envelope contract, pass it
+        // through directly. This eliminates double-serialization for
+        // wrap_script() results and SOC batch reports.
+        if (typeof result === 'string') {
+            try {
+                var parsed = JSON.parse(result);
+                if (typeof parsed === 'object' && parsed !== null) {
+                    var isEnvelope =
+                        (parsed.ok === true && 'data' in parsed) ||
+                        (parsed.ok === false && 'error' in parsed);
+                    if (isEnvelope) return result;
+                }
+            } catch (pe) { /* not JSON, fall through */ }
         }
+
+        // Bare return value — wrap in standard envelope
+        if (result === undefined) result = null;
 
         // Handle Illustrator objects by converting to plain objects
         if (typeof result === 'object' && result !== null) {
             result = convertToPlainObject(result);
         }
 
-        return JSON.stringify({ success: true, result: result });
+        return JSON.stringify({ ok: true, data: result });
 
     } catch (e) {
+        // Matches required internal fields; name is extra (useful signal)
         return JSON.stringify({
-            success: false,
-            error: e.message,
-            line: e.line
+            ok: false,
+            error: { message: e.message, line: e.line || null, name: e.name || null }
         });
     }
 }
@@ -269,9 +283,12 @@ function getDocumentInfo() {
  */
 function testConnection() {
     return JSON.stringify({
-        success: true,
-        app: app.name,
-        version: app.version,
-        documentsOpen: app.documents.length
+        ok: true,
+        data: {
+            app: app.name,
+            version: app.version,
+            documentsOpen: app.documents.length
+        },
+        operation: "test_connection"
     });
 }

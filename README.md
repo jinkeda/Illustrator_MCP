@@ -51,6 +51,18 @@ MCP Server Process
 
 Both threads coordinate via `run_in_executor()` / `run_coroutine_threadsafe()`. No separate proxy or Node.js process is required.
 
+### Two-Contract Data Model
+
+All data between layers follows two strict envelope contracts:
+
+| Contract | Direction | Success Shape | Error Shape |
+|---|---|---|---|
+| **Internal** | JSX → Python | `{ok: true, data: {...}, operation: "..."}` | `{ok: false, error: {message, line, operation}}` |
+| **External** | Python → Client | `{ok: true, result: {...}, diagnostics: {...}}` | `{ok: false, error: {code, message, suggestions}}` |
+
+- **Internal:** Every ExtendScript template and `wrap_script()` emits the internal envelope. `host.jsx` validates and passes through compliant JSON; bare values are auto-wrapped.
+- **External:** `format_envelope()` strips the internal wrapper and surfaces pure domain data in `result`. Structured error codes, line numbers, and recovery suggestions are always present.
+
 ---
 
 ## Prerequisites
@@ -599,7 +611,8 @@ Illustrator_MCP/
 │   ├── libraries.py              # Library resolver + manifest-driven injection
 │   ├── protocol.py               # Task Protocol v2.3 Pydantic models
 │   ├── errors.py                 # Structured error codes + suggestions
-│   ├── templates.py              # Reusable ExtendScript templates
+│   ├── templates.py              # Reusable ExtendScript templates ({ok, data} envelope)
+│   ├── response_classification.py # Response classifier (error metadata extraction)
 │   ├── response_models.py        # Pydantic models for responses
 │   ├── vlm_grounding.py          # VLM QA pipeline: hybrid grounding, hypothesis verifier, DOM diffing
 │   ├── svgd.py                   # SVG path data parser (d attribute → geometry IR, arc→cubic)
@@ -647,7 +660,7 @@ Illustrator_MCP/
 │   │   ├── components/MCPControlPanel.tsx
 │   │   └── hooks/useMCP.ts       # WebSocket connection hook
 │   └── vite.config.ts
-├── tests/                        # Unit tests (pytest, 1230+ tests)
+├── tests/                        # Unit tests (pytest, 1255+ tests)
 │   ├── conftest.py               # Shared fixtures + collection-error guard
 │   ├── test_execute.py
 │   ├── test_documents.py
@@ -712,7 +725,7 @@ python -m scripts.gen_schemas
 2. **Thick Scripts, Thin Server** -- Move complexity into ExtendScript, not Python. Fewer round-trips, atomic operations, and Illustrator-native calculations.
 3. **Library Injection** -- Reusable `.jsx` libraries with manifest-driven transitive dependency resolution and symbol collision detection.
 4. **Context Before Creation** -- AI inspects document state (`get_document`, `query_items`) before writing modification scripts.
-5. **Standardized Envelope** -- All tools return `{ok, warnings, error, diagnostics, result}` for consistent downstream handling.
+5. **Two-Contract Envelope** -- Internal contract (`{ok, data, operation}`) flows from ExtendScript to Python. External contract (`{ok, result, error, diagnostics, warnings}`) flows from Python to the MCP client. `format_envelope()` bridges the two, stripping internal wrappers and surfacing pure domain data.
 6. **Fail Fast with Structured Errors** -- Typed error codes (V/R/S/C categories) with actionable recovery suggestions.
 7. **Auto-Grounding** -- SOC task results always include an annotated artboard preview, forcing the AI to see the visual state before its next action. No opt-in required.
 8. **VLM QA Cadence** -- Every 5th `execute_script` call auto-injects an annotated preview. Combined with `final_step=True`, the AI is periodically forced to visually verify and catch defects.

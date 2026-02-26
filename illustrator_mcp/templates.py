@@ -39,16 +39,19 @@ CREATE_DOCUMENT = Template("""
         ab.artboardRect = [0, 0, w, -h];
 
         return JSON.stringify({
-            success: true,
-            name: doc.name,
-            width: doc.width,
-            height: doc.height,
-            artboardRect: ab.artboardRect
+            ok: true,
+            data: {
+                name: doc.name,
+                width: doc.width,
+                height: doc.height,
+                artboardRect: ab.artboardRect
+            },
+            operation: "create_document"
         });
     } catch (e) {
         return JSON.stringify({
-            success: false,
-            error: e.message || String(e)
+            ok: false,
+            error: { message: e.message || String(e), line: e.line || null, operation: "create_document" }
         });
     }
 })()
@@ -61,16 +64,20 @@ OPEN_DOCUMENT = Template("""
         var file = new File("${path}");
         if (!file.exists) {
             return JSON.stringify({
-                success: false,
-                error: "File not found: ${path}"
+                ok: false,
+                error: { message: "File not found: ${path}", line: null, operation: "open_document" }
             });
         }
         var doc = app.open(file);
-        return JSON.stringify({success: true, name: doc.name, path: "${path}"});
+        return JSON.stringify({
+            ok: true,
+            data: { name: doc.name, path: "${path}" },
+            operation: "open_document"
+        });
     } catch (e) {
         return JSON.stringify({
-            success: false,
-            error: e.message || String(e)
+            ok: false,
+            error: { message: e.message || String(e), line: e.line || null, operation: "open_document" }
         });
     }
 })()
@@ -83,9 +90,9 @@ SAVE_DOCUMENT = Template("""
         var doc = app.activeDocument;
         var file = new File("${path}");
         doc.saveAs(file);
-        return JSON.stringify({success: true, path: "${path}"});
+        return JSON.stringify({ ok: true, data: { path: "${path}" }, operation: "save_document" });
     } catch (e) {
-        return JSON.stringify({success: false, error: e.message || String(e)});
+        return JSON.stringify({ ok: false, error: { message: e.message || String(e), line: e.line || null, operation: "save_document" } });
     }
 })()
 """)
@@ -96,9 +103,9 @@ SAVE_DOCUMENT_SIMPLE = """
     try {
         var doc = app.activeDocument;
         doc.save();
-        return JSON.stringify({success: true, message: "Document saved"});
+        return JSON.stringify({ ok: true, data: { message: "Document saved" }, operation: "save_document" });
     } catch (e) {
-        return JSON.stringify({success: false, error: e.message || String(e)});
+        return JSON.stringify({ ok: false, error: { message: e.message || String(e), line: e.line || null, operation: "save_document" } });
     }
 })()
 """
@@ -108,7 +115,7 @@ CLOSE_DOCUMENT = Template("""
 (function() {
     var doc = app.activeDocument;
     doc.close(${save_option});
-    return JSON.stringify({success: true, message: "Document closed"});
+    return JSON.stringify({ ok: true, data: { message: "Document closed" }, operation: "close_document" });
 })()
 """)
 
@@ -121,7 +128,7 @@ EXPORT_FILE = Template("""
     var file = new File("${path}");
     var opts = new ${options_class}();${scale_opts}
     doc.exportFile(file, ${export_type}, opts);
-    return JSON.stringify({success: true, path: "${path}", format: "${format_name}"});
+    return JSON.stringify({ ok: true, data: { path: "${path}", format: "${format_name}" }, operation: "export_file" });
 })()
 """)
 
@@ -135,11 +142,14 @@ EXPORT_PDF = Template("""
     var abIdx = doc.artboards.getActiveArtboardIndex();
     var abRect = doc.artboards[abIdx].artboardRect;
     return JSON.stringify({
-        success: true,
-        path: "${path}",
-        format: "PDF",
-        width_pt: abRect[2] - abRect[0],
-        height_pt: Math.abs(abRect[3] - abRect[1])
+        ok: true,
+        data: {
+            path: "${path}",
+            format: "PDF",
+            width_pt: abRect[2] - abRect[0],
+            height_pt: Math.abs(abRect[3] - abRect[1])
+        },
+        operation: "export_pdf"
     });
 })()
 """)
@@ -388,12 +398,15 @@ PLACE_ITEM = Template("""
     ${embed_line}
     ${marker_line}
     return JSON.stringify({
-        success: true,
-        path: "${path}",
-        linked: ${linked},
-        position: {x: ${x}, y: ${y}},
-        width: placed.width,
-        height: placed.height
+        ok: true,
+        data: {
+            path: "${path}",
+            linked: ${linked},
+            position: {x: ${x}, y: ${y}},
+            width: placed.width,
+            height: placed.height
+        },
+        operation: "place_item"
     });
 })()
 """)  
@@ -459,7 +472,6 @@ TRACE_PLACED_IMAGE = Template("""
     }
 
     var result = {
-        success: true,
         trace_marker: marker,
         target_typename: tn,
         preset: presetName || "(default)",
@@ -514,7 +526,7 @@ TRACE_PLACED_IMAGE = Template("""
     }
 
     doc.selection = null;
-    return JSON.stringify(result);
+    return JSON.stringify({ ok: true, data: result, operation: "trace_placed_image" });
 })()
 """)
 
@@ -525,9 +537,9 @@ UNDO = """
 (function() {
     try {
         app.undo();
-        return JSON.stringify({success: true, message: "Undo successful"});
+        return JSON.stringify({ ok: true, data: { message: "Undo successful" }, operation: "undo" });
     } catch (e) {
-        return JSON.stringify({success: false, message: "Nothing to undo"});
+        return JSON.stringify({ ok: false, error: { message: "Nothing to undo", line: null, operation: "undo" } });
     }
 })()
 """
@@ -537,9 +549,9 @@ REDO = """
 (function() {
     try {
         app.redo();
-        return JSON.stringify({success: true, message: "Redo successful"});
+        return JSON.stringify({ ok: true, data: { message: "Redo successful" }, operation: "redo" });
     } catch (e) {
-        return JSON.stringify({success: false, message: "Nothing to redo"});
+        return JSON.stringify({ ok: false, error: { message: "Nothing to redo", line: null, operation: "redo" } });
     }
 })()
 """
@@ -563,10 +575,13 @@ HISTORY_MULTI = Template("""
     }
     
     return JSON.stringify({
-        success: succeeded > 0,
-        message: action + " " + succeeded + "/" + count + " actions",
-        succeeded: succeeded,
-        failed: failed
+        ok: succeeded > 0,
+        data: {
+            message: action + " " + succeeded + "/" + count + " actions",
+            succeeded: succeeded,
+            failed: failed
+        },
+        operation: "history_multi"
     });
 })()
 """)
@@ -584,7 +599,7 @@ EMBED_PLACED_ITEMS = """
             embedded++;
         } catch(e) {}
     }
-    return JSON.stringify({success: true, embeddedCount: embedded});
+    return JSON.stringify({ ok: true, data: { embeddedCount: embedded }, operation: "embed_placed_items" });
 })()
 """
 
@@ -602,8 +617,244 @@ UPDATE_LINKED_ITEMS = """
             }
         } catch(e) {}
     }
-    return JSON.stringify({success: true, updatedCount: updated});
+    return JSON.stringify({ ok: true, data: { updatedCount: updated }, operation: "update_linked_items" });
 })()
 """
 
 
+# ==================== Place/Embed (Editable) ====================
+
+# Open/copy/paste workflow for embedding editable content (PDFs)
+EMBED_EDITABLE = Template("""
+(function() {
+    var targetDoc = app.activeDocument;
+    var targetDocName = targetDoc.name;
+
+    try {
+        // Open PDF as new document
+        var pdfFile = new File("${path}");
+        var pdfDoc = app.open(pdfFile);
+
+        // Select all and copy
+        pdfDoc.selectObjectsOnActiveArtboard();
+        app.executeMenuCommand('copy');
+
+        // Close PDF without saving
+        pdfDoc.close(SaveOptions.DONOTSAVECHANGES);
+
+        // Find and activate target document
+        for (var d = 0; d < app.documents.length; d++) {
+            if (app.documents[d].name === targetDocName) {
+                app.activeDocument = app.documents[d];
+                targetDoc = app.documents[d];
+                break;
+            }
+        }
+
+        // Paste
+        app.executeMenuCommand('paste');
+
+        // Get pasted selection and group
+        var sel = targetDoc.selection;
+        if (sel && sel.length > 0) {
+            var group;
+            if (sel.length > 1) {
+                app.executeMenuCommand('group');
+                group = targetDoc.selection[0];
+            } else {
+                group = sel[0];
+            }
+
+            // Position
+            group.position = [${x}, ${neg_y}];
+
+            var bounds = group.geometricBounds;
+            targetDoc.selection = null;
+
+            return JSON.stringify({
+                ok: true,
+                data: {
+                    type: "editable",
+                    position: [${x}, ${y}],
+                    width: bounds[2] - bounds[0],
+                    height: bounds[1] - bounds[3]
+                },
+                operation: "embed_editable"
+            });
+        }
+        throw new Error("No content pasted");
+    } catch(e) {
+        return JSON.stringify({ ok: false, error: { message: e.message, line: e.line || null, operation: "embed_editable" } });
+    }
+})();
+""")
+
+
+# ==================== Export (Standard formats: PNG/JPG/SVG) ====================
+
+EXPORT_STANDARD = Template("""
+(function() {
+    var doc = app.activeDocument;
+    var abIdx = ${ab_index_js};
+    doc.artboards.setActiveArtboardIndex(abIdx);
+
+    var opts = new ${options_class}();${scale_opts}
+    ${clip_opt}
+
+    var file = new File("${path}");
+    doc.exportFile(file, ${export_type}, opts);
+
+    var abRect = doc.artboards[abIdx].artboardRect;
+    var exportWidth = Math.round((abRect[2] - abRect[0]) * ${scale} / 100);
+    var exportHeight = Math.round(Math.abs(abRect[3] - abRect[1]) * ${scale} / 100);
+
+    return JSON.stringify({
+        ok: true,
+        data: {
+            path: file.fsName,
+            format: "${fmt_name}",
+            artboard_index: abIdx,
+            artboard_clipping: ${artboard_clip},
+            width: exportWidth,
+            height: exportHeight
+        },
+        operation: "export_standard"
+    });
+})();
+""")
+
+
+# ==================== Checkpoint Actions ====================
+
+# Generic template for checkpoint save/restore/list/delete.
+# name_arg is empty for 'list', otherwise: '"escapedName", '
+CHECKPOINT_ACTION = Template("""
+(function() {
+    var doc = app.activeDocument;
+    return JSON.stringify(${jsx_fn}(${name_arg}doc));
+})();
+""")
+
+
+# ==================== Reference Overlay ====================
+
+# Uses %s format (not Template) for JSON payload injection.
+SET_REFERENCE = """
+(function(payload) {
+    var doc = app.activeDocument;
+    var layerName = payload.layer_name;
+    var originalActiveName = doc.activeLayer.name;
+
+    // 1. Pre-flight file check
+    var imgFile = null;
+    if (payload.file_path) {
+        imgFile = new File(payload.file_path);
+        if (!imgFile.exists) {
+            return JSON.stringify({
+                ok: false, status: "error",
+                message: "File not found: " + payload.file_path
+            });
+        }
+    }
+
+    // 2. Idempotent cleanup (unlock before delete, 0-layer guard)
+    try {
+        var existing = doc.layers.getByName(layerName);
+        existing.locked = false;
+        existing.visible = true;
+        if (doc.layers.length === 1) {
+            doc.layers.add().name = "Drawing Layer";
+        }
+        existing.remove();
+    } catch(e) {}
+
+    // 3. Clear-only mode
+    if (!payload.file_path) {
+        if (doc.layers.length > 0) doc.activeLayer = doc.layers[0];
+        return JSON.stringify({
+            ok: true, data: { status: "cleared", layer_name: layerName }, operation: "set_reference"
+        });
+    }
+
+    // 4. Create layer, send to bottom
+    var refLayer = doc.layers.add();
+    refLayer.name = layerName;
+    if (doc.layers.length > 1) {
+        refLayer.move(doc.layers[doc.layers.length - 1], ElementPlacement.PLACEAFTER);
+    }
+    refLayer.printable = false;
+
+    // 5. Place image, opacity on ITEM (not layer)
+    var pItem = refLayer.placedItems.add();
+    pItem.file = imgFile;
+
+    // 6. Redraw to materialize bounds
+    app.redraw();
+
+    pItem.opacity = payload.opacity;
+
+    // 7. Proportional fit + center on active artboard
+    var abRect = doc.artboards[doc.artboards.getActiveArtboardIndex()].artboardRect;
+    var abW = Math.abs(abRect[2] - abRect[0]);
+    var abH = Math.abs(abRect[3] - abRect[1]);
+
+    if (payload.fit && pItem.width > 0 && pItem.height > 0) {
+        var scale = Math.min(abW / pItem.width, abH / pItem.height) * 100;
+        pItem.resize(scale, scale);
+    }
+    pItem.position = [
+        abRect[0] + (abW - pItem.width) / 2,
+        abRect[1] - (abH - pItem.height) / 2
+    ];
+
+    // 8. Lock layer
+    refLayer.locked = true;
+
+    // 9. Restore active layer by NAME (avoids stale object refs)
+    var safeLayerFound = false;
+    for (var i = 0; i < doc.layers.length; i++) {
+        var L = doc.layers[i];
+        if (L.name === originalActiveName && L.name !== layerName
+            && !L.locked && L.visible) {
+            doc.activeLayer = L;
+            safeLayerFound = true;
+            break;
+        }
+    }
+    if (!safeLayerFound) {
+        for (var i = 0; i < doc.layers.length; i++) {
+            var L = doc.layers[i];
+            if (L.name !== layerName && !L.locked && L.visible) {
+                doc.activeLayer = L;
+                safeLayerFound = true;
+                break;
+            }
+        }
+    }
+    if (!safeLayerFound) {
+        var drawLayer = doc.layers.add();
+        drawLayer.name = "Drawing Layer";
+        doc.activeLayer = drawLayer;
+    }
+
+    return JSON.stringify({
+        ok: true, data: {
+            status: "set", layer_name: layerName,
+            opacity: payload.opacity,
+            artboard: { width: abW, height: abH },
+            image_bounds: {
+                left: pItem.left, top: pItem.top,
+                width: pItem.width, height: pItem.height,
+                center_x: pItem.left + pItem.width / 2,
+                center_y: pItem.top - pItem.height / 2
+            },
+            spatial_context: {
+                artboard: "X: 0 to " + Math.round(abW) + ", Y: 0 to " + Math.round(abH),
+                reference_bounds: "X: " + Math.round(pItem.left - abRect[0]) + ", Y: " + Math.round(abRect[1] - pItem.top) + ", Width: " + Math.round(pItem.width) + ", Height: " + Math.round(pItem.height),
+                instruction: "Use Y-down user coordinates (origin at artboard top-left). Keep all generated path coordinates within the artboard bounds."
+            }
+        },
+        operation: "set_reference"
+    });
+})(%s);
+"""

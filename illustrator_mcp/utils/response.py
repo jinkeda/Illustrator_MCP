@@ -35,18 +35,31 @@ def unwrap_result(result: Any, _depth: int = 0) -> Any:
     if not isinstance(result, dict):
         return result
 
-    # Error takes priority: stop unwrapping if this level has an error
-    if result.get("error"):
+    # Error takes priority: key presence, not truthiness (catches "" and {})
+    if "error" in result:
         return result
     # Handle {success: false} without 'error' key (edge case, rare)
     if result.get("success") is False:
         return result
+    # Handle {ok: false} without 'error' key
+    if result.get("ok") is False:
+        return result
 
-    # Unwrap success envelope
+    # Unwrap legacy success envelope {success: true, result: …}
     if result.get("success") and "result" in result:
         inner = result["result"]
         # Parse if string, then recurse
         parsed = try_parse_json(inner) if isinstance(inner, str) else inner
         return unwrap_result(parsed, _depth + 1)
+
+    # Unwrap standard {ok: true, data: …} envelope (wrap_script / SOC)
+    if result.get("ok") is True and "data" in result:
+        inner = result["data"]
+        parsed = try_parse_json(inner) if isinstance(inner, str) else inner
+        return unwrap_result(parsed, _depth + 1)
+
+    # Alias: {ok: true, value: …} (SOC resolveProperty)
+    if result.get("ok") is True and "value" in result and "data" not in result:
+        return result["value"]
 
     return result

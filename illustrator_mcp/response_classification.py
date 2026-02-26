@@ -41,6 +41,8 @@ class ResponseClassification:
     error_message: Optional[str] = None
     error_code: Optional[str] = None
     is_connection_error: bool = False
+    error_line: Optional[int] = None
+    error_operation: Optional[str] = None
     raw: Any = None
 
 
@@ -112,15 +114,27 @@ def classify_response(
     if options.unwrap_success_envelope:
         result = unwrap_result(result)
 
-    # 3. Error key in unwrapped dict
+    # 3. Error key in unwrapped dict (key presence, not truthiness)
     if isinstance(result, dict):
-        if result.get("error"):
-            error_msg = str(result["error"])
+        if "error" in result:
+            error_val = result["error"]
+            if isinstance(error_val, dict):
+                # wrap_script shape: {error: {message, line, operation}}
+                error_msg = error_val.get("message", str(error_val))
+                error_line = error_val.get("line")
+                error_op = error_val.get("operation")
+            else:
+                # Legacy string error — line/operation may be siblings
+                error_msg = str(error_val)
+                error_line = result.get("line")
+                error_op = result.get("operation")
             code_obj = classify_error(error_msg)
             return ResponseClassification(
                 ok=False,
                 error_message=error_msg,
                 error_code=code_obj.value if code_obj else "E999",
+                error_line=error_line,
+                error_operation=error_op,
                 raw=raw,
             )
         # 4. success: False envelope
