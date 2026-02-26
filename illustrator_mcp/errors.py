@@ -33,21 +33,35 @@ class ErrorCode(str, Enum):
     """
     Unified error codes for all Illustrator MCP operations.
 
-    Naming convention:
-    - C_xxx: Connection/transport errors
-    - V_xxx: Validation errors (fail before execution)
-    - R_xxx: Runtime errors (fail during execution)
-    - S_xxx: Script/system errors (ExtendScript engine + host environment)
+    **Single source of truth** — contracts.py imports from here;
+    contracts.jsx is generated from this enum.
 
-    Imported by protocol.py — do not define a second enum elsewhere.
+    Naming / padding conventions:
+    - C_xxx  (3-digit): Connection/transport errors
+    - V_xxx  (3-digit): Validation errors (fail before execution)
+    - R_xxx  (3-digit): Runtime errors (fail during execution)
+    - S_xxx  (3-digit): Script/system errors (ExtendScript engine + host)
+    - E_xxx  (3-digit): Execution infrastructure errors
+    - G_xxx  (3-digit): Guard / conditional op errors
+    - SP_xxx (3-digit): Spatial target errors
+
+    Codes are append-only and immutable — never reuse a retired value.
     """
-    # === CONNECTION / TRANSPORT (C) ===
+    # === CONNECTION / TRANSPORT (C001–C004) ===
     # Covers all communication-layer failures.
     # C_DISCONNECTED covers: not connected, connection dropped, network reset.
     C_DISCONNECTED = "C001"
     C_TIMEOUT = "C002"           # Transport-layer timeout (send/receive)
     C_BRIDGE_ERROR = "C003"      # Internal bridge error
-    C_PROTOCOL = "C004"          # Malformed response (missing keys, invalid JSON)
+    C_PROTOCOL = "C004"          # Valid JSON but violates envelope/contract shape
+    C_JSON_PARSE = "C005"        # Payload is not valid JSON / parse failure
+
+    # === CONNECTION / COMPOUND OPS (C006–C009) ===
+    # SOC compound operation errors (renumbered from legacy C001–C004).
+    C_NESTING_NOT_ALLOWED = "C006"
+    C_PREV_UNAVAILABLE = "C007"
+    C_INVALID_TOKEN_POSITION = "C008"
+    C_UNKNOWN_TOKEN = "C009"
 
     # === VALIDATION (V) — fail before execution ===
     V_NO_DOCUMENT = "V001"
@@ -60,6 +74,7 @@ class ErrorCode(str, Enum):
     V_SCHEMA_MISMATCH = "V008"
     V_LIBRARY_NOT_FOUND = "V009"
     V_LIBRARY_CONFLICT = "V010"
+    V_INVALID_PARAM_VALUE = "V011"  # Parameter value out of range / invalid
 
     # === RUNTIME (R) — fail during execution ===
     R_COLLECT_FAILED = "R001"
@@ -73,6 +88,11 @@ class ErrorCode(str, Enum):
     R_UNKNOWN = "R009"           # Catch-all for unexpected runtime errors
     R_INJECTION_FAILED = "R010"  # Library injection failed (catch-all)
     R_BUSY = "R011"              # Panel busy — previous script still executing
+    R_QUERY_FAILED = "R012"      # Query tool execution failed
+    R_PREFLIGHT_FAILED = "R013"  # Preflight check execution failed
+
+    # === EXECUTION INFRASTRUCTURE (E) ===
+    E_EXECUTION = "E001"         # Generic execution infrastructure error
 
     # === SCRIPT / SYSTEM (S) ===
     # Covers both ExtendScript engine failures (syntax, reference, type errors)
@@ -88,6 +108,36 @@ class ErrorCode(str, Enum):
     S_PERMISSION_DENIED = "S009"
     S_LIBRARY_IO = "S010"        # Library file I/O failure
     S_MANIFEST_ERROR = "S011"    # Manifest parse/load failure
+
+    # === GUARD (G) — conditional op guard errors ===
+    G_UNKNOWN_PROPERTY = "G001"
+    G_INVALID_COMPARATOR = "G002"
+    G_MALFORMED = "G003"
+
+    # === SPATIAL (SP) — spatial target errors ===
+    SP_MISSING_PREDICATE = "SP001"
+    SP_INVALID_RECT = "SP002"
+    SP_REF_NOT_FOUND = "SP003"
+
+    # === SVG IMPORT (SVG) — svgd.py safety-limit violations ===
+    SVG_D_TOO_LONG = "SVG001"         # d attribute exceeds MAX_D_LENGTH
+    SVG_TOO_MANY_SEGMENTS = "SVG002"  # Total segments exceed MAX_SEGMENTS
+    SVG_TOO_MANY_SUBPATHS = "SVG003" # Subpath count exceeds MAX_SUBPATHS
+    SVG_COORD_OVERFLOW = "SVG004"     # Coordinate exceeds ±MAX_COORD_ABS
+    SVG_TOO_MANY_TOKENS = "SVG005"   # Tokenizer output exceeds MAX_TOKENS
+
+
+# =============================================================================
+# LEGACY CODE MAP — ad-hoc string identifiers → canonical codes
+# =============================================================================
+
+LEGACY_CODE_MAP: Dict[str, str] = {
+    "QUERY_ERROR": ErrorCode.R_QUERY_FAILED.value,
+    "JSON_PARSE_ERROR": ErrorCode.C_JSON_PARSE.value,
+    "PREFLIGHT_ERROR": ErrorCode.R_PREFLIGHT_FAILED.value,
+    "LIB_NOT_LOADED": ErrorCode.E_EXECUTION.value,
+    "MCP_LIBS_NOT_READY": ErrorCode.E_EXECUTION.value,
+}
 
 
 # =============================================================================
@@ -286,6 +336,96 @@ ERROR_SUGGESTIONS: Dict[str, Dict[str, Any]] = {
     },
 }
 
+# --- New codes from SOC / query centralization ---
+ERROR_SUGGESTIONS.update({
+    ErrorCode.V_INVALID_PARAM_VALUE.value: {
+        "message": "Invalid parameter value",
+        "recoverable": True,
+        "suggestions": [
+            "Check that parameter values are within expected ranges",
+            "Verify enum parameters use allowed values",
+        ],
+    },
+    ErrorCode.C_JSON_PARSE.value: {
+        "message": "JSON parse failure",
+        "recoverable": False,
+        "suggestions": [
+            "The response payload is not valid JSON",
+            "Check CEP panel logs for malformed output",
+        ],
+    },
+    ErrorCode.C_NESTING_NOT_ALLOWED.value: {
+        "message": "Compound op nesting not allowed",
+        "recoverable": False,
+        "suggestions": ["Flatten nested compound operations into a single batch"],
+    },
+    ErrorCode.E_EXECUTION.value: {
+        "message": "Execution infrastructure error",
+        "recoverable": True,
+        "suggestions": [
+            "The execution environment encountered an error",
+            "Retry the operation or check server logs",
+        ],
+    },
+    ErrorCode.R_QUERY_FAILED.value: {
+        "message": "Query execution failed",
+        "recoverable": True,
+        "suggestions": [
+            "Check query target selectors and parameters",
+            "Verify the document is open and accessible",
+        ],
+    },
+    ErrorCode.R_PREFLIGHT_FAILED.value: {
+        "message": "Preflight check failed",
+        "recoverable": True,
+        "suggestions": [
+            "An error occurred during preflight validation",
+            "Check server logs for details",
+        ],
+    },
+    # SVG import safety limits
+    ErrorCode.SVG_D_TOO_LONG.value: {
+        "message": "SVG path data too long",
+        "recoverable": False,
+        "suggestions": [
+            "Simplify the SVG path or split into multiple import calls",
+            f"Maximum d attribute length is 50,000 characters",
+        ],
+    },
+    ErrorCode.SVG_TOO_MANY_SEGMENTS.value: {
+        "message": "SVG path has too many segments",
+        "recoverable": False,
+        "suggestions": [
+            "Simplify the path geometry or split into multiple paths",
+            f"Maximum segment count is 5,000",
+        ],
+    },
+    ErrorCode.SVG_TOO_MANY_SUBPATHS.value: {
+        "message": "SVG path has too many subpaths",
+        "recoverable": False,
+        "suggestions": [
+            "Split the SVG into multiple import calls",
+            f"Maximum subpath count is 100",
+        ],
+    },
+    ErrorCode.SVG_COORD_OVERFLOW.value: {
+        "message": "SVG coordinate out of range",
+        "recoverable": False,
+        "suggestions": [
+            "Scale down coordinates to within ±100,000",
+            "Check for malformed path data with extreme values",
+        ],
+    },
+    ErrorCode.SVG_TOO_MANY_TOKENS.value: {
+        "message": "SVG path data too complex",
+        "recoverable": False,
+        "suggestions": [
+            "Simplify the SVG path data",
+            f"Maximum token count is 50,000",
+        ],
+    },
+})
+
 
 # =============================================================================
 # STRUCTURED ERROR RESPONSE
@@ -361,11 +501,13 @@ ERROR_PATTERNS = [
     (r"\[R008\]|No such element|Element not found|item not found", ErrorCode.R_ELEMENT_NOT_FOUND),
     (r"\[R009\]|Unexpected error", ErrorCode.R_UNKNOWN),
 
-    # Script errors
+    # Script errors — includes ExtendScript-native messages (no class prefix)
     (r"\[S005\]|SyntaxError|syntax error|Unexpected token", ErrorCode.S_SYNTAX_ERROR),
     (r"\[S006\]|ReferenceError|is not defined|is undefined", ErrorCode.S_REFERENCE_ERROR),
-    (r"\[S007\]|TypeError|is not a function|cannot read property", ErrorCode.S_TYPE_ERROR),
-    (r"RangeError|Invalid array length|out of range", ErrorCode.S_RANGE_ERROR),
+    (r"\[S007\]|TypeError|is not a function|cannot read property|is not an object", ErrorCode.S_TYPE_ERROR),
+    (r"RangeError|Invalid array length|out of range|stack overflow", ErrorCode.S_RANGE_ERROR),
+    # ExtendScript bare syntax errors (no "SyntaxError:" prefix)
+    (r"\bexpected\b|unterminated string", ErrorCode.S_SYNTAX_ERROR),
 
     # Library errors
     (r"\[V009\]|Library not found|library.*not found|Unknown library", ErrorCode.V_LIBRARY_NOT_FOUND),
@@ -373,6 +515,13 @@ ERROR_PATTERNS = [
     (r"\[S010\]|Library file.*I/O|library.*io error", ErrorCode.S_LIBRARY_IO),
     (r"\[S011\]|Manifest.*error|manifest.*parse", ErrorCode.S_MANIFEST_ERROR),
     (r"\[R010\]|injection failed", ErrorCode.R_INJECTION_FAILED),
+
+    # SVG import safety limits
+    (r"\[SVG001\]|E_D_TOO_LONG", ErrorCode.SVG_D_TOO_LONG),
+    (r"\[SVG002\]|E_TOO_MANY_SEGMENTS", ErrorCode.SVG_TOO_MANY_SEGMENTS),
+    (r"\[SVG003\]|E_TOO_MANY_SUBPATHS", ErrorCode.SVG_TOO_MANY_SUBPATHS),
+    (r"\[SVG004\]|E_COORD_OVERFLOW", ErrorCode.SVG_COORD_OVERFLOW),
+    (r"\[SVG005\]|E_TOO_MANY_TOKENS", ErrorCode.SVG_TOO_MANY_TOKENS),
 ]
 
 
@@ -498,3 +647,101 @@ def get_suggestions(error_message: str) -> List[str]:
     if code and code.value in ERROR_SUGGESTIONS:
         return ERROR_SUGGESTIONS[code.value].get("suggestions", [])
     return []
+
+
+# =============================================================================
+# ENVELOPE BUILDER (pre-classified data → canonical JSON envelope)
+# =============================================================================
+
+
+def make_envelope(
+    *,
+    ok: bool,
+    result: Any = None,
+    error: Any = None,
+    error_code: Optional[str] = None,
+    warnings: Optional[List[str]] = None,
+    diagnostics: Optional[Dict[str, Any]] = None,
+) -> str:
+    """Build a standardized envelope JSON string from pre-classified data.
+
+    Unlike ``format_envelope`` in :mod:`proxy_client`, this does NOT run
+    ``classify_response``.  Use it when the tool already knows whether
+    the operation succeeded or failed (e.g., Python-side import guards,
+    validation errors, computed results).
+
+    Error normalisation
+    ~~~~~~~~~~~~~~~~~~~
+    * ``str``  → ``{code, message, suggestions}`` via
+      :func:`create_structured_error`.  *error_code* overrides the
+      auto-detected code if supplied.
+    * ``dict`` → normalised to always contain ``code``, ``message``, and
+      ``suggestions`` (defaults to ``[]``).  Optional ``line`` and
+      ``operation`` are preserved.  *error_code* is **ignored** when
+      *error* is a dict; embed the code in the dict instead.
+
+    Args:
+        ok:          Whether the operation succeeded.
+        result:      Payload for success envelopes (ignored when *ok* is
+                     ``False``).
+        error:       Error description — a string or pre-structured dict
+                     with at least ``code`` and ``message`` keys.
+        error_code:  Override for the auto-detected error code (string
+                     errors only; ignored when *error* is a dict).
+        warnings:    List of warning strings.
+        diagnostics: Diagnostic metadata dict.
+
+    Returns:
+        JSON string with canonical
+        ``{ok, warnings, error, diagnostics, result}`` envelope.
+
+    Raises:
+        ValueError: If *error* is a dict missing ``code`` or ``message``.
+    """
+    import json as _json
+
+    warnings = warnings or []
+    diagnostics = diagnostics or {}
+
+    # Guard: ok=True with error is a caller bug
+    if ok and error is not None:
+        raise ValueError(
+            "make_envelope(ok=True, error=...) is contradictory; "
+            "pass error only when ok=False"
+        )
+
+    error_out: Any = None
+    if not ok and error is not None:
+        if isinstance(error, dict):
+            # Validate required keys
+            if "code" not in error or "message" not in error:
+                raise ValueError(
+                    "error dict must include 'code' and 'message'; "
+                    f"got keys: {sorted(error.keys())}"
+                )
+            # Normalise: guarantee suggestions exists + preserve optional fields
+            error_out = {
+                "code": error["code"],
+                "message": error["message"],
+                "suggestions": error.get("suggestions", []),
+            }
+            if "line" in error:
+                error_out["line"] = error["line"]
+            if "operation" in error:
+                error_out["operation"] = error["operation"]
+        else:
+            structured = create_structured_error(str(error))
+            error_out = {
+                "code": error_code or structured.code,
+                "message": structured.message,
+                "suggestions": structured.suggestions,
+            }
+
+    return _json.dumps({
+        "ok": ok,
+        "warnings": warnings,
+        "error": error_out,
+        "diagnostics": diagnostics,
+        "result": result if ok else None,
+    })
+

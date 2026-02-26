@@ -16,6 +16,7 @@ from mcp.types import ImageContent, TextContent
 
 from illustrator_mcp.shared import mcp
 from illustrator_mcp.proxy_client import execute_script_with_context, format_envelope
+from illustrator_mcp.errors import make_envelope
 from illustrator_mcp.protocol import TaskPayload, TaskReport, format_task_report
 from illustrator_mcp.tools.base import ToolInputBase
 from illustrator_mcp.tools.cadence import (
@@ -144,15 +145,15 @@ async def illustrator_execute_task(params: ExecuteTaskInput) -> Union[str, list]
     # ── SVG d-param removed — redirect to path_import_svg ──────
     payload = params.payload
     if payload.task == "element_create" and "d" in payload.params:
-        return json.dumps({
-            "ok": False,
-            "error": (
+        return make_envelope(
+            ok=False,
+            error=(
                 "SVG 'd' attribute is no longer accepted in element_create. "
                 "Use 'path_import_svg' for existing SVG data, or "
                 "'drawPathPoints' (in execute_script with includes: ['geometry']) for new paths."
             ),
-            "diagnostics": {"task": payload.task},
-        })
+            diagnostics={"task": payload.task},
+        )
 
     # Build the execution script
     payload_json = json.dumps(params.payload.model_dump())
@@ -261,13 +262,12 @@ JSON.stringify(report);
                 warnings.append(f"Unknown preview_mode '{mode}', defaulting to 'annotated'")
                 mode = "annotated"
 
-            envelope = json.dumps({
-                "ok": report.ok,
-                "warnings": warnings,
-                "error": None,
-                "diagnostics": diagnostics,
-                "result": {"formatted": formatted, "report": report_data}
-            })
+            envelope = make_envelope(
+                ok=report.ok,
+                result={"formatted": formatted, "report": report_data},
+                warnings=warnings,
+                diagnostics=diagnostics,
+            )
 
             # ── Auto-Grounding: preview at cadence, manual request, or final_step ──
             should_preview = (is_task_checkpoint or params.return_preview is True) and not is_dry_run
@@ -452,11 +452,11 @@ async def _path_boolean_impl(params: PathBooleanInput) -> str:
             path_boolean, flatten_path, Region,
         )
     except ImportError as e:
-        return json.dumps({
-            "ok": False,
-            "error": str(e),
-            "diagnostics": {"tool": "path_boolean", "hint": "pip install illustrator-mcp[geometry]"}
-        })
+        return make_envelope(
+            ok=False,
+            error=str(e),
+            diagnostics={"tool": "path_boolean", "hint": "pip install illustrator-mcp[geometry]"},
+        )
 
     context = f"path_boolean: {params.operation}"
     diagnostics: Dict[str, Any] = {"operation": params.operation, "tool": "path_boolean"}
@@ -477,11 +477,11 @@ async def _path_boolean_impl(params: PathBooleanInput) -> str:
             includes=["geo_boolean"],
         )
     except Exception as e:
-        return json.dumps({
-            "ok": False,
-            "error": f"Geometry extraction failed: {e}",
-            "diagnostics": diagnostics,
-        })
+        return make_envelope(
+            ok=False,
+            error=f"Geometry extraction failed: {e}",
+            diagnostics=diagnostics,
+        )
 
     # Parse extraction result
     extract_result = extract_response.get("result", "{}")
@@ -489,31 +489,31 @@ async def _path_boolean_impl(params: PathBooleanInput) -> str:
         try:
             geo_data = json.loads(extract_result)
         except json.JSONDecodeError:
-            return json.dumps({
-                "ok": False,
-                "error": f"Failed to parse geometry: {extract_result[:200]}",
-                "diagnostics": diagnostics,
-            })
+            return make_envelope(
+                ok=False,
+                error=f"Failed to parse geometry: {extract_result[:200]}",
+                diagnostics=diagnostics,
+            )
     else:
         geo_data = extract_result
 
     if geo_data.get("error"):
-        return json.dumps({
-            "ok": False,
-            "error": geo_data.get("message", "Geometry extraction error"),
-            "errorCode": geo_data.get("errorCode"),
-            "diagnostics": diagnostics,
-        })
+        return make_envelope(
+            ok=False,
+            error=geo_data.get("message", "Geometry extraction error"),
+            error_code=geo_data.get("errorCode"),
+            diagnostics=diagnostics,
+        )
 
     warnings = geo_data.get("warnings", [])
     paths = geo_data.get("paths", [])
 
     if len(paths) < 2:
-        return json.dumps({
-            "ok": False,
-            "error": f"Need at least 2 paths (subject + clip), got {len(paths)}",
-            "diagnostics": diagnostics,
-        })
+        return make_envelope(
+            ok=False,
+            error=f"Need at least 2 paths (subject + clip), got {len(paths)}",
+            diagnostics=diagnostics,
+        )
 
     # ── Step 2: Flatten Bézier curves if needed ─────────────────
     subject_geo = paths[0]
@@ -550,11 +550,11 @@ async def _path_boolean_impl(params: PathBooleanInput) -> str:
         subject_contour = _to_contour(subject_geo)
         clip_contours = [_to_contour(cg) for cg in clip_geos]
     except ValueError as e:
-        return json.dumps({
-            "ok": False,
-            "error": str(e),
-            "diagnostics": diagnostics,
-        })
+        return make_envelope(
+            ok=False,
+            error=str(e),
+            diagnostics=diagnostics,
+        )
 
     # ── Step 3: Run Clipper boolean ─────────────────────────────
     try:
@@ -564,11 +564,11 @@ async def _path_boolean_impl(params: PathBooleanInput) -> str:
             operation=params.operation,
         )
     except Exception as e:
-        return json.dumps({
-            "ok": False,
-            "error": f"Boolean operation failed: {e}",
-            "diagnostics": diagnostics,
-        })
+        return make_envelope(
+            ok=False,
+            error=f"Boolean operation failed: {e}",
+            diagnostics=diagnostics,
+        )
 
     if not regions:
         # Empty result (e.g., subtracting identical shapes)
@@ -580,12 +580,12 @@ async def _path_boolean_impl(params: PathBooleanInput) -> str:
                 tool_name="illustrator_path_boolean",
                 includes=["geo_boolean"],
             )
-        return json.dumps({
-            "ok": True,
-            "result": {"ids": [], "regionCount": 0, "message": "Boolean result is empty"},
-            "warnings": warnings,
-            "diagnostics": diagnostics,
-        })
+        return make_envelope(
+            ok=True,
+            result={"ids": [], "regionCount": 0, "message": "Boolean result is empty"},
+            warnings=warnings,
+            diagnostics=diagnostics,
+        )
 
     # ── Step 4: Reconstruct result in Illustrator ───────────────
     # Convert Region objects to JSON-serializable dicts
@@ -620,12 +620,12 @@ async def _path_boolean_impl(params: PathBooleanInput) -> str:
             includes=["geo_boolean"],
         )
     except Exception as e:
-        return json.dumps({
-            "ok": False,
-            "error": f"Reconstruction failed: {e}",
-            "warnings": warnings + ["WARNING: Original paths were NOT deleted (reconstruct failed)"],
-            "diagnostics": diagnostics,
-        })
+        return make_envelope(
+            ok=False,
+            error=f"Reconstruction failed: {e}",
+            warnings=warnings + ["WARNING: Original paths were NOT deleted (reconstruct failed)"],
+            diagnostics=diagnostics,
+        )
 
     # Parse reconstruction result
     recon_result = reconstruct_response.get("result", "{}")
@@ -633,22 +633,22 @@ async def _path_boolean_impl(params: PathBooleanInput) -> str:
         try:
             recon_data = json.loads(recon_result)
         except json.JSONDecodeError:
-            return json.dumps({
-                "ok": False,
-                "error": f"Failed to parse reconstruction result: {recon_result[:200]}",
-                "warnings": warnings + ["WARNING: Original paths were NOT deleted"],
-                "diagnostics": diagnostics,
-            })
+            return make_envelope(
+                ok=False,
+                error=f"Failed to parse reconstruction result: {recon_result[:200]}",
+                warnings=warnings + ["WARNING: Original paths were NOT deleted"],
+                diagnostics=diagnostics,
+            )
     else:
         recon_data = recon_result
 
     if recon_data.get("error"):
-        return json.dumps({
-            "ok": False,
-            "error": recon_data.get("message", "Reconstruction error"),
-            "warnings": warnings + ["WARNING: Original paths were NOT deleted"],
-            "diagnostics": diagnostics,
-        })
+        return make_envelope(
+            ok=False,
+            error=recon_data.get("message", "Reconstruction error"),
+            warnings=warnings + ["WARNING: Original paths were NOT deleted"],
+            diagnostics=diagnostics,
+        )
 
     # ── Step 5: Delete originals (only on success) ──────────────
     if params.delete_originals:
@@ -671,9 +671,9 @@ async def _path_boolean_impl(params: PathBooleanInput) -> str:
         except Exception as e:
             warnings.append(f"Deletion of originals failed: {e}")
 
-    return json.dumps({
-        "ok": True,
-        "result": recon_data,
-        "warnings": warnings,
-        "diagnostics": diagnostics,
-    })
+    return make_envelope(
+        ok=True,
+        result=recon_data,
+        warnings=warnings,
+        diagnostics=diagnostics,
+    )

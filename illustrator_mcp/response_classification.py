@@ -88,7 +88,7 @@ def classify_response(
         ResponseClassification with normalized result or error info.
     """
     # Lazy import to avoid circular dependency
-    from illustrator_mcp.errors import classify_error, is_connection_error
+    from illustrator_mcp.errors import classify_error, is_connection_error, ErrorCode, LEGACY_CODE_MAP
     from illustrator_mcp.utils.response import try_parse_json, unwrap_result
 
     raw = response
@@ -123,12 +123,25 @@ def classify_response(
                 error_msg = error_val.get("message", str(error_val))
                 error_line = error_val.get("line")
                 error_op = error_val.get("operation")
+                # Direct code lookup — SOC errors carry a code field
+                raw_code = error_val.get("code")
             else:
                 # Legacy string error — line/operation may be siblings
                 error_msg = str(error_val)
                 error_line = result.get("line")
                 error_op = result.get("operation")
-            code_obj = classify_error(error_msg)
+                raw_code = None
+
+            if raw_code:
+                raw_code = str(raw_code).strip().upper()
+                raw_code = LEGACY_CODE_MAP.get(raw_code, raw_code)
+                try:
+                    code_obj = ErrorCode(raw_code)
+                except ValueError:
+                    code_obj = classify_error(error_msg)
+            else:
+                code_obj = classify_error(error_msg)
+
             return ResponseClassification(
                 ok=False,
                 error_message=error_msg,

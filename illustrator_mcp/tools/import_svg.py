@@ -13,7 +13,7 @@ from typing import Any, Dict, Optional
 from pydantic import Field
 
 from illustrator_mcp.shared import mcp
-from illustrator_mcp.proxy_client import execute_script_with_context
+from illustrator_mcp.proxy_client import execute_script_with_context, format_envelope
 from illustrator_mcp.tools.base import ToolInputBase
 
 logger = logging.getLogger(__name__)
@@ -93,22 +93,13 @@ async def _path_import_svg_impl(params: PathImportSvgInput) -> str:
     try:
         ir = parse_svg_d(d_str)
     except ValueError as e:
-        err_str = str(e)
-        # [H7] Extract structured error code if present
-        error_code = None
-        for code in (
-            "E_D_TOO_LONG", "E_TOO_MANY_SEGMENTS",
-            "E_TOO_MANY_SUBPATHS", "E_COORD_OVERFLOW", "E_TOO_MANY_TOKENS",
-        ):
-            if err_str.startswith(code):
-                error_code = code
-                break
-        return json.dumps({
-            "ok": False,
-            "error": err_str,
-            "errorCode": error_code,
-            "diagnostics": diagnostics,
-        })
+        # Let format_envelope → classify_error handle E_D_TOO_LONG → SVG001 etc.
+        return format_envelope(
+            {"error": str(e)},
+            context="path_import_svg",
+            warnings=warnings,
+            diagnostics=diagnostics,
+        )
 
     # ── Build drawPathPoints spec from IR ──────────────────────
     is_multi = ir.get("ir") == "multi"
@@ -172,43 +163,22 @@ async def _path_import_svg_impl(params: PathImportSvgInput) -> str:
             includes=["geometry"],
         )
     except Exception as e:
-        return json.dumps({
-            "ok": False,
-            "error": "Import execution failed: " + str(e),
-            "diagnostics": diagnostics,
-        })
+        return format_envelope(
+            {"error": "Import execution failed: " + str(e)},
+            context="path_import_svg",
+            warnings=warnings,
+            diagnostics=diagnostics,
+        )
 
-    # Parse the response
-    result_str = response.get("result", "{}")
-    if isinstance(result_str, str):
-        try:
-            draw_result = json.loads(result_str)
-        except json.JSONDecodeError:
-            draw_result = {"raw": result_str}
-    else:
-        draw_result = result_str
-
-    if not draw_result.get("ok", False):
-        return json.dumps({
-            "ok": False,
-            "error": draw_result.get("error", "Unknown draw error"),
-            "diagnostics": diagnostics,
-        })
-
-    # [H5] Stronger nudge in response payload
-    return json.dumps({
-        "ok": True,
-        "imported": True,
-        "hint": "For new shapes, use geometry.drawPathPoints via execute_script",
-        "uuid": draw_result.get("uuid"),
-        "segments": segment_count,
-        "source": "svg_import",
-        "d_sha256": d_hash,
-        "subpathCount": draw_result.get("subpathCount", 1),
-        "bounds": draw_result.get("bounds"),
-        "warnings": warnings,
-        "diagnostics": diagnostics,
-    })
+    # Let format_envelope handle result parsing, error classification,
+    # and success/failure determination (replaces manual json.loads +
+    # draw_result.get("ok") check).
+    return format_envelope(
+        response,
+        context="path_import_svg",
+        warnings=warnings,
+        diagnostics=diagnostics,
+    )
 
 
 def _ir_points_to_draw_spec(ir: Dict[str, Any]) -> list:

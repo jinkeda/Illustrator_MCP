@@ -48,58 +48,18 @@ Python SOC batch compute depends on:
 
 
 # ==================== Error Codes ====================
+# Canonical enum lives in errors.py — imported here for SOC use.
 
-class OpErrorCode(str, Enum):
-    """Standardized error codes mirrored to JSX runtime."""
+from illustrator_mcp.errors import ErrorCode
 
-    # Validation (V) - fail before execution
-    V_NO_DOCUMENT = "V001"
-    V_NO_SELECTION = "V002"
-    V_INVALID_PAYLOAD = "V003"
-    V_INVALID_TARGETS = "V004"
-    V_UNKNOWN_TARGET_TYPE = "V005"
-    V_MISSING_REQUIRED_PARAM = "V006"
-    V_INVALID_PARAM_TYPE = "V007"
-    V_SCHEMA_MISMATCH = "V008"
-    V_INVALID_PARAM_VALUE = "V009"
+# Backward-compat alias so existing ``from contracts import OpErrorCode``
+# continues to work.  New code should import ErrorCode directly.
+OpErrorCode = ErrorCode
 
-    # Runtime (R) - fail during execution
-    R_COLLECT_FAILED = "R001"
-    R_COMPUTE_FAILED = "R002"
-    R_APPLY_FAILED = "R003"
-    R_ITEM_OPERATION_FAILED = "R004"
-    R_TIMEOUT = "R005"
-    R_OUT_OF_BOUNDS = "R006"
 
-    # Execution (E) - infrastructure/dependency issues
-    E_EXECUTION = "E001"
-
-    # System (S) - Illustrator/environment issues
-    S_APP_ERROR = "S001"
-    S_SCRIPT_ERROR = "S002"
-    S_IO_ERROR = "S003"
-    S_MEMORY_ERROR = "S004"
-
-    # Compound (C) - compound op issues
-    C_NESTING_NOT_ALLOWED = "C001"
-    C_PREV_UNAVAILABLE = "C002"
-    C_INVALID_TOKEN_POSITION = "C003"
-    C_UNKNOWN_TOKEN = "C004"
-
-    # Guard (G) - conditional op guard issues
-    G_UNKNOWN_PROPERTY = "G001"
-    G_INVALID_COMPARATOR = "G002"
-    G_MALFORMED = "G003"
-
-    # Spatial (SP) - spatial target issues
-    SP_MISSING_PREDICATE = "SP01"
-    SP_INVALID_RECT = "SP02"
-    SP_REF_NOT_FOUND = "SP03"
-
-    # Retryable codes (collect/compute only, NOT apply)
-    @classmethod
-    def retryable(cls) -> list:
-        return [cls.R_COLLECT_FAILED, cls.R_COMPUTE_FAILED]
+def retryable_codes() -> list:
+    """Return the list of retryable error codes (collect/compute only, NOT apply)."""
+    return [ErrorCode.R_COLLECT_FAILED, ErrorCode.R_COMPUTE_FAILED]
 
 
 # ==================== Param Types ====================

@@ -15,9 +15,11 @@ from pydantic import Field
 
 from mcp.types import ImageContent
 from illustrator_mcp.shared import mcp
+from illustrator_mcp import templates
 from illustrator_mcp.tools.base import execute_jsx_tool, ToolInputBase
 from illustrator_mcp.utils import escape_path_for_jsx
 from illustrator_mcp.proxy_client import execute_script_with_context, format_envelope
+from illustrator_mcp.errors import make_envelope
 from illustrator_mcp.libraries import get_injection_metadata
 from illustrator_mcp import templates
 
@@ -90,67 +92,12 @@ async def _place_item_impl(
     marker_line = f'placed.note = "{trace_marker}";' if trace_marker else ""
     
     if embed_editable:
-        # Open/copy/paste workflow for editable content
-        script = f'''
-(function() {{
-    var targetDoc = app.activeDocument;
-    var targetDocName = targetDoc.name;
-    
-    try {{
-        // Open PDF as new document
-        var pdfFile = new File("{path}");
-        var pdfDoc = app.open(pdfFile);
-        
-        // Select all and copy
-        pdfDoc.selectObjectsOnActiveArtboard();
-        app.executeMenuCommand('copy');
-        
-        // Close PDF without saving
-        pdfDoc.close(SaveOptions.DONOTSAVECHANGES);
-        
-        // Find and activate target document
-        for (var d = 0; d < app.documents.length; d++) {{
-            if (app.documents[d].name === targetDocName) {{
-                app.activeDocument = app.documents[d];
-                targetDoc = app.documents[d];
-                break;
-            }}
-        }}
-        
-        // Paste
-        app.executeMenuCommand('paste');
-        
-        // Get pasted selection and group
-        var sel = targetDoc.selection;
-        if (sel && sel.length > 0) {{
-            var group;
-            if (sel.length > 1) {{
-                app.executeMenuCommand('group');
-                group = targetDoc.selection[0];
-            }} else {{
-                group = sel[0];
-            }}
-            
-            // Position
-            group.position = [{x}, {-y}];
-            
-            var bounds = group.geometricBounds;
-            targetDoc.selection = null;
-            
-            return JSON.stringify({{
-                success: true,
-                type: "editable",
-                position: [{x}, {y}],
-                width: bounds[2] - bounds[0],
-                height: bounds[1] - bounds[3]
-            }});
-        }}
-        throw new Error("No content pasted");
-    }} catch(e) {{
-        return JSON.stringify({{success: false, error: e.message}});
-    }}
-}})();
-'''
+        script = templates.EMBED_EDITABLE.substitute(
+            path=path,
+            x=x,
+            neg_y=-y,
+            y=y,
+        )
     else:
         embed_line = "" if linked else "placed.embed();"
         script = templates.PLACE_ITEM.substitute(
@@ -353,33 +300,17 @@ async def illustrator_export_document(params: ExportDocumentInput) -> Union[str,
         if params.format == ExportFormat.PNG:
             clip_opt = f"opts.artBoardClipping = {artboard_clip};"
 
-        script = f"""
-(function() {{
-    var doc = app.activeDocument;
-    var abIdx = {ab_index_js};
-    doc.artboards.setActiveArtboardIndex(abIdx);
-
-    var opts = new {fmt_config["options"]}();{scale_opts}
-    {clip_opt}
-
-    var file = new File("{path}");
-    doc.exportFile(file, {fmt_config["type"]}, opts);
-
-    var abRect = doc.artboards[abIdx].artboardRect;
-    var exportWidth = Math.round((abRect[2] - abRect[0]) * {scale} / 100);
-    var exportHeight = Math.round(Math.abs(abRect[3] - abRect[1]) * {scale} / 100);
-
-    return JSON.stringify({{
-        success: true,
-        path: file.fsName,
-        format: "{fmt_name}",
-        artboard_index: abIdx,
-        artboard_clipping: {artboard_clip},
-        width: exportWidth,
-        height: exportHeight
-    }});
-}})();
-"""
+        script = templates.EXPORT_STANDARD.substitute(
+            ab_index_js=ab_index_js,
+            options_class=fmt_config["options"],
+            scale_opts=scale_opts,
+            clip_opt=clip_opt,
+            path=path,
+            export_type=fmt_config["type"],
+            scale=scale,
+            fmt_name=fmt_name,
+            artboard_clip=artboard_clip,
+        )
     else:  # PDF uses saveAs
         script = templates.EXPORT_PDF.substitute(path=path)
 
@@ -461,39 +392,19 @@ async def _handle_checkpoint(params: HistoryInput) -> str:
     }
     jsx_fn = action_map[params.action]
 
+    if params.action not in action_map:
+        return make_envelope(ok=False, error=f"Unknown checkpoint action: {params.action}")
+
     if params.action == "checkpoint_list":
-        script = f"""
-(function() {{
-    var doc = app.activeDocument;
-    return JSON.stringify(checkpointList(doc));
-}})();
-"""
-    elif params.action == "checkpoint_save":
-        escaped_name = params.name.replace("\\", "\\\\").replace('"', '\\"')
-        script = f"""
-(function() {{
-    var doc = app.activeDocument;
-    return JSON.stringify(checkpointSave("{escaped_name}", doc));
-}})();
-"""
-    elif params.action == "checkpoint_restore":
-        escaped_name = params.name.replace("\\", "\\\\").replace('"', '\\"')
-        script = f"""
-(function() {{
-    var doc = app.activeDocument;
-    return JSON.stringify(checkpointRestore("{escaped_name}", doc));
-}})();
-"""
-    elif params.action == "checkpoint_delete":
-        escaped_name = params.name.replace("\\", "\\\\").replace('"', '\\"')
-        script = f"""
-(function() {{
-    var doc = app.activeDocument;
-    return JSON.stringify(checkpointDelete("{escaped_name}", doc));
-}})();
-"""
+        name_arg = ""
     else:
-        return json.dumps({"ok": False, "error": f"Unknown checkpoint action: {params.action}"})
+        escaped_name = params.name.replace("\\", "\\\\").replace('"', '\\"')
+        name_arg = f'"{ escaped_name}", '
+
+    script = templates.CHECKPOINT_ACTION.substitute(
+        jsx_fn=jsx_fn,
+        name_arg=name_arg,
+    )
 
     return await execute_jsx_tool(
         script=script,
@@ -532,7 +443,7 @@ async def illustrator_history(params: HistoryInput) -> str:
 
     # Original undo/redo logic
     if params.action not in ("undo", "redo"):
-        return json.dumps({"ok": False, "error": "Invalid action. Use 'undo' or 'redo'"})
+        return make_envelope(ok=False, error="Invalid action. Use 'undo' or 'redo'")
     
     template = templates.UNDO if params.action == "undo" else templates.REDO
     
@@ -639,122 +550,8 @@ async def illustrator_place_file(params: PlaceFileInput) -> str:
 
 _REFERENCE_LAYER_NAME = "__reference__"
 
-_SET_REFERENCE_JSX = """
-(function(payload) {
-    var doc = app.activeDocument;
-    var layerName = payload.layer_name;
-    var originalActiveName = doc.activeLayer.name;
-
-    // 1. Pre-flight file check
-    var imgFile = null;
-    if (payload.file_path) {
-        imgFile = new File(payload.file_path);
-        if (!imgFile.exists) {
-            return JSON.stringify({
-                ok: false, status: "error",
-                message: "File not found: " + payload.file_path
-            });
-        }
-    }
-
-    // 2. Idempotent cleanup (unlock before delete, 0-layer guard)
-    try {
-        var existing = doc.layers.getByName(layerName);
-        existing.locked = false;
-        existing.visible = true;
-        if (doc.layers.length === 1) {
-            doc.layers.add().name = "Drawing Layer";
-        }
-        existing.remove();
-    } catch(e) {}
-
-    // 3. Clear-only mode
-    if (!payload.file_path) {
-        if (doc.layers.length > 0) doc.activeLayer = doc.layers[0];
-        return JSON.stringify({
-            ok: true, status: "cleared", layer_name: layerName
-        });
-    }
-
-    // 4. Create layer, send to bottom
-    var refLayer = doc.layers.add();
-    refLayer.name = layerName;
-    if (doc.layers.length > 1) {
-        refLayer.move(doc.layers[doc.layers.length - 1], ElementPlacement.PLACEAFTER);
-    }
-    refLayer.printable = false;
-
-    // 5. Place image, opacity on ITEM (not layer)
-    var pItem = refLayer.placedItems.add();
-    pItem.file = imgFile;
-
-    // 6. Redraw to materialize bounds
-    app.redraw();
-
-    pItem.opacity = payload.opacity;
-
-    // 7. Proportional fit + center on active artboard
-    var abRect = doc.artboards[doc.artboards.getActiveArtboardIndex()].artboardRect;
-    var abW = Math.abs(abRect[2] - abRect[0]);
-    var abH = Math.abs(abRect[3] - abRect[1]);
-
-    if (payload.fit && pItem.width > 0 && pItem.height > 0) {
-        var scale = Math.min(abW / pItem.width, abH / pItem.height) * 100;
-        pItem.resize(scale, scale);
-    }
-    pItem.position = [
-        abRect[0] + (abW - pItem.width) / 2,
-        abRect[1] - (abH - pItem.height) / 2
-    ];
-
-    // 8. Lock layer
-    refLayer.locked = true;
-
-    // 9. Restore active layer by NAME (avoids stale object refs)
-    var safeLayerFound = false;
-    for (var i = 0; i < doc.layers.length; i++) {
-        var L = doc.layers[i];
-        if (L.name === originalActiveName && L.name !== layerName
-            && !L.locked && L.visible) {
-            doc.activeLayer = L;
-            safeLayerFound = true;
-            break;
-        }
-    }
-    if (!safeLayerFound) {
-        for (var i = 0; i < doc.layers.length; i++) {
-            var L = doc.layers[i];
-            if (L.name !== layerName && !L.locked && L.visible) {
-                doc.activeLayer = L;
-                safeLayerFound = true;
-                break;
-            }
-        }
-    }
-    if (!safeLayerFound) {
-        var drawLayer = doc.layers.add();
-        drawLayer.name = "Drawing Layer";
-        doc.activeLayer = drawLayer;
-    }
-
-    return JSON.stringify({
-        ok: true, status: "set", layer_name: layerName,
-        opacity: payload.opacity,
-        artboard: { width: abW, height: abH },
-        image_bounds: {
-            left: pItem.left, top: pItem.top,
-            width: pItem.width, height: pItem.height,
-            center_x: pItem.left + pItem.width / 2,
-            center_y: pItem.top - pItem.height / 2
-        },
-        spatial_context: {
-            artboard: "X: 0 to " + Math.round(abW) + ", Y: 0 to " + Math.round(abH),
-            reference_bounds: "X: " + Math.round(pItem.left - abRect[0]) + ", Y: " + Math.round(abRect[1] - pItem.top) + ", Width: " + Math.round(pItem.width) + ", Height: " + Math.round(pItem.height),
-            instruction: "Use Y-down user coordinates (origin at artboard top-left). Keep all generated path coordinates within the artboard bounds."
-        }
-    });
-})(%s);
-"""
+# Backward-compat alias (moved to templates.SET_REFERENCE)
+_SET_REFERENCE_JSX = templates.SET_REFERENCE
 
 
 class SetReferenceInput(ToolInputBase):
@@ -880,7 +677,7 @@ async def illustrator_set_reference(params: SetReferenceInput) -> str:
     payload["layer_name"] = _REFERENCE_LAYER_NAME
     payload_json = json.dumps(payload)
 
-    script = _SET_REFERENCE_JSX % payload_json
+    script = templates.SET_REFERENCE % payload_json
 
     result = await execute_jsx_tool(
         script=script,

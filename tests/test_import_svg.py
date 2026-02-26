@@ -126,3 +126,103 @@ class TestResponseShape:
         ir1 = parse_svg_d(d)
         ir2 = parse_svg_d(d)
         assert ir1 == ir2
+
+
+# ── Envelope integration tests ────────────────────────────────────────
+
+
+class TestEnvelopeIntegration:
+    """Tests that import_svg returns standardized format_envelope responses.
+
+    Mocks execute_script_with_context to avoid needing Illustrator.
+    """
+
+    @pytest.fixture(autouse=True)
+    def _patch_counter(self, monkeypatch):
+        """Stub out mutation counter to avoid import-order issues."""
+        from unittest.mock import MagicMock
+        import illustrator_mcp.tools.execute as ex_mod
+        monkeypatch.setattr(ex_mod, "_counter", MagicMock())
+
+    def _parse(self, json_str: str) -> dict:
+        return json.loads(json_str)
+
+    @pytest.mark.asyncio
+    async def test_parse_error_envelope(self):
+        """SVG parse ValueError → {ok:false, error:{code:'SVG001',...}}."""
+        from illustrator_mcp.tools.import_svg import illustrator_path_import_svg, PathImportSvgInput
+        # d string exceeding MAX_D_LENGTH triggers E_D_TOO_LONG
+        d = "M 0,0 " + "L 1,1 " * 20000
+        params = PathImportSvgInput(d=d)
+        result = self._parse(await illustrator_path_import_svg(params))
+        assert result["ok"] is False
+        assert result["error"] is not None
+        assert result["error"]["code"] == "SVG001"
+        assert "SVG path data too long" in result["error"]["message"]
+        assert result["diagnostics"]["tool"] == "path_import_svg"
+
+    @pytest.mark.asyncio
+    async def test_execution_error_envelope(self):
+        """execute_script_with_context raises → {ok:false, error:{...}}."""
+        from unittest.mock import AsyncMock, patch
+        from illustrator_mcp.tools.import_svg import illustrator_path_import_svg, PathImportSvgInput
+        params = PathImportSvgInput(d="M 0,0 L 100,0")
+        with patch(
+            "illustrator_mcp.tools.import_svg.execute_script_with_context",
+            new_callable=AsyncMock,
+            side_effect=ConnectionError("WebSocket gone"),
+        ):
+            result = self._parse(await illustrator_path_import_svg(params))
+        assert result["ok"] is False
+        assert result["error"] is not None
+        assert "WebSocket gone" in result["error"]["message"]
+
+    @pytest.mark.asyncio
+    async def test_success_envelope(self):
+        """Successful draw → {ok:true, result:{...}, warnings:[...]}."""
+        from unittest.mock import AsyncMock, patch
+        from illustrator_mcp.tools.import_svg import illustrator_path_import_svg, PathImportSvgInput
+        mock_draw = json.dumps({"ok": True, "uuid": "abc123", "bounds": [0, 0, 100, 50]})
+        params = PathImportSvgInput(d="M 0,0 L 100,0 L 100,50 Z")
+        with patch(
+            "illustrator_mcp.tools.import_svg.execute_script_with_context",
+            new_callable=AsyncMock,
+            return_value={"result": mock_draw},
+        ):
+            result = self._parse(await illustrator_path_import_svg(params))
+        assert result["ok"] is True
+        assert result["error"] is None
+        assert "warnings" in result
+        assert result["diagnostics"]["tool"] == "path_import_svg"
+        # Domain data is unwrapped into result
+        assert result["result"]["uuid"] == "abc123"
+        assert result["result"]["bounds"] == [0, 0, 100, 50]
+
+    @pytest.mark.asyncio
+    async def test_draw_error_envelope(self):
+        """drawPathPoints returns ok:false → {ok:false, error:{...}}."""
+        from unittest.mock import AsyncMock, patch
+        from illustrator_mcp.tools.import_svg import illustrator_path_import_svg, PathImportSvgInput
+        mock_draw = json.dumps({"ok": False, "error": "Path creation failed"})
+        params = PathImportSvgInput(d="M 0,0 L 100,0")
+        with patch(
+            "illustrator_mcp.tools.import_svg.execute_script_with_context",
+            new_callable=AsyncMock,
+            return_value={"result": mock_draw},
+        ):
+            result = self._parse(await illustrator_path_import_svg(params))
+        assert result["ok"] is False
+        assert result["error"] is not None
+        assert "Path creation failed" in result["error"]["message"]
+
+
+class TestFormatEnvelopePassthrough:
+    """Lock test: format_envelope passes dict result through unchanged (C)."""
+
+    def test_dict_result_passthrough(self):
+        """format_envelope({"result": {"x": 1}}) → ok:true, result:{"x": 1}."""
+        from illustrator_mcp.proxy_client import format_envelope
+        env = json.loads(format_envelope({"result": {"x": 1, "imported": True}}))
+        assert env["ok"] is True
+        assert env["result"] == {"x": 1, "imported": True}
+        assert env["error"] is None

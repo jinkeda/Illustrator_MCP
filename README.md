@@ -568,6 +568,11 @@ If occupied, change `WS_PORT` in `.env` and restart.
 | `SP01` | Spatial | Missing spatial predicate |
 | `SP02` | Spatial | Invalid rect specification |
 | `SP03` | Spatial | Reference item not found |
+| `SVG001` | SVG Import | Path data too long (>50k chars) |
+| `SVG002` | SVG Import | Too many segments (>5k) |
+| `SVG003` | SVG Import | Too many subpaths (>100) |
+| `SVG004` | SVG Import | Coordinate overflow (>±100k) |
+| `SVG005` | SVG Import | Too many tokens (>50k) |
 
 All errors include actionable recovery suggestions.
 
@@ -617,7 +622,6 @@ Illustrator_MCP/
 │   ├── vlm_grounding.py          # VLM QA pipeline: hybrid grounding, hypothesis verifier, DOM diffing
 │   ├── svgd.py                   # SVG path data parser (d attribute → geometry IR, arc→cubic)
 │   ├── curves.py                 # Bézier curve helpers (rounded polygon, arc points)
-│   ├── utils_funcs.py            # Path escaping helper (re-exported via utils/)
 │   ├── log_config.py             # Structured logging config
 │   ├── bridge/
 │   │   ├── server.py             # WebSocket server transport
@@ -626,6 +630,7 @@ Illustrator_MCP/
 │   │   └── request_log.py        # JSON-lines logger
 │   ├── utils/
 │   │   ├── chunking.py           # Auto-split large op batches
+│   │   ├── path.py               # Path escaping helper
 │   │   └── response.py           # JSON parsing + envelope unwrapping
 │   ├── schemas/                  # Generated JSON schemas
 │   ├── tools/
@@ -675,7 +680,7 @@ Illustrator_MCP/
 │   ├── test_websocket_bridge.py
 │   ├── test_overlay.py
 │   ├── test_svgd.py              # SVG path parser tests (35 tests)
-│   ├── test_import_svg.py        # SVG import tool tests (9 tests)
+│   ├── test_import_svg.py        # SVG import tool tests (14 tests)
 │   ├── test_clip_box.py          # Regional zoom / clip_box tests (28 tests)
 │   ├── test_clip_ops.py          # Clipping mask schema + handler guard tests
 │   ├── test_grid_helper.py       # Grid discovery tests
@@ -727,7 +732,7 @@ python -m scripts.gen_schemas
 3. **Library Injection** -- Reusable `.jsx` libraries with manifest-driven transitive dependency resolution and symbol collision detection.
 4. **Context Before Creation** -- AI inspects document state (`get_document`, `query_items`) before writing modification scripts.
 5. **Two-Contract Envelope** -- Internal contract (`{ok, data, operation}`) flows from ExtendScript to Python. External contract (`{ok, result, error, diagnostics, warnings}`) flows from Python to the MCP client. `format_envelope()` bridges the two, stripping internal wrappers and surfacing pure domain data.
-6. **Fail Fast with Structured Errors** -- Typed error codes (V/R/S/C categories) with actionable recovery suggestions.
+6. **Fail Fast with Structured Errors** -- Typed error codes (V/R/S/C/SVG categories) with actionable recovery suggestions.
 7. **Auto-Grounding** -- SOC task results always include an annotated artboard preview, forcing the AI to see the visual state before its next action. No opt-in required.
 8. **VLM QA Cadence** -- Every 5th `execute_script` call auto-injects an annotated preview. Combined with `final_step=True`, the AI is periodically forced to visually verify and catch defects.
 

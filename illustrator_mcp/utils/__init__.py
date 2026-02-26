@@ -10,9 +10,8 @@ from illustrator_mcp.utils.chunking import (
     estimate_chunk_count
 )
 
-# Re-export functions from utils.py (the module, not the package)
-# These are commonly imported via `from illustrator_mcp.utils import ...`
-from illustrator_mcp.utils_funcs import (
+# Path utilities
+from illustrator_mcp.utils.path import (
     escape_path_for_jsx,
 )
 

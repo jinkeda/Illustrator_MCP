@@ -9,6 +9,7 @@ import json
 import pytest
 
 from illustrator_mcp.proxy_client import format_response, format_envelope
+from illustrator_mcp.errors import make_envelope
 
 
 # =============================================================================
@@ -327,3 +328,111 @@ class TestBridgeShapePostPhase2:
         env = self._parse(format_envelope(resp))
         assert env["ok"] is False
         assert env["error"]["line"] == 7
+
+
+# =============================================================================
+# make_envelope — pre-classified envelope builder
+# =============================================================================
+
+class TestMakeEnvelope:
+    """Tests for errors.make_envelope (pre-classified envelope builder)."""
+
+    def _parse(self, result: str) -> dict:
+        return json.loads(result)
+
+    def test_success_canonical_keys(self):
+        """Success envelope has exactly the 5 canonical keys."""
+        env = self._parse(make_envelope(ok=True, result={"count": 5}))
+        assert set(env.keys()) == {"ok", "warnings", "error", "diagnostics", "result"}
+        assert env["ok"] is True
+        assert env["result"] == {"count": 5}
+        assert env["error"] is None
+        assert env["warnings"] == []
+        assert env["diagnostics"] == {}
+
+    def test_error_string_structured(self):
+        """String error is converted to {code, message, suggestions}."""
+        env = self._parse(make_envelope(ok=False, error="Script syntax error"))
+        assert env["ok"] is False
+        assert env["result"] is None
+        assert isinstance(env["error"], dict)
+        assert "code" in env["error"]
+        assert "message" in env["error"]
+        assert isinstance(env["error"]["suggestions"], list)
+
+    def test_error_dict_normalised(self):
+        """Dict error gets suggestions default [] if not provided."""
+        env = self._parse(make_envelope(
+            ok=False,
+            error={"code": "E001", "message": "something failed"}
+        ))
+        assert env["error"]["code"] == "E001"
+        assert env["error"]["message"] == "something failed"
+        assert env["error"]["suggestions"] == []
+
+    def test_error_dict_missing_keys_raises(self):
+        """ValueError if dict error lacks code or message."""
+        with pytest.raises(ValueError, match="code.*message"):
+            make_envelope(ok=False, error={"message": "no code"})
+        with pytest.raises(ValueError, match="code.*message"):
+            make_envelope(ok=False, error={"code": "X"})
+
+    def test_error_code_override_string(self):
+        """error_code overrides auto-detected code for string errors."""
+        env = self._parse(make_envelope(
+            ok=False,
+            error="something happened",
+            error_code="CUSTOM_001"
+        ))
+        assert env["error"]["code"] == "CUSTOM_001"
+
+    def test_error_code_ignored_for_dict(self):
+        """error_code is ignored when error is a dict."""
+        env = self._parse(make_envelope(
+            ok=False,
+            error={"code": "DICT_CODE", "message": "m"},
+            error_code="OVERRIDE_IGNORED"
+        ))
+        assert env["error"]["code"] == "DICT_CODE"
+
+    def test_line_operation_preserved(self):
+        """line and operation in error dict are passed through."""
+        env = self._parse(make_envelope(
+            ok=False,
+            error={"code": "X", "message": "m", "line": 42, "operation": "draw"}
+        ))
+        assert env["error"]["line"] == 42
+        assert env["error"]["operation"] == "draw"
+
+    def test_defaults(self):
+        """Missing optional args default to empty list/dict/None."""
+        env = self._parse(make_envelope(ok=True))
+        assert env["warnings"] == []
+        assert env["diagnostics"] == {}
+        assert env["error"] is None
+        assert env["result"] is None
+
+    def test_error_envelope_has_canonical_keys(self):
+        """Error envelopes also have all 5 canonical keys."""
+        env = self._parse(make_envelope(ok=False, error="fail"))
+        assert set(env.keys()) == {"ok", "warnings", "error", "diagnostics", "result"}
+
+    def test_warnings_and_diagnostics_passed(self):
+        """Warnings and diagnostics are included in envelope."""
+        env = self._parse(make_envelope(
+            ok=True,
+            result="done",
+            warnings=["w1"],
+            diagnostics={"tool": "test"}
+        ))
+        assert env["warnings"] == ["w1"]
+        assert env["diagnostics"]["tool"] == "test"
+
+    def test_ok_true_with_error_raises(self):
+        """ok=True with error is contradictory and raises ValueError."""
+        with pytest.raises(ValueError, match="contradictory"):
+            make_envelope(ok=True, error="oops")
+        with pytest.raises(ValueError, match="contradictory"):
+            make_envelope(ok=True, error={"code": "X", "message": "m"})
+
+

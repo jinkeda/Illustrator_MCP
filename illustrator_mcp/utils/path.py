@@ -1,11 +1,10 @@
 """
-Utility functions for Illustrator MCP.
+Path utilities for Illustrator MCP.
 
-This module provides common utilities used across the codebase.
+Helpers for escaping and normalizing file paths for ExtendScript consumption.
 """
 
 import json
-from typing import Union
 
 
 def escape_path_for_jsx(path: str) -> str:
@@ -34,5 +33,3 @@ def escape_path_for_jsx(path: str) -> str:
         'C:\\\\\\\\Users\\\\\\\\\\\\"evil\\\\\\\\path'
     """
     return json.dumps(path)[1:-1]
-
-

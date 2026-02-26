@@ -3,13 +3,13 @@
  * Part of Illustrator MCP SOC Framework
  * 
  * AUTO-GENERATED - DO NOT EDIT MANUALLY
- * Generated: 2026-02-23T16:49:14Z
+ * Generated: 2026-02-26T16:27:35Z
  * Source: illustrator_mcp/schemas/contracts.py
  * 
  * To regenerate: python -m illustrator_mcp.tools.compile_contracts
  */
 
-var CONTRACTS_CHECKSUM = "8855668fe77f3c9f";
+var CONTRACTS_CHECKSUM = "17eaf7bed095d2b5";
 
 // ==================== Protocol Version ====================
 var TASK_PROTOCOL_VERSION = "3.0.0";
@@ -18,6 +18,15 @@ var TASK_PROTOCOL_MAJOR_VERSIONS = ["2", "3"];
 // ==================== Error Codes ====================
 
 var ErrorCodes = {
+    C_DISCONNECTED: "C001",
+    C_TIMEOUT: "C002",
+    C_BRIDGE_ERROR: "C003",
+    C_PROTOCOL: "C004",
+    C_JSON_PARSE: "C005",
+    C_NESTING_NOT_ALLOWED: "C006",
+    C_PREV_UNAVAILABLE: "C007",
+    C_INVALID_TOKEN_POSITION: "C008",
+    C_UNKNOWN_TOKEN: "C009",
     // === VALIDATION (V) - fail before execution ===
     V_NO_DOCUMENT: "V001",
     V_NO_SELECTION: "V002",
@@ -27,7 +36,9 @@ var ErrorCodes = {
     V_MISSING_REQUIRED_PARAM: "V006",
     V_INVALID_PARAM_TYPE: "V007",
     V_SCHEMA_MISMATCH: "V008",
-    V_INVALID_PARAM_VALUE: "V009",
+    V_LIBRARY_NOT_FOUND: "V009",
+    V_LIBRARY_CONFLICT: "V010",
+    V_INVALID_PARAM_VALUE: "V011",
     // === RUNTIME (R) - fail during execution ===
     R_COLLECT_FAILED: "R001",
     R_COMPUTE_FAILED: "R002",
@@ -35,6 +46,13 @@ var ErrorCodes = {
     R_ITEM_OPERATION_FAILED: "R004",
     R_TIMEOUT: "R005",
     R_OUT_OF_BOUNDS: "R006",
+    R_LAYER_NOT_FOUND: "R007",
+    R_ELEMENT_NOT_FOUND: "R008",
+    R_UNKNOWN: "R009",
+    R_INJECTION_FAILED: "R010",
+    R_BUSY: "R011",
+    R_QUERY_FAILED: "R012",
+    R_PREFLIGHT_FAILED: "R013",
     // === EXECUTION (E) - infrastructure/dependency issues ===
     E_EXECUTION: "E001",
     // === SYSTEM (S) - Illustrator/environment issues ===
@@ -42,16 +60,19 @@ var ErrorCodes = {
     S_SCRIPT_ERROR: "S002",
     S_IO_ERROR: "S003",
     S_MEMORY_ERROR: "S004",
-    C_NESTING_NOT_ALLOWED: "C001",
-    C_PREV_UNAVAILABLE: "C002",
-    C_INVALID_TOKEN_POSITION: "C003",
-    C_UNKNOWN_TOKEN: "C004",
+    S_SYNTAX_ERROR: "S005",
+    S_REFERENCE_ERROR: "S006",
+    S_TYPE_ERROR: "S007",
+    S_RANGE_ERROR: "S008",
+    S_PERMISSION_DENIED: "S009",
+    S_LIBRARY_IO: "S010",
+    S_MANIFEST_ERROR: "S011",
     G_UNKNOWN_PROPERTY: "G001",
     G_INVALID_COMPARATOR: "G002",
     G_MALFORMED: "G003",
-    SP_MISSING_PREDICATE: "SP01",
-    SP_INVALID_RECT: "SP02",
-    SP_REF_NOT_FOUND: "SP03"
+    SP_MISSING_PREDICATE: "SP001",
+    SP_INVALID_RECT: "SP002",
+    SP_REF_NOT_FOUND: "SP003"
 };
 
 var RETRYABLE_CODES = [ErrorCodes.R_COLLECT_FAILED, ErrorCodes.R_COMPUTE_FAILED];

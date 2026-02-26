@@ -13,6 +13,7 @@ import logging
 from illustrator_mcp.shared import mcp
 from illustrator_mcp.proxy_client import execute_script_with_context, format_envelope
 from illustrator_mcp.libraries import get_injection_metadata
+from illustrator_mcp.errors import ErrorCode, make_envelope
 from illustrator_mcp.tools.base import ToolInputBase
 
 logger = logging.getLogger("illustrator_mcp")
@@ -191,13 +192,11 @@ if (typeof executeTask !== "function" || typeof validatePayload !== "function") 
             "script_length": len(script),
             "script_preview": script[:500] + "..." if len(script) > 500 else script
         }
-        return json.dumps({
-            "ok": True,
-            "warnings": [],
-            "error": None,
-            "diagnostics": diagnostics,
-            "result": debug_output
-        }, indent=2, default=str)
+        return make_envelope(
+            ok=True,
+            result=debug_output,
+            diagnostics=diagnostics,
+        )
 
     # Parse response and return standardized envelope
     try:
@@ -224,32 +223,28 @@ if (typeof executeTask !== "function" || typeof validatePayload !== "function") 
             if isinstance(err, dict) and "error" in err and isinstance(err["error"], dict):
                 err = err["error"]
             error_msg = err.get("message", "Unknown error") if err else "Query failed"
-            error_code = err.get("code", "QUERY_ERROR") if err else "QUERY_ERROR"
-            return json.dumps({
-                "ok": False,
-                "warnings": warnings,
-                "error": {"code": error_code, "message": error_msg},
-                "diagnostics": diagnostics,
-                "result": report
-            })
+            error_code = err.get("code", ErrorCode.R_QUERY_FAILED.value) if err else ErrorCode.R_QUERY_FAILED.value
+            return make_envelope(
+                ok=False,
+                error={"code": error_code, "message": error_msg},
+                warnings=warnings,
+                diagnostics={**diagnostics, "report": report},
+            )
 
         # Success case
-        return json.dumps({
-            "ok": report.get("ok", True),
-            "warnings": warnings,
-            "error": None,
-            "diagnostics": diagnostics,
-            "result": report
-        })
+        return make_envelope(
+            ok=report.get("ok", True),
+            result=report,
+            warnings=warnings,
+            diagnostics=diagnostics,
+        )
 
     except json.JSONDecodeError as e:
-        return json.dumps({
-            "ok": False,
-            "warnings": [],
-            "error": {"code": "JSON_PARSE_ERROR", "message": str(e)},
-            "diagnostics": diagnostics,
-            "result": response.get("result")
-        })
+        return make_envelope(
+            ok=False,
+            error={"code": ErrorCode.C_JSON_PARSE.value, "message": str(e)},
+            diagnostics=diagnostics,
+        )
 
 
 # ==================== Preflight Check Tool ====================
@@ -556,20 +551,17 @@ async def illustrator_preflight_check(params: PreflightCheckInput) -> str:
         non_info_issues = [i for i in preflight_data.get("issues", []) if i.get("severity") != "info"]
         is_ok = len(non_info_issues) == 0
 
-        return json.dumps({
-            "ok": is_ok,
-            "warnings": warnings,
-            "error": None,
-            "diagnostics": diagnostics,
-            "result": preflight_data
-        })
+        return make_envelope(
+            ok=is_ok,
+            result=preflight_data,
+            warnings=warnings,
+            diagnostics=diagnostics,
+        )
 
     except Exception as e:
         logger.error(f"Preflight check failed: {str(e)}")
-        return json.dumps({
-            "ok": False,
-            "warnings": [],
-            "error": {"code": "PREFLIGHT_ERROR", "message": str(e)},
-            "diagnostics": diagnostics,
-            "result": None
-        })
+        return make_envelope(
+            ok=False,
+            error={"code": ErrorCode.R_PREFLIGHT_FAILED.value, "message": str(e)},
+            diagnostics=diagnostics,
+        )

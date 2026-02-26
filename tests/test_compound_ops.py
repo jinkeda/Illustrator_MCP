@@ -15,6 +15,7 @@ SCRIPTS_DIR = pathlib.Path(__file__).resolve().parent.parent / "illustrator_mcp"
 OPS_CORE = (SCRIPTS_DIR / "ops_core.jsx").read_text(encoding="utf-8")
 OPS_COMPOUND = (SCRIPTS_DIR / "ops_compound.jsx").read_text(encoding="utf-8")
 CONTRACTS_PY = (SCRIPTS_DIR.parent.parent.parent / "illustrator_mcp" / "schemas" / "contracts.py").read_text(encoding="utf-8")
+ERRORS_PY = (SCRIPTS_DIR.parent.parent.parent / "illustrator_mcp" / "errors.py").read_text(encoding="utf-8")
 CONTRACTS_JSX = (SCRIPTS_DIR / "contracts.jsx").read_text(encoding="utf-8")
 MANIFEST = json.loads((SCRIPTS_DIR / "manifest.json").read_text(encoding="utf-8"))
 
@@ -127,18 +128,18 @@ class TestGuardNestingDepth:
 
 
 class TestGuardErrorCodes:
-    """Test 6: Compound error codes C001-C004 exist in contracts."""
+    """Test 6: Compound error codes C006-C009 exist in contracts."""
 
     @pytest.mark.parametrize("code,name", [
-        ("C001", "C_NESTING_NOT_ALLOWED"),
-        ("C002", "C_PREV_UNAVAILABLE"),
-        ("C003", "C_INVALID_TOKEN_POSITION"),
-        ("C004", "C_UNKNOWN_TOKEN"),
+        ("C006", "C_NESTING_NOT_ALLOWED"),
+        ("C007", "C_PREV_UNAVAILABLE"),
+        ("C008", "C_INVALID_TOKEN_POSITION"),
+        ("C009", "C_UNKNOWN_TOKEN"),
     ])
-    def test_error_code_in_contracts_py(self, code, name):
-        assert f'{name} = "{code}"' in CONTRACTS_PY
+    def test_error_code_in_errors_py(self, code, name):
+        assert f'{name} = "{code}"' in ERRORS_PY
 
-    @pytest.mark.parametrize("code", ["C001", "C002", "C003", "C004"])
+    @pytest.mark.parametrize("code", ["C006", "C007", "C008", "C009"])
     def test_error_code_in_contracts_jsx(self, code):
         """Compiled contracts.jsx must also contain the error codes."""
         assert code in CONTRACTS_JSX

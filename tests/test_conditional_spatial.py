@@ -16,31 +16,32 @@ OPS_CORE = (SCRIPTS_DIR / "ops_core.jsx").read_text(encoding="utf-8")
 TARGETS_JSX = (SCRIPTS_DIR / "targets.jsx").read_text(encoding="utf-8")
 TASK_PIPELINE = (SCRIPTS_DIR / "task_pipeline.jsx").read_text(encoding="utf-8")
 CONTRACTS_PY = (SCRIPTS_DIR.parent.parent.parent / "illustrator_mcp" / "schemas" / "contracts.py").read_text(encoding="utf-8")
+ERRORS_PY = (SCRIPTS_DIR.parent.parent.parent / "illustrator_mcp" / "errors.py").read_text(encoding="utf-8")
 CONTRACTS_JSX = (SCRIPTS_DIR / "contracts.jsx").read_text(encoding="utf-8")
 
 
 # ======================== Guard Tests (1-6) ========================
 
 class TestGuardErrorCodes:
-    """Test 1: G001-G003 and SP01-SP03 error codes exist in contracts."""
+    """Test 1: G001-G003 and SP001-SP003 error codes exist in errors.py."""
 
     @pytest.mark.parametrize("code,name", [
         ("G001", "G_UNKNOWN_PROPERTY"),
         ("G002", "G_INVALID_COMPARATOR"),
         ("G003", "G_MALFORMED"),
     ])
-    def test_guard_code_in_contracts_py(self, code, name):
-        assert f'{name} = "{code}"' in CONTRACTS_PY
+    def test_guard_code_in_errors_py(self, code, name):
+        assert f'{name} = "{code}"' in ERRORS_PY
 
     @pytest.mark.parametrize("code,name", [
-        ("SP01", "SP_MISSING_PREDICATE"),
-        ("SP02", "SP_INVALID_RECT"),
-        ("SP03", "SP_REF_NOT_FOUND"),
+        ("SP001", "SP_MISSING_PREDICATE"),
+        ("SP002", "SP_INVALID_RECT"),
+        ("SP003", "SP_REF_NOT_FOUND"),
     ])
-    def test_spatial_code_in_contracts_py(self, code, name):
-        assert f'{name} = "{code}"' in CONTRACTS_PY
+    def test_spatial_code_in_errors_py(self, code, name):
+        assert f'{name} = "{code}"' in ERRORS_PY
 
-    @pytest.mark.parametrize("code", ["G001", "G002", "G003", "SP01", "SP02", "SP03"])
+    @pytest.mark.parametrize("code", ["G001", "G002", "G003", "SP001", "SP002", "SP003"])
     def test_codes_in_contracts_jsx(self, code):
         """Compiled contracts.jsx must also contain the error codes."""
         assert code in CONTRACTS_JSX
@@ -358,24 +359,24 @@ def _get_validate_spatial_block():
     return TASK_PIPELINE[start:end_marker]
 
 
-class TestV009ErrorCode:
-    """Test 17: V_INVALID_PARAM_VALUE (V009) exists and is distinct from V007."""
+class TestV011ErrorCode:
+    """Test 17: V_INVALID_PARAM_VALUE (V011) exists and is distinct from V007."""
 
-    def test_v009_in_contracts_py(self):
-        assert "V_INVALID_PARAM_VALUE" in CONTRACTS_PY
-        assert '"V009"' in CONTRACTS_PY
+    def test_v011_in_errors_py(self):
+        assert "V_INVALID_PARAM_VALUE" in ERRORS_PY
+        assert '"V011"' in ERRORS_PY
 
-    def test_v009_in_contracts_jsx(self):
+    def test_v011_in_contracts_jsx(self):
         assert "V_INVALID_PARAM_VALUE" in CONTRACTS_JSX
-        assert '"V009"' in CONTRACTS_JSX
+        assert '"V011"' in CONTRACTS_JSX
 
-    def test_v009_distinct_from_v007(self):
-        """V009 (invalid value) is semantically different from V007 (invalid type)."""
-        assert "V_INVALID_PARAM_TYPE" in CONTRACTS_PY
-        assert "V_INVALID_PARAM_VALUE" in CONTRACTS_PY
+    def test_v011_distinct_from_v007(self):
+        """V011 (invalid value) is semantically different from V007 (invalid type)."""
+        assert "V_INVALID_PARAM_TYPE" in ERRORS_PY
+        assert "V_INVALID_PARAM_VALUE" in ERRORS_PY
         # They must have different codes
-        assert '"V007"' in CONTRACTS_PY
-        assert '"V009"' in CONTRACTS_PY
+        assert '"V007"' in ERRORS_PY
+        assert '"V011"' in ERRORS_PY
 
 
 class TestSpatialValidation:

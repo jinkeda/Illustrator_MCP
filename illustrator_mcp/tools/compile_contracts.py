@@ -23,12 +23,14 @@ from pathlib import Path
 PROJECT_ROOT = Path(__file__).parent.parent.parent
 sys.path.insert(0, str(PROJECT_ROOT))
 
+from illustrator_mcp.errors import ErrorCode
 from illustrator_mcp.schemas.contracts import (
     OpErrorCode,
     OP_SCHEMAS,
     OpSchema,
     TASK_PROTOCOL_VERSION,
     TASK_PROTOCOL_MAJOR_VERSIONS,
+    retryable_codes,
 )
 
 OUTPUT_PATH = (
@@ -59,11 +61,13 @@ def schema_to_dict(op: OpSchema) -> dict:
 
 
 def error_codes_to_dict() -> dict:
-    """Convert OpErrorCode enum to JSX-compatible dict."""
+    """Convert full ErrorCode enum to JSX-compatible dict.
+
+    Exports the entire enum — no subset filtering.
+    This guarantees 100% parity between Python and JSX.
+    """
     result = {}
-    for code in OpErrorCode:
-        if code.name == "retryable":
-            continue
+    for code in ErrorCode:
         result[code.name] = code.value
     return result
 
@@ -117,7 +121,7 @@ def render_jsx(schemas_dict: dict, errors_dict: dict, checksum: str) -> str:
     lines.append("")
 
     # Retryable codes
-    retryable = OpErrorCode.retryable()
+    retryable = retryable_codes()
     retryable_refs = ", ".join(f"ErrorCodes.{c.name}" for c in retryable)
     lines.append(f"var RETRYABLE_CODES = [{retryable_refs}];")
     lines.append("")

@@ -608,31 +608,39 @@ class TestExportDimensions:
 
     # --- PNG/JPG/SVG (computed from artboard + scale) ---
 
+    # Helper: render EXPORT_STANDARD with representative params for introspection
+    _EXPORT_STANDARD_RENDERED = templates.EXPORT_STANDARD.substitute(
+        ab_index_js="0", options_class="ExportOptionsPNG24",
+        scale_opts="", clip_opt="", path="/test.png",
+        export_type="ExportType.PNG24", scale="100",
+        fmt_name="PNG", artboard_clip="true",
+    )
+
     def test_png_export_script_has_dimension_vars(self):
         """PNG export JSX computes exportWidth and exportHeight."""
-        source = templates.EXPORT_STANDARD.template
+        source = self._EXPORT_STANDARD_RENDERED
         assert "exportWidth" in source
         assert "exportHeight" in source
 
     def test_dimension_formula_uses_artboard_rect(self):
         """Dimensions are derived from artboardRect, not document size."""
-        source = templates.EXPORT_STANDARD.template
+        source = self._EXPORT_STANDARD_RENDERED
         assert "abRect[2] - abRect[0]" in source   # width from artboard
         assert "abRect[3] - abRect[1]" in source    # height from artboard
 
     def test_dimension_formula_divides_by_100(self):
         """Scale is applied as percentage (divide by 100)."""
-        source = templates.EXPORT_STANDARD.template
+        source = self._EXPORT_STANDARD_RENDERED
         assert "/ 100" in source
 
     def test_dimension_uses_math_round(self):
         """Pixel dimensions are rounded to integers."""
-        source = templates.EXPORT_STANDARD.template
+        source = self._EXPORT_STANDARD_RENDERED
         assert "Math.round" in source
 
     def test_dimensions_returned_in_json(self):
         """width and height appear in the return JSON."""
-        source = templates.EXPORT_STANDARD.template
+        source = self._EXPORT_STANDARD_RENDERED
         assert "width: exportWidth" in source
         assert "height: exportHeight" in source
 
