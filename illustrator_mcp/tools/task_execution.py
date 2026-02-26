@@ -92,6 +92,14 @@ class ExecuteTaskInput(ToolInputBase):
         description="Force annotated preview on last SOC task, regardless of cadence. Does NOT override dryRun."
     )
 
+    clip_box: Optional[List[float]] = Field(
+        default=None,
+        description=(
+            "Optional high-resolution crop region: [xmin, ymin, xmax, ymax] in "
+            "screen-space Y-down points.  See illustrator_execute_script for details."
+        ),
+    )
+
 
 @mcp.tool(
     name="illustrator_execute_task",
@@ -266,13 +274,17 @@ JSON.stringify(report);
             if should_preview:
                 try:
                     import base64 as _b64
-                    raw_png = await _capture_artboard(max_dim=1024, timeout=30.0)
+                    raw_png = await _capture_artboard(
+                        max_dim=1024, timeout=30.0,
+                        clip_box=params.clip_box,
+                    )
                     if raw_png:
                         if mode == "annotated":
                             annotated_bytes, annotation_result = await _annotate_preview(
                                 img_bytes=raw_png,
                                 max_items=200,
                                 timeout=30.0,
+                                clip_box=params.clip_box,
                             )
                             ann_b64 = _b64.b64encode(annotated_bytes).decode('utf-8')
                             result_parts = [
@@ -287,6 +299,19 @@ JSON.stringify(report);
                                     text=json.dumps(annotation_result, indent=2),
                                 ),
                             ]
+                            # Clip box system note
+                            if params.clip_box:
+                                result_parts.append(TextContent(
+                                    type="text",
+                                    text=(
+                                        f"\u26a0\ufe0f CLIP BOX ACTIVE: This preview shows a "
+                                        f"high-resolution crop of region "
+                                        f"{params.clip_box} (screen-space Y-down, points). "
+                                        f"All element IDs and coordinates in the annotation "
+                                        f"map are in GLOBAL document coordinates. "
+                                        f"Use global coordinates for all subsequent edits."
+                                    ),
+                                ))
                         else:
                             # "artboard" mode — raw PNG, no overlay
                             raw_b64 = _b64.b64encode(raw_png).decode('utf-8')

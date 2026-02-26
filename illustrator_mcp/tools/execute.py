@@ -167,9 +167,16 @@ class ExecuteScriptInput(ToolInputBase):
         le=500
     )
 
-    preview_bounds: Optional[List[float]] = Field(
+    clip_box: Optional[List[float]] = Field(
         default=None,
-        description="[x, y, w, h] crop bounds for preview_mode='bounds'. Ignored for 'artboard'."
+        description=(
+            "Optional high-resolution crop region: [xmin, ymin, xmax, ymax] in "
+            "screen-space Y-down points.  When set, the preview exports a zoomed, "
+            "upscaled crop of just this region.  Annotations are culled and mapped "
+            "to the crop.  All coordinates in the annotation map remain in global "
+            "document space.  Use this when fine details are too small to see or "
+            "when annotation tags overlap in dense areas."
+        ),
     )
 
     preview_max_dim: int = Field(
@@ -482,6 +489,7 @@ async def illustrator_execute_script(params: ExecuteScriptInput) -> Union[str, l
                             max_items=params.preview_max_items,
                             timeout=params.timeout,
                             probe_points=params.probe_points,
+                            clip_box=params.clip_box,
                         )
                         ann_b64 = _b64.b64encode(annotated_bytes).decode('utf-8')
                         result_parts = [
@@ -496,6 +504,19 @@ async def illustrator_execute_script(params: ExecuteScriptInput) -> Union[str, l
                                 text=json.dumps(annotation_result, indent=2),
                             ),
                         ]
+                        # Clip box system note
+                        if params.clip_box:
+                            result_parts.append(TextContent(
+                                type="text",
+                                text=(
+                                    f"\u26a0\ufe0f CLIP BOX ACTIVE: This preview shows a "
+                                    f"high-resolution crop of region "
+                                    f"{params.clip_box} (screen-space Y-down, points). "
+                                    f"All element IDs and coordinates in the annotation "
+                                    f"map are in GLOBAL document coordinates. "
+                                    f"Use global coordinates for all subsequent edits."
+                                ),
+                            ))
                         # Cognitive Forcing Function: append checkpoint
                         # instruction as absolute LAST element so it has
                         # maximum recency weight in the LLM's attention.

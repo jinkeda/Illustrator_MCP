@@ -557,6 +557,8 @@ def draw_ruler_overlay(
     artboard_width_pt: float,
     artboard_height_pt: float,
     tick_interval_pt: float = 0,
+    origin_x_pt: float = 0.0,
+    origin_y_pt: float = 0.0,
 ) -> bytes:
     """Draw coordinate axis rulers along top and left edges of a PNG.
 
@@ -565,11 +567,17 @@ def draw_ruler_overlay(
     ``spatial_context`` (returned by ``set_reference``) and
     ``bounds_screen`` (used in ``vlm_grounding``).
 
+    When *origin_x_pt* / *origin_y_pt* are non-zero (i.e. a clip_box is
+    active), tick labels are offset so that the ruler shows **absolute**
+    (global) document coordinates rather than starting from 0.
+
     Args:
         img_bytes: Raw PNG bytes.
-        artboard_width_pt: Artboard width in points.
-        artboard_height_pt: Artboard height in points.
+        artboard_width_pt: Artboard (or clip region) width in points.
+        artboard_height_pt: Artboard (or clip region) height in points.
         tick_interval_pt: Major tick interval in points (0 = auto).
+        origin_x_pt: Global X origin offset in points (screen-space).
+        origin_y_pt: Global Y origin offset in points (screen-space).
 
     Returns:
         Annotated PNG bytes (same dimensions, no resize).  Falls back
@@ -608,7 +616,11 @@ def draw_ruler_overlay(
 
         # ── Origin marker ──
         origin_font = _load_font(font_sz + 2)  # slightly bolder
-        _draw_text_with_halo(draw, (pad, pad), "0", origin_font,
+        if origin_x_pt or origin_y_pt:
+            origin_label = f"{int(origin_x_pt)},{int(origin_y_pt)}"
+        else:
+            origin_label = "0"
+        _draw_text_with_halo(draw, (pad, pad), origin_label, origin_font,
                             fg=(255, 255, 255, 255))
         # crosshair lines from corner
         draw.line([(band, 0), (band, band)], fill=_RULER_TICK_COLOR, width=1)
@@ -624,23 +636,42 @@ def draw_ruler_overlay(
             artboard_dim: float,
             interval: float,
             scale: float,
-        ) -> None:
+            origin_offset: float = 0.0,
+        ) -> int:
             # Minor ticks (half-interval) — only if not too dense
             half_iv = interval / 2
             draw_minors = artboard_dim / half_iv <= 24
 
-            # Major ticks: 0, iv, 2*iv, ... up to last tick ≤ artboard_dim
-            max_tick = int(artboard_dim // interval) * int(interval)
-            major_ticks = list(range(0, max_tick + 1, int(interval)))
+            # Snap first tick to grid: first multiple of interval >= 0
+            # relative to the origin-aligned grid.
+            # For absolute rulers, we want ticks at global-grid positions.
+            first_tick_offset = 0.0
+            if origin_offset:
+                remainder = origin_offset % interval
+                if remainder > 0:
+                    first_tick_offset = interval - remainder
+
+            # Major ticks from first_tick_offset to artboard_dim
+            major_ticks: list = []
+            t = first_tick_offset
+            while t <= artboard_dim + 0.5:
+                major_ticks.append(t)
+                t += interval
 
             # Minor tick positions (excluding major positions)
-            minor_ticks: List[int] = []
+            minor_ticks: list = []
             if draw_minors:
-                max_minor = int(artboard_dim // half_iv) * int(half_iv)
-                minor_ticks = [
-                    t for t in range(0, max_minor + 1, int(half_iv))
-                    if t not in set(major_ticks)
-                ]
+                first_minor = 0.0
+                if origin_offset:
+                    minor_rem = origin_offset % half_iv
+                    if minor_rem > 0:
+                        first_minor = half_iv - minor_rem
+                mt = first_minor
+                major_set = set(round(x, 2) for x in major_ticks)
+                while mt <= artboard_dim + 0.5:
+                    if round(mt, 2) not in major_set:
+                        minor_ticks.append(mt)
+                    mt += half_iv
 
             # Draw minor ticks (no labels)
             for tick_pt in minor_ticks:
@@ -660,7 +691,8 @@ def draw_ruler_overlay(
             last_label_end = -1  # px position of last label's trailing edge
             for tick_pt in major_ticks:
                 px = int(round(tick_pt * scale))
-                label = str(tick_pt)
+                # Label shows absolute (global) coordinate
+                label = str(int(round(tick_pt + origin_offset)))
 
                 if axis == "x":
                     # Tick line
@@ -697,26 +729,30 @@ def draw_ruler_overlay(
                                         fg=_RULER_TICK_COLOR)
                     last_label_end = ly + th
 
-        _draw_axis_ticks("x", artboard_width_pt, iv_x, sx)
-        _draw_axis_ticks("y", artboard_height_pt, iv_y, sy)
+            return last_label_end
 
-        # ── Terminal extent markers ──
+        x_last_end = _draw_axis_ticks("x", artboard_width_pt, iv_x, sx, origin_x_pt)
+        y_last_end = _draw_axis_ticks("y", artboard_height_pt, iv_y, sy, origin_y_pt)
+
+        # ── Terminal extent markers (anti-overlap with last tick) ──
         dim_color = (200, 200, 200, 160)
-        # X-axis: show artboard width at the right end
-        w_label = str(int(artboard_width_pt))
+        # X-axis: show global max X at the right end
+        w_label = str(int(origin_x_pt + artboard_width_pt))
         w_tw, w_th = _measure_text(font, w_label)
         w_px = int(round(artboard_width_pt * sx))
-        if w_px - w_tw - pad > band:  # only if it fits
-            _draw_text_with_halo(draw, (w_px - w_tw - pad, pad), w_label,
+        w_lx = w_px - w_tw - pad
+        if w_lx > band and w_lx > x_last_end + 2:  # fits AND no overlap
+            _draw_text_with_halo(draw, (w_lx, pad), w_label,
                                 font, fg=dim_color)
             draw.line([(w_px - 1, 0), (w_px - 1, band)],
                       fill=dim_color, width=1)
-        # Y-axis: show artboard height at the bottom end
-        h_label = str(int(artboard_height_pt))
+        # Y-axis: show global max Y at the bottom end
+        h_label = str(int(origin_y_pt + artboard_height_pt))
         h_tw, h_th = _measure_text(font, h_label)
         h_px = int(round(artboard_height_pt * sy))
-        if h_px - h_th - pad > band:
-            _draw_text_with_halo(draw, (pad, h_px - h_th - pad), h_label,
+        h_ly = h_px - h_th - pad
+        if h_ly > band and h_ly > y_last_end + 2:  # fits AND no overlap
+            _draw_text_with_halo(draw, (pad, h_ly), h_label,
                                 font, fg=dim_color)
             draw.line([(0, h_px - 1), (band, h_px - 1)],
                       fill=dim_color, width=1)

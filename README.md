@@ -384,6 +384,30 @@ execute_script(
 
 Probe coordinates use the same screen-space Y-down convention as rulers. Colors cycle through a 6-color palette. Rendering is non-fatal — probes are skipped gracefully if Pillow is unavailable.
 
+### Regional Zoom (`clip_box`)
+
+Pass `clip_box` to `execute_script` or `execute_task` to generate a high-resolution crop of a specific region. This solves the VLM patch resolution limit — fine details like 3pt vector elements are invisible at full-artboard zoom but become clearly visible in a regional crop.
+
+```python
+execute_script(
+    script="...",
+    return_preview=True,
+    preview_mode="annotated",
+    clip_box=[580, 420, 680, 510]  # [xmin, ymin, xmax, ymax] screen-space Y-down
+)
+```
+
+| Feature | Behavior |
+|---|---|
+| **Coordinate input** | Screen-space Y-down points (matches rulers, `bounds_screen`) |
+| **Export** | Creates a temporary artboard for the crop, exports at up to 776% scale (Illustrator engine limit), then cleans up |
+| **Item culling** | ExtendScript-side AABB intersection check — only items in the clip region count against `max_items` |
+| **Annotation coordinates** | Always **global** document coordinates — use them directly for follow-up edits |
+| **Ruler overlay** | Shows **absolute** tick labels (e.g., 580, 600, 620... not 0, 20, 40...) |
+| **Probe points** | Automatically remapped to clip-relative coordinates |
+| **Beyond-bounds** | Clip rect is clamped to artboard edges — no crash if the region extends past the document |
+| **System note** | `⚠️ CLIP BOX ACTIVE: ...` injected into the response when clip_box is set |
+
 ### VLM QA Cadence
 
 The server automatically injects an annotated preview every **5th** `execute_script` call, even if the caller didn't request one. This forces the AI to periodically *see* the canvas and catch visual defects (broken glyphs, overlaps, misaligned items) before they accumulate.
@@ -623,7 +647,7 @@ Illustrator_MCP/
 │   │   ├── components/MCPControlPanel.tsx
 │   │   └── hooks/useMCP.ts       # WebSocket connection hook
 │   └── vite.config.ts
-├── tests/                        # Unit tests (pytest, 1200+ tests)
+├── tests/                        # Unit tests (pytest, 1230+ tests)
 │   ├── conftest.py               # Shared fixtures + collection-error guard
 │   ├── test_execute.py
 │   ├── test_documents.py
@@ -638,6 +662,7 @@ Illustrator_MCP/
 │   ├── test_overlay.py
 │   ├── test_svgd.py              # SVG path parser tests (35 tests)
 │   ├── test_import_svg.py        # SVG import tool tests (9 tests)
+│   ├── test_clip_box.py          # Regional zoom / clip_box tests (28 tests)
 │   ├── test_clip_ops.py          # Clipping mask schema + handler guard tests
 │   ├── test_grid_helper.py       # Grid discovery tests
 │   ├── test_vlm_grounding.py     # VLM grounding pipeline tests (42 tests)
