@@ -80,7 +80,7 @@ class TestRefactoredSites:
     def test_element_create_batch_uses_helper(self):
         src = _read(OPS_ELEMENT)
         start = src.index('registerOpHandler("element_create_batch"')
-        section = src[start:start + 2000]
+        section = src[start:start + 5000]
         assert "_resolveTargetLayer(" in section
 
 

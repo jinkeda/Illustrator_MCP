@@ -21,7 +21,6 @@ from illustrator_mcp.utils import escape_path_for_jsx
 from illustrator_mcp.proxy_client import execute_script_with_context, format_envelope
 from illustrator_mcp.errors import make_envelope
 from illustrator_mcp.libraries import get_injection_metadata
-from illustrator_mcp import templates
 
 logger = logging.getLogger(__name__)
 
@@ -390,10 +389,10 @@ async def _handle_checkpoint(params: HistoryInput) -> str:
         "checkpoint_list": "checkpointList",
         "checkpoint_delete": "checkpointDelete",
     }
-    jsx_fn = action_map[params.action]
-
     if params.action not in action_map:
         return make_envelope(ok=False, error=f"Unknown checkpoint action: {params.action}")
+
+    jsx_fn = action_map[params.action]
 
     if params.action == "checkpoint_list":
         name_arg = ""

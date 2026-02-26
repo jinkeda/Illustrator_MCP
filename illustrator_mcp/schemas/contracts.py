@@ -7,7 +7,7 @@ contracts.jsx for the JSX runtime.
 
 DO NOT define schemas in JSX files directly. This is the SSOT.
 
-Schema version: 1.6 — added smooth/tension for Catmull-Rom auto-smoothing
+Schema version: 1.7 — added handles (polar/relative), mirror, mirrorOrigin for Level 3/4
 """
 
 from enum import Enum
@@ -151,6 +151,10 @@ OP_SCHEMAS: List[OpSchema] = [
         "closed":       _p(B),
         "smooth":       _p(B, desc="Auto-smooth points via Catmull-Rom spline"),
         "tension":      _p(N, desc="Smooth tension 0-1 (0=straight, 0.5=Catmull-Rom, 1.0=loose)"),
+        "handles":      _p(A, desc="Per-point handle specs: polar {angle,length,symmetric} or relative {dx,dy}"),
+        "mirror":       _p(S, desc="Symmetry modifier",
+                            enum=["mirror_y_bottom", "mirror_y_top", "mirror_x_right", "mirror_x_left"]),
+        "mirrorOrigin": _p(N, desc="Mirror axis coordinate (auto-detected if omitted)"),
         "x2":           _p(N),
         "y2":           _p(N),
         "contents":     _p(S),
@@ -225,6 +229,7 @@ OP_SCHEMAS: List[OpSchema] = [
         "template":     _p(O, desc="Template shape {type, fill?, stroke?, ...}"),
         "instances":    _p(A, desc="Array of {x, y, fill?, stroke?, scale?}"),
         "items":        _p(A, desc="Heterogeneous batch [{type, ...}, ...]"),
+        "array":        _p(O, desc="Array generation {count, startX, startY, spacingX?, spacingY?, cols?}"),
         "defaultStyle": _p(O, desc="Default style for items without explicit style"),
         "layer":        _p(S),
         "name":         _p(S),

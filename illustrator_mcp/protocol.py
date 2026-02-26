@@ -361,9 +361,9 @@ def format_task_report(report: TaskReport, task_name: str) -> str:
     
     # Stats
     stats = report.stats
-    lines.append(f"  Stats: {stats.itemsProcessed} processed, "
-                 f"{stats.itemsModified} modified, "
-                 f"{stats.itemsSkipped} skipped")
+    lines.append(f"  Stats: {stats.itemsProcessed} ops, "
+                 f"{stats.itemsModified} created/modified, "
+                 f"{stats.itemsSkipped} failed")
     
     # Warnings
     if report.warnings:

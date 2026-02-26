@@ -1054,24 +1054,102 @@ registerOpHandler("element_create_batch", function (params, targets, ctx) {
     var abTop = _artboardTop(doc);
     var abLeft = _artboardLeft(doc);
 
-    // Mutual exclusion: template XOR items
-    if (params.template && params.items) {
+    // ── Mode validation ──────────────────────────────────────────────
+    // Allowed modes (mutually exclusive):
+    //   1. items[]              — heterogeneous batch
+    //   2. template + instances — explicit positions
+    //   3. template + array    — generated positions
+    // Disallowed:
+    //   - array without template
+    //   - template without instances AND without array
+    //   - items combined with template/instances/array
+
+    var hasTemplate = !!params.template;
+    var hasInstances = params.instances && params.instances.length;
+    var hasItems = params.items && params.items.length;
+    var hasArray = !!params.array;
+
+    // Guard: items combined with template-family params
+    if (hasItems && (hasTemplate || hasInstances || hasArray)) {
         return makeError(ErrorCodes.V_INVALID_PARAM_TYPE,
-            "cannot specify both 'template' and 'items'", "validate");
+            "cannot combine 'items' with 'template'/'instances'/'array'", "validate");
     }
-    if (params.template && (!params.instances || !params.instances.length)) {
+
+    // Guard: array without template
+    if (hasArray && !hasTemplate) {
+        return makeError(ErrorCodes.V_INVALID_PARAM_TYPE,
+            "'array' requires 'template'", "validate");
+    }
+
+    // Guard: template without instances and without array
+    if (hasTemplate && !hasInstances && !hasArray) {
         return makeError(ErrorCodes.V_MISSING_REQUIRED_PARAM,
-            "'instances' array required with 'template'", "validate");
+            "'instances' or 'array' required with 'template'", "validate");
+    }
+
+    // ── Array expansion: generate instances[] from array params ──────
+    if (hasTemplate && hasArray && !hasInstances) {
+        var arr = params.array;
+        var count = arr.count;
+
+        // Validate count is a finite integer >= 0
+        if (typeof count !== "number" || !isFinite(count) || Math.floor(count) !== count) {
+            return makeError(ErrorCodes.V_INVALID_PARAM_VALUE,
+                "array.count must be a finite integer", "validate");
+        }
+        if (count < 0) {
+            return makeError(ErrorCodes.V_INVALID_PARAM_VALUE,
+                "array.count must be >= 0", "validate");
+        }
+        if (count > 10000) {
+            return makeError(ErrorCodes.V_INVALID_PARAM_VALUE,
+                "array.count exceeds maximum (10000)", "validate");
+        }
+
+        // Early return: count=0 → empty result, skip template creation
+        if (count === 0) {
+            return {
+                ok: true,
+                data: { created: 0, skipped: 0, failed: 0, ids: [], bounds: null, mode: "array" },
+                warnings: []
+            };
+        }
+
+        var cols = (arr.cols != null) ? arr.cols : count;
+
+        // Validate cols is a finite integer >= 1
+        if (typeof cols !== "number" || !isFinite(cols) || Math.floor(cols) !== cols) {
+            return makeError(ErrorCodes.V_INVALID_PARAM_VALUE,
+                "array.cols must be a finite integer", "validate");
+        }
+        if (cols < 1) {
+            return makeError(ErrorCodes.V_INVALID_PARAM_VALUE,
+                "array.cols must be >= 1", "validate");
+        }
+
+        var sx = arr.startX || 0;
+        var sy = arr.startY || 0;
+        var dx = arr.spacingX || 0;
+        var dy = arr.spacingY || 0;
+
+        var generated = [];
+        for (var ai = 0; ai < count; ai++) {
+            __mcp_check();
+            var col = ai % cols;
+            var row = Math.floor(ai / cols);
+            generated.push({ x: sx + col * dx, y: sy + row * dy });
+        }
+        params.instances = generated;
     }
 
     // === Template mode: duplicate() instancing ===
-    if (params.template) {
+    if (hasTemplate) {
         // Validate template type upfront (contract-level check)
-        var _VALID_TEMPLATE_TYPES = { ellipse: 1, rect: 1, line: 1, polyline: 1, path: 1 };
+        var _VALID_TEMPLATE_TYPES = { ellipse: 1, rect: 1, line: 1, polyline: 1, path: 1, polygon: 1, star: 1 };
         if (!params.template.type || !_VALID_TEMPLATE_TYPES[params.template.type]) {
             return makeError(ErrorCodes.V_INVALID_PARAM_TYPE,
                 "invalid template.type: '" + (params.template.type || "(missing)") +
-                "'. Valid types: ellipse, rect, line, polyline, path", "validate");
+                "'. Valid: ellipse, rect, line, polyline, path, polygon, star", "validate");
         }
         return _createFromTemplate(params, doc, abTop, abLeft, ctx);
     }

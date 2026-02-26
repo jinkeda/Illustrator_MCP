@@ -15,7 +15,7 @@ from pydantic import Field, model_validator
 from mcp.types import ImageContent, TextContent
 
 from illustrator_mcp.shared import mcp
-from illustrator_mcp.proxy_client import execute_script_with_context, format_envelope
+from illustrator_mcp.proxy_client import execute_script_with_context, build_envelope_dict
 from illustrator_mcp.errors import make_envelope
 from illustrator_mcp.protocol import TaskPayload, TaskReport, format_task_report
 from illustrator_mcp.tools.base import ToolInputBase
@@ -29,6 +29,53 @@ from illustrator_mcp.tools.preview import (
 logger = logging.getLogger("illustrator_mcp")
 
 _TEMPLATES_DIR = Path(__file__).parent.parent / "resources" / "templates"
+
+
+def _taskreport_first_error(report_data: dict, task_name: str) -> dict:
+    """Extract first TaskReport error into canonical {code, message, suggestions} shape.
+
+    Handles nested ``{ok, error:{...}}`` shapes from ``makeError()``
+    and falls back to :func:`create_structured_error` for unknown formats.
+    """
+    from illustrator_mcp.errors import create_structured_error
+
+    errors = report_data.get("errors", [])
+    if not errors:
+        return {"code": "R009", "message": f"Task '{task_name}' failed", "suggestions": []}
+
+    first = errors[0]
+    # Unwrap nested {ok, error:{...}} shape from makeError()
+    if isinstance(first, dict) and "error" in first and isinstance(first["error"], dict):
+        first = first["error"]
+
+    if isinstance(first, dict) and "code" in first and "message" in first:
+        out = {
+            "code": first["code"],
+            "message": first["message"],
+            "suggestions": first.get("suggestions", []),
+        }
+        out["operation"] = first.get("operation", task_name)
+        return out
+
+    # Fallback: classify via create_structured_error
+    msg = first.get("message", str(first)) if isinstance(first, dict) else str(first)
+    s = create_structured_error(msg)
+    return {
+        "code": s.code, "message": s.message,
+        "suggestions": s.suggestions, "operation": task_name,
+    }
+
+
+def _dedup_warnings(*warning_lists: list) -> list:
+    """Merge warning lists preserving order, removing duplicates."""
+    seen: set = set()
+    result: list = []
+    for wl in warning_lists:
+        for w in (wl or []):
+            if w not in seen:
+                seen.add(w)
+                result.append(w)
+    return result
 
 
 @lru_cache(maxsize=16)
@@ -102,6 +149,58 @@ class ExecuteTaskInput(ToolInputBase):
     )
 
 
+# ── Level 3/4 preprocessing helper ──────────────────────────────
+
+def _preprocess_element_create(payload_data: dict) -> None:
+    """Preprocess polar handles and mirror modifiers (mutates in-place).
+
+    Pipeline order:
+      1. Validate guards (type, mutual exclusion)
+      2. If 'handles': resolve polar/relative → absolute triplets
+      3. If 'mirror': mirror resolved points (including handles) + dedup seam
+      4. Strip preprocess-only keys (handles, mirror, mirrorOrigin)
+    """
+    params = payload_data.get("params", {})
+
+    # Guard: only for path type with points
+    ptype = params.get("type")
+    if ptype != "path":
+        # Clean up orphan preprocess keys on non-path types
+        params.pop("handles", None)
+        params.pop("mirror", None)
+        params.pop("mirrorOrigin", None)
+        return
+    if "points" not in params:
+        return
+
+    # Mutual exclusion: handles + smooth
+    if params.get("handles") and params.get("smooth"):
+        raise ValueError(
+            "handles and smooth are mutually exclusive. "
+            "Use handles for explicit Bézier control, or smooth for auto Catmull-Rom."
+        )
+
+    # Orphan mirrorOrigin without mirror
+    if params.get("mirrorOrigin") is not None and not params.get("mirror"):
+        params.pop("mirrorOrigin", None)
+
+    from illustrator_mcp.curves import resolve_polar_handles, mirror_points
+
+    # Step 1: Resolve polar/relative handles → absolute triplets
+    if params.get("handles"):
+        params["points"] = resolve_polar_handles(params["points"], params["handles"])
+        del params["handles"]
+
+    # Step 2: Mirror resolved points (including handles) + dedup seam
+    if params.get("mirror"):
+        params["points"] = mirror_points(
+            params["points"], params["mirror"], params.get("mirrorOrigin")
+        )
+        params["closed"] = True  # mirrored paths are always closed
+        del params["mirror"]
+        params.pop("mirrorOrigin", None)
+
+
 @mcp.tool(
     name="illustrator_execute_task",
     annotations={
@@ -123,24 +222,41 @@ async def illustrator_execute_task(params: ExecuteTaskInput) -> Union[str, list]
     - Supports dryRun and trace modes
     - Per-item error localization via itemRef
     
+    COMMON PATTERNS (use these before falling back to raw execute_script):
+
+    Smooth curve (Catmull-Rom — no handle math):
+      {task: "element_create", params: {
+        type: "path", points: [[0,50],[50,0],[100,50],[150,0]],
+        smooth: true, tension: 0.5, fill: {r: 0, g: 150, b: 136}}}
+
+    Batch shapes (47 windows in a row, 15pt apart):
+      {task: "element_create_batch", params: {
+        template: {type: "ellipse", rx: 4, ry: 3, fill: {r: 200, g: 220, b: 240}},
+        array: {count: 47, startX: 180, startY: 145, spacingX: 15},
+        name: "window"}}
+
+    Grid layout (10×5 grid of squares):
+      {task: "element_create_batch", params: {
+        template: {type: "rect", w: 8, h: 8, fill: {r: 100, g: 100, b: 100}},
+        array: {count: 50, startX: 10, startY: 10, spacingX: 15, spacingY: 15, cols: 10}}}
+
+    Boolean sculpt (use path_boolean tool instead):
+      path_boolean(operation="unite", subject="body_id", clip=["canopy_id"])
+
+    SVG path import (use path_import_svg tool):
+      path_import_svg(d="M 0 100 C 30 20, 70 20, 100 100", fill={r: 200, g: 50, b: 50})
+
     TARGET SELECTORS:
     - {type: "selection"} - Current selection (default)
     - {type: "layer", layer: "Layer 1"} - All items in layer
     - {type: "query", itemType: "PathItem", pattern: "axis_*"} - Pattern match
     - {type: "all", recursive: true} - All items in document
+    - {type: "id", ids: ["A1", "A2"]} - Stable MCP ID targeting
     
     OPTIONS:
     - dryRun: true - Compute actions but don't apply
     - trace: true - Include execution trace in report
     - assignIds: true - Write unique IDs to item.note (opt-in)
-    
-    Example payload:
-        {
-            "task": "apply_fill_color",
-            "targets": {"type": "selection"},
-            "params": {"color": {"r": 255, "g": 0, "b": 0}},
-            "options": {"trace": true}
-        }
     """
     # ── SVG d-param removed — redirect to path_import_svg ──────
     payload = params.payload
@@ -156,7 +272,29 @@ async def illustrator_execute_task(params: ExecuteTaskInput) -> Union[str, list]
         )
 
     # Build the execution script
-    payload_json = json.dumps(params.payload.model_dump())
+    # SOC batch mode: force kind="creation" so pipeline skips collect
+    # and doesn't early-return before reaching compute stage.
+    payload_data = params.payload.model_dump(mode="json")
+
+    # ── Level 3/4 preprocessing: polar handles + mirror ──────
+    if payload.task == "element_create":
+        _preprocess_element_create(payload_data)
+
+    # Auto-detect creation ops that don't need target collection
+    _CREATION_OPS = {
+        "element_create", "element_create_batch", "element_create_multi",
+        "text_create", "layer_create",
+    }
+    is_creation_op = payload.task in _CREATION_OPS
+    if params.compute_fn is None and (not payload.targets or is_creation_op):
+        if "options" not in payload_data:
+            payload_data["options"] = {}
+        payload_data["options"]["kind"] = "creation"
+        logger.debug(
+            "execute_task: injected kind=creation for task=%s (targets=%s)",
+            payload.task, payload.targets,
+        )
+    payload_json = json.dumps(payload_data)
     
     # Build compute/apply function blocks
     if params.compute_fn is not None:
@@ -189,10 +327,20 @@ var report = executeTask(
 JSON.stringify(report);
 """
     
-    # Dedup + stable-order: polyfills first, then user includes
-    seen = {"polyfills"}
-    all_includes = ["polyfills"]
-    for inc in params.includes:
+    # ── Auto-includes: inject libraries the generated script requires ──
+    # executeTask() needs task_pipeline; SOC batch mode needs ops_core
+    # for executeOpBatch(). The ops_* modules register handlers via
+    # registerOpHandler(); without them, JSX returns V003 "Unknown op".
+    auto = [
+        "polyfills", "task_pipeline", "ops_core",
+        "ops_element", "ops_layer", "ops_style", "ops_text",
+        "ops_group", "ops_align", "ops_measure", "ops_compound",
+    ]
+
+    # Dedup + stable-order: auto includes first, then user includes
+    seen = set(auto)
+    all_includes = list(auto)
+    for inc in (params.includes or []):
         if inc not in seen:
             seen.add(inc)
             all_includes.append(inc)
@@ -220,137 +368,154 @@ JSON.stringify(report);
 
         context = f"execute_task: {params.payload.task}"
 
-        # Check for pipeline-level errors (connection, library injection, etc.)
-        if response.get("error"):
-            return format_envelope(response, context=context, diagnostics=diagnostics)
+        # ── Phase 1: Canonical unwrap + classify ──
+        base = build_envelope_dict(response, context=context, diagnostics=diagnostics)
+        if not base["ok"]:
+            return json.dumps(base)  # short-circuit: bridge/injection/JSX error
 
-        # Try to parse TaskReport for formatted output
+        # ── Phase 2: Parse TaskReport from classified result ──
+        local_warnings = []
+        is_dry_run = params.payload.options.dryRun if params.payload.options else False
+        if is_dry_run:
+            diagnostics["preview_state"] = "pre_execution"
+
+        # VLM QA Cadence: soft-override for execute_task
+        # return_preview tri-state: None=allow, True=force, False=suppress
+        if is_task_checkpoint and params.return_preview is False and not params.final_step:
+            local_warnings.append(
+                f"VLM QA checkpoint skipped (mutation #{count}). "
+                "Consider using return_preview=True to visually verify."
+            )
+            is_task_checkpoint = False
+
+        mode = params.preview_mode or "annotated"
+        if mode not in ("annotated", "artboard"):
+            local_warnings.append(f"Unknown preview_mode '{mode}', defaulting to 'annotated'")
+            mode = "annotated"
+
+        merged_warnings = _dedup_warnings(base.get("warnings", []), local_warnings)
+        merged_diag = {**base.get("diagnostics", {}), **diagnostics}
+
         try:
-            result = response.get("result", "{}")
-            if isinstance(result, str):
-                report_data = json.loads(result)
+            raw_result = base.get("result")
+            if isinstance(raw_result, str):
+                report_data = json.loads(raw_result)
+            elif isinstance(raw_result, dict):
+                report_data = raw_result
             else:
-                report_data = result
-
+                report_data = {}
             report = TaskReport.model_validate(report_data)
             formatted = format_task_report(report, params.payload.task)
-
-            # Return envelope with formatted report as result
-            is_dry_run = params.payload.options.dryRun if params.payload.options else False
-            if is_dry_run:
-                diagnostics["preview_state"] = "pre_execution"
-            else:
-                diagnostics["preview_state"] = "post_execution" if report.ok else "error"
-
-            # ── VLM QA Cadence: soft-override for execute_task ──────────
-            # return_preview tri-state semantics:
-            #   None  → allow checkpoint preview (default)
-            #   True  → force preview (unless dryRun)
-            #   False → suppress checkpoint preview (unless final_step)
-            warnings = []
-
-            if is_task_checkpoint and params.return_preview is False and not params.final_step:
-                warnings.append(
-                    f"VLM QA checkpoint skipped (mutation #{count}). "
-                    "Consider using return_preview=True to visually verify."
-                )
-                is_task_checkpoint = False
-
-            # Normalize preview mode with fallback
-            mode = params.preview_mode or "annotated"
-            if mode not in ("annotated", "artboard"):
-                warnings.append(f"Unknown preview_mode '{mode}', defaulting to 'annotated'")
-                mode = "annotated"
-
-            envelope = make_envelope(
-                ok=report.ok,
-                result={"formatted": formatted, "report": report_data},
-                warnings=warnings,
-                diagnostics=diagnostics,
+        except Exception as exc:
+            logger.warning(f"Failed to parse TaskReport: {exc}")
+            # Include bounded excerpt for debugging
+            parse_diag = {**merged_diag, "taskreport_parse": {"type": type(raw_result).__name__}}
+            if isinstance(raw_result, str):
+                parse_diag["taskreport_parse"]["excerpt"] = raw_result[:200]
+            return make_envelope(
+                ok=False,
+                error={"code": "R010",
+                       "message": f"Could not parse TaskReport: {exc}",
+                       "suggestions": ["Check JSX script output format"]},
+                warnings=merged_warnings,
+                diagnostics=parse_diag,
             )
 
-            # ── Auto-Grounding: preview at cadence, manual request, or final_step ──
-            should_preview = (is_task_checkpoint or params.return_preview is True) and not is_dry_run
-            if should_preview:
-                try:
-                    import base64 as _b64
-                    raw_png = await _capture_artboard(
-                        max_dim=1024, timeout=30.0,
-                        clip_box=params.clip_box,
-                    )
-                    if raw_png:
-                        if mode == "annotated":
-                            annotated_bytes, annotation_result = await _annotate_preview(
-                                img_bytes=raw_png,
-                                max_items=200,
-                                timeout=30.0,
-                                clip_box=params.clip_box,
-                            )
-                            ann_b64 = _b64.b64encode(annotated_bytes).decode('utf-8')
-                            result_parts = [
-                                TextContent(type="text", text=envelope),
-                                ImageContent(
-                                    type="image",
-                                    data=ann_b64,
-                                    mimeType="image/png",
-                                ),
-                                TextContent(
-                                    type="text",
-                                    text=json.dumps(annotation_result, indent=2),
-                                ),
-                            ]
-                            # Clip box system note
-                            if params.clip_box:
-                                result_parts.append(TextContent(
-                                    type="text",
-                                    text=(
-                                        f"\u26a0\ufe0f CLIP BOX ACTIVE: This preview shows a "
-                                        f"high-resolution crop of region "
-                                        f"{params.clip_box} (screen-space Y-down, points). "
-                                        f"All element IDs and coordinates in the annotation "
-                                        f"map are in GLOBAL document coordinates. "
-                                        f"Use global coordinates for all subsequent edits."
-                                    ),
-                                ))
-                        else:
-                            # "artboard" mode — raw PNG, no overlay
-                            raw_b64 = _b64.b64encode(raw_png).decode('utf-8')
-                            result_parts = [
-                                TextContent(type="text", text=envelope),
-                                ImageContent(
-                                    type="image",
-                                    data=raw_b64,
-                                    mimeType="image/png",
-                                ),
-                            ]
-                        # Cognitive Forcing Function for SOC tasks too
-                        if is_task_checkpoint:
+        # ── Phase 3: Final envelope via make_envelope ──
+        if not is_dry_run:
+            merged_diag["preview_state"] = "post_execution" if report.ok else "error"
+
+        if report.ok:
+            envelope = make_envelope(
+                ok=True,
+                result={"formatted": formatted, "report": report_data},
+                warnings=merged_warnings,
+                diagnostics=merged_diag,
+            )
+        else:
+            err = _taskreport_first_error(report_data, params.payload.task)
+            stats = report_data.get("stats", {})
+            merged_diag["stats"] = {
+                k: stats.get(k, 0)
+                for k in ("itemsProcessed", "itemsModified", "itemsSkipped")
+            }
+            envelope = make_envelope(
+                ok=False,
+                error=err,
+                warnings=merged_warnings,
+                diagnostics=merged_diag,
+            )
+
+        # ── Auto-Grounding: preview at cadence, manual request, or final_step ──
+        should_preview = (is_task_checkpoint or params.return_preview is True) and not is_dry_run
+        if should_preview:
+            try:
+                import base64 as _b64
+                raw_png = await _capture_artboard(
+                    max_dim=1024, timeout=30.0,
+                    clip_box=params.clip_box,
+                )
+                if raw_png:
+                    if mode == "annotated":
+                        annotated_bytes, annotation_result = await _annotate_preview(
+                            img_bytes=raw_png,
+                            max_items=200,
+                            timeout=30.0,
+                            clip_box=params.clip_box,
+                        )
+                        ann_b64 = _b64.b64encode(annotated_bytes).decode('utf-8')
+                        result_parts = [
+                            TextContent(type="text", text=envelope),
+                            ImageContent(
+                                type="image",
+                                data=ann_b64,
+                                mimeType="image/png",
+                            ),
+                            TextContent(
+                                type="text",
+                                text=json.dumps(annotation_result, indent=2),
+                            ),
+                        ]
+                        if params.clip_box:
                             result_parts.append(TextContent(
                                 type="text",
-                                text=VLM_CHECKPOINT_INSTRUCTION.format(
-                                    count=_counter.value
+                                text=(
+                                    f"\u26a0\ufe0f CLIP BOX ACTIVE: This preview shows a "
+                                    f"high-resolution crop of region "
+                                    f"{params.clip_box} (screen-space Y-down, points). "
+                                    f"All element IDs and coordinates in the annotation "
+                                    f"map are in GLOBAL document coordinates. "
+                                    f"Use global coordinates for all subsequent edits."
                                 ),
                             ))
-                        return result_parts
-                except Exception as e:
-                    logger.warning(f"Auto-grounding overlay failed (non-fatal): {e}")
+                    else:
+                        raw_b64 = _b64.b64encode(raw_png).decode('utf-8')
+                        result_parts = [
+                            TextContent(type="text", text=envelope),
+                            ImageContent(
+                                type="image",
+                                data=raw_b64,
+                                mimeType="image/png",
+                            ),
+                        ]
+                    if is_task_checkpoint:
+                        result_parts.append(TextContent(
+                            type="text",
+                            text=VLM_CHECKPOINT_INSTRUCTION.format(
+                                count=_counter.value
+                            ),
+                        ))
+                    return result_parts
+            except Exception as e:
+                logger.warning(f"Auto-grounding overlay failed (non-fatal): {e}")
 
-            # Fallback: text-only envelope (+ checkpoint instruction if cadence)
-            if is_task_checkpoint:
-                return [
-                    TextContent(type="text", text=envelope),
-                    TextContent(type="text", text=VLM_CHECKPOINT_INSTRUCTION.format(count=_counter.value)),
-                ]
-            return envelope
-
-        except Exception as parse_error:
-            # Fallback: return raw result in envelope
-            logger.warning(f"Failed to parse TaskReport: {parse_error}")
-            return format_envelope(
-                response=response,
-                context=context,
-                diagnostics=diagnostics
-            )
+        # Fallback: text-only envelope (+ checkpoint instruction if cadence)
+        if is_task_checkpoint:
+            return [
+                TextContent(type="text", text=envelope),
+                TextContent(type="text", text=VLM_CHECKPOINT_INSTRUCTION.format(count=_counter.value)),
+            ]
+        return envelope
 
     except Exception as e:
         # B3: Decrement counter so failed tasks don't pollute cadence
@@ -451,12 +616,26 @@ async def _path_boolean_impl(params: PathBooleanInput) -> str:
         from illustrator_mcp.geometry import (
             path_boolean, flatten_path, Region,
         )
-    except ImportError as e:
-        return make_envelope(
-            ok=False,
-            error=str(e),
-            diagnostics={"tool": "path_boolean", "hint": "pip install illustrator-mcp[geometry]"},
-        )
+        # Verify pyclipper is actually available (not cached as None)
+        from illustrator_mcp.geometry import pyclipper as _pc_check
+        if _pc_check is None:
+            raise ImportError("pyclipper cached as None — force reload")
+    except ImportError:
+        # Module may have been cached before pyclipper was installed.
+        # Force-reload geometry to pick up newly installed pyclipper.
+        try:
+            import importlib
+            import illustrator_mcp.geometry as _geo_mod
+            importlib.reload(_geo_mod)
+            path_boolean = _geo_mod.path_boolean
+            flatten_path = _geo_mod.flatten_path
+            Region = _geo_mod.Region
+        except ImportError as e:
+            return make_envelope(
+                ok=False,
+                error=str(e),
+                diagnostics={"tool": "path_boolean", "hint": "pip install pyclipper"},
+            )
 
     context = f"path_boolean: {params.operation}"
     diagnostics: Dict[str, Any] = {"operation": params.operation, "tool": "path_boolean"}
@@ -484,7 +663,22 @@ async def _path_boolean_impl(params: PathBooleanInput) -> str:
         )
 
     # Parse extraction result
+    # Bridge response may come as:
+    #   {result: '{"paths":...}'}            — direct string
+    #   {result: {ok:true, data:'...'}}       — host.jsx envelope
+    #   {result: {paths:[...]}}              — already parsed dict
     extract_result = extract_response.get("result", "{}")
+    logger.debug(
+        "path_boolean extract_response keys=%s, result type=%s, result preview=%.200s",
+        list(extract_response.keys()), type(extract_result).__name__,
+        str(extract_result)[:200],
+    )
+
+    # Unwrap host.jsx {ok, data} envelope if present
+    if isinstance(extract_result, dict) and "data" in extract_result:
+        extract_result = extract_result["data"]
+        logger.debug("path_boolean: unwrapped ok/data envelope, inner type=%s", type(extract_result).__name__)
+
     if isinstance(extract_result, str):
         try:
             geo_data = json.loads(extract_result)
@@ -629,6 +823,9 @@ async def _path_boolean_impl(params: PathBooleanInput) -> str:
 
     # Parse reconstruction result
     recon_result = reconstruct_response.get("result", "{}")
+    # Unwrap host.jsx {ok, data} envelope if present
+    if isinstance(recon_result, dict) and "data" in recon_result:
+        recon_result = recon_result["data"]
     if isinstance(recon_result, str):
         try:
             recon_data = json.loads(recon_result)
@@ -661,6 +858,9 @@ async def _path_boolean_impl(params: PathBooleanInput) -> str:
                 includes=["geo_boolean"],
             )
             delete_result = delete_response.get("result", "{}")
+            # Unwrap host.jsx {ok, data} envelope if present
+            if isinstance(delete_result, dict) and "data" in delete_result:
+                delete_result = delete_result["data"]
             if isinstance(delete_result, str):
                 try:
                     del_data = json.loads(delete_result)

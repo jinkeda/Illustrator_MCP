@@ -9,6 +9,7 @@ should be done via this tool rather than specialized atomic tools.
 import json
 import logging
 import os
+import re
 from typing import Any, Dict, List, Literal, Optional, Union
 from pydantic import Field, model_validator
 from illustrator_mcp.shared import mcp
@@ -29,6 +30,66 @@ from illustrator_mcp.tools.preview import (
 
 # Set up logging for telemetry
 logger = logging.getLogger("illustrator_mcp")
+
+
+# ── Abstraction advisory: non-blocking hints for raw scripts ───────
+_SHAPE_API_RE = re.compile(
+    r'pathItems\.(?:add|rectangle|ellipse)\s*\(',
+)
+_LOOP_RE = re.compile(r'for\s*\(')
+_SET_ENTIRE_PATH_RE = re.compile(
+    r'setEntirePath\s*\(\s*\[',
+)
+_PATHFINDER_CMD_RE = re.compile(
+    r'executeMenuCommand\s*\(\s*["\'](?:Live Pathfinder|pathfinder)',
+    re.IGNORECASE,
+)
+_MAX_ADVISORY_HINTS = 2
+
+
+def _abstraction_advisory(script: str) -> list:
+    """Emit non-blocking hints when raw script could use a higher-level tool.
+
+    Returns at most _MAX_ADVISORY_HINTS short advisory strings.
+    """
+    hints = []
+
+    # Batch creation: for-loop + multiple shape API calls
+    if _LOOP_RE.search(script) and len(_SHAPE_API_RE.findall(script)) >= 2:
+        hints.append(
+            "\U0001f4a1 This script creates shapes in a loop. "
+            "Consider element_create_batch (array or template+instances)."
+        )
+
+    # Large manual path: setEntirePath with many coordinate pairs
+    if len(hints) < _MAX_ADVISORY_HINTS:
+        m = _SET_ENTIRE_PATH_RE.search(script)
+        if m:
+            # Count coordinate pairs after setEntirePath([...
+            rest = script[m.end():]
+            bracket_depth = 1
+            pairs = 0
+            for ch in rest:
+                if ch == '[':
+                    bracket_depth += 1
+                elif ch == ']':
+                    bracket_depth -= 1
+                    if bracket_depth == 0:
+                        break
+                    pairs += 1  # each inner ] closes a [x,y] pair
+            if pairs > 12:
+                hints.append(
+                    "\U0001f4a1 Large setEntirePath detected (~%d points). "
+                    "Consider element_create with smooth:true or path_import_svg." % pairs
+                )
+
+    # Boolean workarounds via menu commands
+    if len(hints) < _MAX_ADVISORY_HINTS and _PATHFINDER_CMD_RE.search(script):
+        hints.append(
+            "\U0001f4a1 Use the path_boolean tool for reliable boolean ops."
+        )
+
+    return hints[:_MAX_ADVISORY_HINTS]
 
 
 class ExecuteScriptInput(ToolInputBase):
@@ -235,91 +296,124 @@ class ExecuteScriptInput(ToolInputBase):
 async def illustrator_execute_script(params: ExecuteScriptInput) -> Union[str, list]:
     """
     Execute raw JavaScript/ExtendScript code in Adobe Illustrator.
-    
-    This is the PRIMARY tool for all Illustrator operations. Use get_scripting_reference
-    for syntax help if needed.
-    
+
+    ═══════════════════════════════════════════════════════════════════
+    ABSTRACTION LADDER — prefer higher levels before using raw script:
+    ═══════════════════════════════════════════════════════════════════
+
+    Level 5 — path_boolean tool:
+      Sculpt shapes via unite/subtract/intersect/xor.
+      USE WHEN: combining primitives, cutting holes, engine nacelles.
+      EXAMPLE: path_boolean(operation="unite", subject="body", clip=["canopy"])
+
+    Level 4 — element_create_batch (via execute_task):
+      Batch-create identical shapes in grids, rows, or scatter.
+      USE WHEN: ≥3 repeated shapes (windows, dots, grid cells).
+      EXAMPLE: {task: "element_create_batch", params: {
+        template: {type: "ellipse", rx: 4, ry: 3},
+        array: {count: 47, startX: 180, startY: 145, spacingX: 15}}}
+
+    Level 3 — path_import_svg tool:
+      Import SVG d-string paths. LLMs are fluent in SVG syntax (M/L/C/S/A/Z).
+      USE WHEN: complex outlines, organic shapes, arcs.
+      EXAMPLE: path_import_svg(d="M 10 50 C 20 20, 80 20, 90 50 S 170 80, 190 50")
+
+    Level 2 — element_create + smooth (via execute_task):
+      Smooth interpolation from waypoints. No handle math needed.
+      Params: smooth (bool), tension (0=straight, 0.5=default, 1.0=loose).
+      USE WHEN: fuselage profiles, wave shapes, smooth curves.
+      EXAMPLE: {task: "element_create", params: {
+        type: "path", points: [[0,50],[50,0],[100,50],[150,0],[200,50]],
+        smooth: true, tension: 0.5, fill: {r: 0, g: 150, b: 136}}}
+
+    Level 2b — element_create + handles (via execute_task):
+      Polar/relative handles for precise Bézier control without absolute coords.
+      Angles in degrees, 0°=+X, CCW positive, same frame as points.
+      USE WHEN: sharp tips, engineering profiles, precise tangent control.
+      EXAMPLE: {task: "element_create", params: {
+        type: "path", points: [[0,50],[100,0],[200,50]],
+        handles: [null, {angle: 0, length: 30, symmetric: true}, null],
+        fill: {r: 0, g: 150, b: 136}}}
+      NOTE: handles and smooth are mutually exclusive.
+
+    Level 2c — element_create + mirror (via execute_task):
+      Define half-profile, auto-mirror for bilateral symmetry.
+      Modes: mirror_y_bottom, mirror_y_top, mirror_x_right, mirror_x_left.
+      USE WHEN: fuselage cross-sections, symmetric wings, logos.
+      EXAMPLE: {task: "element_create", params: {
+        type: "path", points: [[0,0],[20,-15],[80,-15],[120,0]],
+        smooth: true, mirror: "mirror_y_bottom",
+        fill: {r: 200, g: 200, b: 200}}}
+
+    Level 1 — execute_script (THIS tool):
+      Raw ExtendScript. Full DOM access but verbose and error-prone.
+      USE WHEN: single one-off items, quick prototypes, or operations
+      not covered by higher-level tools.
+
+    DECISION RULES (hard stops):
+    - If you need to subtract/unite shapes → MUST use path_boolean tool.
+    - If creating ≥3 identical shapes      → MUST use element_create_batch.
+    - If setEntirePath has >12 coord pairs → STOP and use smooth:true or SVG d.
+
+    ═══════════════════════════════════════════════════════════════════
+
     COORDINATE SYSTEM:
     - Origin: Top-left of artboard
     - Y-axis: NEGATIVE downward. Use -y for visual y positions.
     - Units: Points (1 pt = 1/72 inch)
-    
-    COMMON OPERATIONS:
-    
+
+    RAW EXTENDSCRIPT REFERENCE (Level 1 fallback):
+
     Shapes:
     - Rectangle: doc.pathItems.rectangle(top, left, width, height)
     - Ellipse: doc.pathItems.ellipse(top, left, width, height)
     - Line: var p = doc.pathItems.add(); p.setEntirePath([[x1,-y1], [x2,-y2]])
-    
+
     Colors:
     - var c = new RGBColor(); c.red=255; c.green=0; c.blue=0;
     - shape.fillColor = c; shape.strokeColor = c;
-    
+
     Text:
     - var tf = doc.textFrames.add(); tf.contents = "text"; tf.position = [x, -y];
-    
+
     Selection:
     - var sel = doc.selection; // Array of selected items
     - item.selected = true; // Select an item
-    
-    Args:
-        params.script: Valid ExtendScript code to execute (inline)
-        params.file_path: Path to a .jsx file to execute (alternative)
-    
-    Returns:
-        JSON result from script execution, or error details if failed
-    
-    Example:
-        // Draw a red rectangle
-        var doc = app.activeDocument;
-        var rect = doc.pathItems.rectangle(-100, 50, 200, 100);
-        var c = new RGBColor(); c.red = 255; c.green = 0; c.blue = 0;
-        rect.fillColor = c;
-    
+
     ELEMENT DISCOVERY:
     Use grid helpers to locate items on the artboard:
     - artboardGrid(cols, rows) — divide artboard into labeled cells (A1, B2, ...)
     - itemsInCell(cell, mode) — find items in a grid cell ("containsCenter" or "intersects")
-    
+
     MUTATION SAFETY:
     Every execute_script call increments a mutation counter. An annotated preview
     is auto-injected every VLM_QA_CADENCE calls for visual verification.
     Set final_step=true on the last mutation to force a checkpoint.
-    
+
     KNOWN LIMITATIONS:
-    
-    Boolean path ops (subtract/unite/intersect):
-      Not available via ExtendScript. Use these patterns instead:
-      - Crescent moon: Compute arc points on two offset circles, filter by angle
-      - Donut/ring: Create two circles, select both, Object > Compound Path > Make
-      - Cutout: Use clipping mask (group + clip path) to simulate subtraction
-      - app.executeMenuCommand("pathfinder") exists but is fragile and UI-dependent
-    
+
+    Boolean path ops:
+      Use the path_boolean TOOL instead of ExtendScript workarounds.
+
     Bézier curves:
-      setEntirePath() creates corner points only. For smooth curves, use extended
-      point format in element_create: [x, y, leftDirX, leftDirY, rightDirX, rightDirY]
-      Or manually set handles after path creation:
+      Prefer element_create with smooth:true or path_import_svg.
+      If raw handles are needed: setEntirePath() creates corner points only.
+      Set handles after creation:
         path.pathPoints[0].leftDirection = [lx0, -ly0];
         path.pathPoints[0].rightDirection = [rx0, -ry0];
-      Handle coordinates are absolute, not relative to the anchor.
-    
+
     SAFETY:
       A watchdog is injected before every script with dual limits:
       - Op count: __mcp_check() throws after max_ops (default 500K)
       - Wall clock: __mcp_check() throws after max_ms (default 25s)
       Call __mcp_check() as the FIRST line inside every for/while body.
-      
+
       CRITICAL: Never iterate a live Illustrator collection if you add/remove
       items in the loop. Use the injected snapshot helpers instead:
         __mcp_forEachSnapshot(doc.pathItems, function(item, i) { ... });
         var snap = __mcp_snapshot(doc.pathItems);
-      
-      NOTE: Scripts that never call __mcp_check() (e.g. bare while(true){})
-      are NOT protected by this guard. The only robust fix for non-cooperative
-      loops is chunked execution (future work).
-    
+
     IMPORTANT: Always use -y for Y coordinates when positioning objects.
-    Call get_scripting_reference for more detailed syntax examples.
     """
     # Log script execution for telemetry
     script = params.script  # Already resolved by model_validator
@@ -337,6 +431,11 @@ async def illustrator_execute_script(params: ExecuteScriptInput) -> Union[str, l
     desc = params.description.strip() if params.description else None
 
     warnings = []
+
+    # ── Abstraction advisory: non-blocking hints for raw scripts ──
+    advisory_hints = _abstraction_advisory(script)
+    if advisory_hints:
+        warnings.extend(advisory_hints)
 
     # ── VLM QA Cadence: auto-inject annotated preview ──────────
     # B3: Increment counter here; decremented in outer except if execution fails

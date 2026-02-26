@@ -748,5 +748,123 @@ class TestPickInterval(unittest.TestCase):
                                  f"dim={dim} iv={iv} gives {dim/iv} labels")
 
 
+# ── Envelope Unwrap Tests for _annotate_preview ───────────────────────
+
+class TestAnnotatePreviewEnvelopeUnwrap(unittest.TestCase):
+    """Test that _annotate_preview correctly unwraps host.jsx envelopes.
+
+    host.jsx wraps bare JSX returns in {ok:true, data:...} envelopes.
+    The collection script returns {artboard:[...], items:[...]} which becomes
+    {ok:true, data:{artboard:[...], items:[...]}} after host.jsx wrapping.
+    _annotate_preview must unwrap this before accessing artboard data.
+    """
+
+    ARTBOARD_RECT = [0, 0, 800, -600]  # standard AI coords
+    ITEM_SNAPSHOT = {
+        "artboard": [0, 0, 800, -600],
+        "items": [
+            {"name": "rect", "type": "PathItem",
+             "bounds": [100, -50, 300, -250], "mcp_id": ""},
+        ],
+    }
+
+    def _make_collect_response(self, snapshot_dict):
+        """Simulate what execute_script_with_context returns for the collect call."""
+        return {"result": snapshot_dict}
+
+    @unittest.skipUnless(HAS_PILLOW, "Pillow not installed")
+    def test_unwrap_ok_true_envelope(self):
+        """host.jsx envelope {ok:true, data:{artboard,items}} is unwrapped correctly."""
+        import asyncio
+        from unittest.mock import AsyncMock
+        from illustrator_mcp.tools.preview import _annotate_preview
+
+        png = _make_blank_png(800, 600)
+        # Simulate the envelope that host.jsx produces
+        envelope = {"ok": True, "data": self.ITEM_SNAPSHOT}
+        mock_response = {"result": envelope}
+
+        with patch(
+            "illustrator_mcp.tools.preview.execute_script_with_context",
+            new_callable=AsyncMock,
+            return_value=mock_response,
+        ):
+            _, result = asyncio.get_event_loop().run_until_complete(
+                _annotate_preview(png, max_items=200, timeout=5.0)
+            )
+
+        # Should have successfully found items, NOT the artboard-bounds warning
+        for w in result.get("warnings") or []:
+            self.assertNotIn("Missing or invalid artboard bounds", w)
+        self.assertGreater(
+            result["meta"]["input_count"], 0,
+            "Should have found items after envelope unwrap",
+        )
+
+    @unittest.skipUnless(HAS_PILLOW, "Pillow not installed")
+    def test_ok_false_surfaces_real_error(self):
+        """host.jsx envelope {ok:false, error:{message:...}} surfaces the real error."""
+        import asyncio
+        from unittest.mock import AsyncMock
+        from illustrator_mcp.tools.preview import _annotate_preview
+
+        png = _make_blank_png(800, 600)
+        error_envelope = {"ok": False, "error": {"message": "No documents open"}}
+        mock_response = {"result": error_envelope}
+
+        with patch(
+            "illustrator_mcp.tools.preview.execute_script_with_context",
+            new_callable=AsyncMock,
+            return_value=mock_response,
+        ):
+            _, result = asyncio.get_event_loop().run_until_complete(
+                _annotate_preview(png, max_items=200, timeout=5.0)
+            )
+
+        warnings = result.get("warnings") or []
+        # Should surface the real error, not "Missing artboard bounds"
+        self.assertTrue(
+            any("Item collection failed" in w for w in warnings),
+            f"Expected 'Item collection failed' warning, got: {warnings}",
+        )
+        self.assertTrue(
+            any("No documents open" in w for w in warnings),
+            f"Expected 'No documents open' in warning, got: {warnings}",
+        )
+        self.assertFalse(
+            any("Missing or invalid artboard" in w for w in warnings),
+            "Should NOT emit misleading 'Missing artboard bounds'",
+        )
+
+    @unittest.skipUnless(HAS_PILLOW, "Pillow not installed")
+    def test_string_inside_data_parsed(self):
+        """data field as JSON string (legacy double-wrapping) is parsed correctly."""
+        import asyncio
+        from unittest.mock import AsyncMock
+        from illustrator_mcp.tools.preview import _annotate_preview
+
+        png = _make_blank_png(800, 600)
+        # Simulate data arriving as a JSON string inside the envelope
+        envelope = {"ok": True, "data": json.dumps(self.ITEM_SNAPSHOT)}
+        mock_response = {"result": envelope}
+
+        with patch(
+            "illustrator_mcp.tools.preview.execute_script_with_context",
+            new_callable=AsyncMock,
+            return_value=mock_response,
+        ):
+            _, result = asyncio.get_event_loop().run_until_complete(
+                _annotate_preview(png, max_items=200, timeout=5.0)
+            )
+
+        for w in result.get("warnings") or []:
+            self.assertNotIn("Missing or invalid artboard bounds", w)
+            self.assertNotIn("Could not parse", w)
+        self.assertGreater(
+            result["meta"]["input_count"], 0,
+            "Should have found items after string-inside-data unwrap",
+        )
+
+
 if __name__ == "__main__":
     unittest.main()

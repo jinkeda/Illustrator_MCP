@@ -235,6 +235,12 @@
   },
   "element_create": {
     "enumValues": {
+      "mirror": [
+        "mirror_y_bottom",
+        "mirror_y_top",
+        "mirror_x_right",
+        "mirror_x_left"
+      ],
       "type": [
         "rect",
         "ellipse",
@@ -268,6 +274,9 @@
       "closed",
       "smooth",
       "tension",
+      "handles",
+      "mirror",
+      "mirrorOrigin",
       "x2",
       "y2",
       "contents",
@@ -286,10 +295,13 @@
       "fontName": "string",
       "fontSize": "number",
       "geometry": "object",
+      "handles": "array",
       "height": "number",
       "id": "string",
       "innerRadius": "number",
       "layer": "string",
+      "mirror": "string",
+      "mirrorOrigin": "number",
       "name": "string",
       "numPoints": "number",
       "outerRadius": "number",
@@ -313,12 +325,14 @@
       "template",
       "instances",
       "items",
+      "array",
       "defaultStyle",
       "layer",
       "name"
     ],
     "required": [],
     "types": {
+      "array": "object",
       "defaultStyle": "object",
       "instances": "array",
       "items": "array",

@@ -470,19 +470,21 @@ def _extract_result(response: Dict[str, Any]) -> "ResponseClassification":
     return classify_response(response)
 
 
-def _build_envelope_dict(
+def build_envelope_dict(
     response: Dict[str, Any],
     context: str = "",
     warnings: Optional[List[str]] = None,
     diagnostics: Optional[Dict[str, Any]] = None,
 ) -> dict:
-    """Build standardized envelope as a dict (internal shared core).
+    """Build standardized envelope as a dict.
 
-    Not exported. Callers use :func:`format_envelope` for JSON or
-    :func:`format_response` for legacy text.
+    Stable internal API used by :func:`format_envelope` and
+    ``execute_task``.  Always returns exactly 5 canonical keys:
+    ``{ok, warnings, error, diagnostics, result}``.
 
-    Returns:
-        dict with keys: ok, warnings, error, diagnostics, result
+    - ``error`` is always ``None`` or a dict with ``code``/``message``/``suggestions``
+    - ``result`` is already unwrapped (domain data, not transport envelope)
+    - ``warnings`` and ``diagnostics`` are always ``list``/``dict``
     """
     from illustrator_mcp.errors import create_structured_error
 
@@ -579,7 +581,7 @@ def format_response(response: dict[str, Any], context: str = "") -> str:
         return format_error_response(raw_error, context)
 
     # Non-error path: classify via shared core
-    envelope = _build_envelope_dict(response, context)
+    envelope = build_envelope_dict(response, context)
 
     if not envelope["ok"]:
         # Classification found an error in the result payload
@@ -621,6 +623,6 @@ def format_envelope(
         JSON string with standardized envelope
     """
     return json.dumps(
-        _build_envelope_dict(response, context, warnings, diagnostics)
+        build_envelope_dict(response, context, warnings, diagnostics)
     )
 

@@ -3,13 +3,13 @@
  * Part of Illustrator MCP SOC Framework
  * 
  * AUTO-GENERATED - DO NOT EDIT MANUALLY
- * Generated: 2026-02-26T16:27:35Z
+ * Generated: 2026-02-26T21:02:00Z
  * Source: illustrator_mcp/schemas/contracts.py
  * 
  * To regenerate: python -m illustrator_mcp.tools.compile_contracts
  */
 
-var CONTRACTS_CHECKSUM = "17eaf7bed095d2b5";
+var CONTRACTS_CHECKSUM = "44be87f1566667dd";
 
 // ==================== Protocol Version ====================
 var TASK_PROTOCOL_VERSION = "3.0.0";
@@ -72,7 +72,12 @@ var ErrorCodes = {
     G_MALFORMED: "G003",
     SP_MISSING_PREDICATE: "SP001",
     SP_INVALID_RECT: "SP002",
-    SP_REF_NOT_FOUND: "SP003"
+    SP_REF_NOT_FOUND: "SP003",
+    SVG_D_TOO_LONG: "SVG001",
+    SVG_TOO_MANY_SEGMENTS: "SVG002",
+    SVG_TOO_MANY_SUBPATHS: "SVG003",
+    SVG_COORD_OVERFLOW: "SVG004",
+    SVG_TOO_MANY_TOKENS: "SVG005"
 };
 
 var RETRYABLE_CODES = [ErrorCodes.R_COLLECT_FAILED, ErrorCodes.R_COMPUTE_FAILED];
@@ -103,6 +108,9 @@ var OP_PARAM_SCHEMAS = {
             "closed",
             "smooth",
             "tension",
+            "handles",
+            "mirror",
+            "mirrorOrigin",
             "x2",
             "y2",
             "contents",
@@ -132,6 +140,9 @@ var OP_PARAM_SCHEMAS = {
             "closed": "boolean",
             "smooth": "boolean",
             "tension": "number",
+            "handles": "array",
+            "mirror": "string",
+            "mirrorOrigin": "number",
             "x2": "number",
             "y2": "number",
             "contents": "string",
@@ -150,6 +161,12 @@ var OP_PARAM_SCHEMAS = {
                 "star",
                 "roundedRect",
                 "text"
+            ],
+            "mirror": [
+                "mirror_y_bottom",
+                "mirror_y_top",
+                "mirror_x_right",
+                "mirror_x_left"
             ]
         }
     },
@@ -308,6 +325,7 @@ var OP_PARAM_SCHEMAS = {
             "template",
             "instances",
             "items",
+            "array",
             "defaultStyle",
             "layer",
             "name"
@@ -316,6 +334,7 @@ var OP_PARAM_SCHEMAS = {
             "template": "object",
             "instances": "array",
             "items": "array",
+            "array": "object",
             "defaultStyle": "object",
             "layer": "string",
             "name": "string"

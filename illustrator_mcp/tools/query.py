@@ -231,13 +231,30 @@ if (typeof executeTask !== "function" || typeof validatePayload !== "function") 
                 diagnostics={**diagnostics, "report": report},
             )
 
-        # Success case
-        return make_envelope(
-            ok=report.get("ok", True),
-            result=report,
-            warnings=warnings,
-            diagnostics=diagnostics,
-        )
+        # ok is authoritative: reflect report status in envelope
+        if report.get("ok", True):
+            return make_envelope(
+                ok=True,
+                result=report,
+                warnings=warnings,
+                diagnostics=diagnostics,
+            )
+        else:
+            # Option B: extract error from report, key stats in diagnostics
+            report_errors = report.get("errors", [])
+            first_err = report_errors[0] if report_errors else {}
+            if isinstance(first_err, dict) and "error" in first_err and isinstance(first_err["error"], dict):
+                first_err = first_err["error"]
+            return make_envelope(
+                ok=False,
+                error={
+                    "code": first_err.get("code", ErrorCode.R_QUERY_FAILED.value),
+                    "message": first_err.get("message", "Query returned failure"),
+                    "suggestions": first_err.get("suggestions", []),
+                },
+                warnings=warnings,
+                diagnostics={**diagnostics, "stats": report.get("stats", {})},
+            )
 
     except json.JSONDecodeError as e:
         return make_envelope(

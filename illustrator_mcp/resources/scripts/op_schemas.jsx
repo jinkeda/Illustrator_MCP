@@ -32,6 +32,9 @@ var OP_PARAM_SCHEMAS = {
             "closed",
             "smooth",
             "tension",
+            "handles",
+            "mirror",
+            "mirrorOrigin",
             "x2",
             "y2",
             "contents",
@@ -61,6 +64,9 @@ var OP_PARAM_SCHEMAS = {
             "closed": "boolean",
             "smooth": "boolean",
             "tension": "number",
+            "handles": "array",
+            "mirror": "string",
+            "mirrorOrigin": "number",
             "x2": "number",
             "y2": "number",
             "contents": "string",
@@ -79,6 +85,12 @@ var OP_PARAM_SCHEMAS = {
                 "star",
                 "roundedRect",
                 "text"
+            ],
+            "mirror": [
+                "mirror_y_bottom",
+                "mirror_y_top",
+                "mirror_x_right",
+                "mirror_x_left"
             ]
         }
     },
@@ -243,6 +255,7 @@ var OP_PARAM_SCHEMAS = {
             "template",
             "instances",
             "items",
+            "array",
             "defaultStyle",
             "layer",
             "name"
@@ -251,6 +264,7 @@ var OP_PARAM_SCHEMAS = {
             "template": "object",
             "instances": "array",
             "items": "array",
+            "array": "object",
             "defaultStyle": "object",
             "layer": "string",
             "name": "string"

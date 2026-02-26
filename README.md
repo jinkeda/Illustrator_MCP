@@ -18,6 +18,7 @@ An [MCP](https://modelcontextprotocol.io) server that lets AI assistants like Cl
 - [Available Tools](#available-tools)
 - [Standard Libraries](#standard-libraries)
 - [Task Protocol & SOC Framework](#task-protocol--soc-framework)
+- [Abstraction Ladder](#abstraction-ladder)
 - [VLM Debug Overlay & Auto-Grounding](#vlm-debug-overlay--auto-grounding)
 - [Examples](#examples)
 - [Troubleshooting](#troubleshooting)
@@ -84,7 +85,19 @@ cd Illustrator_MCP
 pip install -e .
 ```
 
-This installs all dependencies including [Pillow](https://python-pillow.org/) for compositing numbered bounding boxes onto VLM preview images.
+This installs core dependencies including [Pillow](https://python-pillow.org/) for VLM preview overlays.
+
+**Optional — boolean path operations:**
+
+```bash
+pip install -e ".[geometry]"
+```
+
+This adds [pyclipper](https://github.com/fonttools/pyclipper) for `path_boolean` (unite, subtract, intersect, xor). If using `uv`:
+
+```bash
+uv sync --extra geometry
+```
 
 ### 2. Build & Install the CEP Extension
 
@@ -216,7 +229,7 @@ This server follows a **Scripting First** architecture: one powerful script exec
 | Tool | Description |
 |---|---|
 | `illustrator_path_import_svg` | Import an SVG path `d` attribute. Parses server-side, converts arcs to cubic Béziers. Hardcoded safety limits. |
-| `illustrator_path_boolean` | Boolean operations (unite, subtract, intersect, xor) on paths via pyclipper |
+| `illustrator_path_boolean` | Boolean operations (unite, subtract, intersect, xor) on paths. Uses [pyclipper](https://github.com/fonttools/pyclipper) for polygon clipping. Bézier curves are auto-flattened. Requires `geometry` extras. |
 
 ### Query & Validation (2)
 
@@ -317,7 +330,21 @@ var report = executeOpBatch(ops, {strict: true, trace: true});
 
 Key capabilities: stable ID targeting (`@mcp:id=` in item.note), strict/continue error modes, `summaryOnly` for large batches, snapshot rollback, Python-side chunking for WebSocket limits, field evaluators for dynamic params, and op journaling for replay.
 
+### Abstraction Ladder
+
+`element_create` supports multiple abstraction levels for path creation, from fully declarative down to raw handles:
+
+| Level | Feature | Use Case |
+|---|---|---|
+| **smooth** | Catmull-Rom spline from waypoints | Organic curves, wave shapes |
+| **handles** | Polar `{angle, length}` or relative `{dx, dy}` Bézier handles | Sharp tips, engineering profiles |
+| **mirror** | Bilateral symmetry: define half-profile, auto-mirror | Fuselage cross-sections, symmetric wings |
+
+Handles and mirror are resolved Python-side before reaching JSX — the AI provides intuitive specs, and trigonometry + mirroring are handled automatically.
+
 **SVG path import:** Use the dedicated `path_import_svg` tool to import SVG `d` attributes. The path string is parsed Python-side into geometry IR (supports M/L/H/V/C/S/Q/T/A/Z commands including arc-to-cubic conversion), then drawn via `geometry.drawPathPoints`. Hardcoded safety limits prevent abuse (50k chars, 5k segments, 100 subpaths, ±100k coordinates).
+
+**Path boolean:** Use `path_boolean` to unite, subtract, intersect, or xor shapes by MCP ID. The pipeline extracts geometry from Illustrator (ExtendScript), flattens any Bézier curves (Python), runs the boolean via pyclipper (Python), and reconstructs the result as a `PathItem` or `CompoundPathItem` (ExtendScript). Shapes with holes produce `CompoundPathItem` automatically. Requires `geometry` extras (`pip install -e ".[geometry]"`).
 
 **Clipping masks:** `clip_create` creates a clipping mask group from a mask path and content items referenced by MCP ID. Supports `dryRun` mode for validation without mutation, parent-aware placement, and mask type validation.
 
@@ -491,6 +518,49 @@ var items = createGrid({
 });
 ```
 
+### Smooth Curve from Waypoints
+
+```json
+{"task": "element_create", "params": {
+    "type": "path",
+    "points": [[0,50],[50,0],[100,50],[150,0],[200,50]],
+    "smooth": true, "tension": 0.5,
+    "fill": {"r": 0, "g": 150, "b": 136}
+}}
+```
+
+### Polar Handles — Precise Bézier Control
+
+Define handles by angle + length instead of absolute coordinates. Python resolves the trigonometry.
+
+```json
+{"task": "element_create", "params": {
+    "type": "path",
+    "points": [[0,50],[100,0],[200,50]],
+    "handles": [null, {"angle": 0, "length": 30, "symmetric": true}, null],
+    "stroke": {"r": 0, "g": 100, "b": 200, "width": 3}
+}}
+```
+
+- `null` → corner point (no curvature)
+- `{angle, length, symmetric}` → out-handle at polar coords; `symmetric: true` auto-mirrors the in-handle
+- `{in: {...}, out: {...}}` → independent in/out handles
+- `{dx, dy}` → relative offsets instead of polar
+
+### Symmetry Modifier — Define Half, Mirror Automatically
+
+```json
+{"task": "element_create", "params": {
+    "type": "path",
+    "points": [[0,100],[30,85],[80,85],[120,100]],
+    "smooth": true,
+    "mirror": "mirror_y_bottom",
+    "fill": {"r": 200, "g": 200, "b": 200}
+}}
+```
+
+Modes: `mirror_y_bottom`, `mirror_y_top`, `mirror_x_right`, `mirror_x_left`. First/last points on the axis are auto-deduplicated to prevent kinks. Handles are mirrored and swapped for path continuity.
+
 ### Raw ExtendScript
 
 ```javascript
@@ -501,6 +571,30 @@ rect.fillColor = c;
 ```
 
 > **Coordinate system:** Origin is top-left. Y is **negative downward**. Use `-y` for visual positions. Units are points (1 pt = 1/72 in).
+
+### Boolean Operations
+
+```python
+# Unite two overlapping shapes into one
+path_boolean(
+    operation="unite",
+    subject="mcp_id_of_shape_1",
+    clip=["mcp_id_of_shape_2"],
+    delete_originals=True,
+    style="subject"  # inherit fill/stroke from subject
+)
+
+# Subtract a cutout from a circle
+path_boolean(
+    operation="subtract",
+    subject="circle_id",
+    clip=["cutout_id"],
+    delete_originals=True
+)
+# → CompoundPathItem (circle with rectangular hole)
+```
+
+> Requires `geometry` extras. Bézier curves are auto-flattened to polylines for the Clipper engine.
 
 ### Export with Visual Feedback
 
@@ -573,6 +667,7 @@ If occupied, change `WS_PORT` in `.env` and restart.
 | `SVG003` | SVG Import | Too many subpaths (>100) |
 | `SVG004` | SVG Import | Coordinate overflow (>±100k) |
 | `SVG005` | SVG Import | Too many tokens (>50k) |
+| `R010` | Runtime | Could not parse TaskReport |
 
 All errors include actionable recovery suggestions.
 
@@ -620,8 +715,9 @@ Illustrator_MCP/
 │   ├── response_classification.py # Response classifier (error metadata extraction)
 │   ├── response_models.py        # Pydantic models for responses
 │   ├── vlm_grounding.py          # VLM QA pipeline: hybrid grounding, hypothesis verifier, DOM diffing
+│   ├── geometry.py               # Python-side boolean geometry engine (pyclipper, Bézier flattening)
 │   ├── svgd.py                   # SVG path data parser (d attribute → geometry IR, arc→cubic)
-│   ├── curves.py                 # Bézier curve helpers (rounded polygon, arc points)
+│   ├── curves.py                 # Bézier helpers (rounded polygon, arcs, polar handles, mirror)
 │   ├── log_config.py             # Structured logging config
 │   ├── bridge/
 │   │   ├── server.py             # WebSocket server transport
@@ -666,13 +762,14 @@ Illustrator_MCP/
 │   │   ├── components/MCPControlPanel.tsx
 │   │   └── hooks/useMCP.ts       # WebSocket connection hook
 │   └── vite.config.ts
-├── tests/                        # Unit tests (pytest, 1270+ tests)
+├── tests/                        # Unit tests (pytest, 1350+ tests)
 │   ├── conftest.py               # Shared fixtures + collection-error guard
 │   ├── test_execute.py
 │   ├── test_documents.py
 │   ├── test_context.py
 │   ├── test_protocol.py
 │   ├── test_task_protocol_v23.py
+│   ├── test_execute_task_envelope.py  # Canonical envelope wrapping tests (19 tests)
 │   ├── test_library_resolver.py
 │   ├── test_injection.py
 │   ├── test_templates.py
@@ -707,7 +804,7 @@ Illustrator_MCP/
 ### Running Tests
 
 ```bash
-pip install -e ".[dev]"
+pip install -e ".[dev,geometry]"
 pytest tests/ -v
 ```
 
@@ -731,7 +828,7 @@ python -m scripts.gen_schemas
 2. **Thick Scripts, Thin Server** -- Move complexity into ExtendScript, not Python. Fewer round-trips, atomic operations, and Illustrator-native calculations.
 3. **Library Injection** -- Reusable `.jsx` libraries with manifest-driven transitive dependency resolution and symbol collision detection.
 4. **Context Before Creation** -- AI inspects document state (`get_document`, `query_items`) before writing modification scripts.
-5. **Two-Contract Envelope** -- Internal contract (`{ok, data, operation}`) flows from ExtendScript to Python. External contract (`{ok, result, error, diagnostics, warnings}`) flows from Python to the MCP client. `format_envelope()` bridges the two, stripping internal wrappers and surfacing pure domain data.
+5. **Two-Contract Envelope** -- Internal contract (`{ok, data, operation}`) flows from ExtendScript to Python. External contract (`{ok, result, error, diagnostics, warnings}`) flows from Python to the MCP client. `build_envelope_dict()` is the shared core that unwraps internal envelopes and classifies errors. `format_envelope()` wraps it for standard tools; `execute_task` uses it as Phase 1 of a three-phase pipeline (canonical unwrap → TaskReport parse → `make_envelope` construction).
 6. **Fail Fast with Structured Errors** -- Typed error codes (V/R/S/C/SVG categories) with actionable recovery suggestions.
 7. **Auto-Grounding** -- SOC task results always include an annotated artboard preview, forcing the AI to see the visual state before its next action. No opt-in required.
 8. **VLM QA Cadence** -- Every 5th `execute_script` call auto-injects an annotated preview. Combined with `final_step=True`, the AI is periodically forced to visually verify and catch defects.

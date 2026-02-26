@@ -270,7 +270,6 @@ function extractPathGeometry(mcpIds) {
     }
 
     return JSON.stringify({
-        error: false,
         paths: paths,
         warnings: warnings
     });
@@ -452,7 +451,6 @@ function reconstructRegions(params) {
     }
 
     return JSON.stringify({
-        error: false,
         ids: createdIds,
         itemTypes: createdTypes,
         bounds: globalBounds,
@@ -497,7 +495,6 @@ function deleteByMcpIds(mcpIds) {
     }
 
     return JSON.stringify({
-        error: false,
         deleted: deleted,
         warnings: warnings
     });

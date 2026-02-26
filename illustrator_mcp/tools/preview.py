@@ -478,6 +478,31 @@ async def _annotate_preview(
     except (json.JSONDecodeError, TypeError):
         return img_bytes, _result(warnings=["Could not parse item collection result"])
 
+    # Unwrap host.jsx envelope(s): {ok:true, data:{artboard,items}}
+    # or legacy {success:true, result:"..."}.  Two passes handle nested wrapping.
+    for _ in range(2):
+        if isinstance(snapshot, dict) and "ok" in snapshot:
+            if snapshot.get("ok") is True and "data" in snapshot:
+                snapshot = snapshot["data"]
+            elif snapshot.get("ok") is False:
+                err = snapshot.get("error")
+                msg = err.get("message") if isinstance(err, dict) else str(err)
+                return img_bytes, _result(
+                    warnings=[f"Item collection failed: {msg}"]
+                )
+            else:
+                break
+        elif isinstance(snapshot, dict) and snapshot.get("success") and "result" in snapshot:
+            snapshot = snapshot["result"]
+        else:
+            break
+    # Handle string-inside-data (e.g. data: '{"artboard":[...],...}')
+    if isinstance(snapshot, str):
+        try:
+            snapshot = json.loads(snapshot)
+        except (json.JSONDecodeError, TypeError):
+            return img_bytes, _result(warnings=["Could not parse unwrapped collection result"])
+
     artboard_rect = snapshot.get("artboard")
     if not artboard_rect or len(artboard_rect) != 4:
         return img_bytes, _result(

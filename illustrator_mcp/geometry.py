@@ -45,12 +45,22 @@ def _get_op_map():
 
 
 def _ensure_pyclipper():
-    """Raise a helpful error if pyclipper is not installed."""
+    """Raise a helpful error if pyclipper is not installed.
+
+    Retries the import if it was None at module load time (e.g., installed after
+    server start). Updates the module-level variable on success.
+    """
+    global pyclipper
     if pyclipper is None:
-        raise ImportError(
-            "path_boolean requires pyclipper. "
-            "Install with: pip install illustrator-mcp[geometry]"
-        )
+        try:
+            import pyclipper as _pc
+            pyclipper = _pc
+        except ImportError as orig:
+            raise ImportError(
+                f"path_boolean requires pyclipper. "
+                f"Install with: pip install pyclipper "
+                f"(original error: {orig})"
+            )
 
 
 # ── Data structures ─────────────────────────────────────────────────
