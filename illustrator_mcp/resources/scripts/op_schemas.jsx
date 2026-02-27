@@ -277,13 +277,25 @@ var OP_PARAM_SCHEMAS = {
         "optional": [
             "color",
             "visible",
-            "locked"
+            "locked",
+            "above",
+            "below",
+            "placement"
         ],
         "types": {
             "name": "string",
             "color": "object",
             "visible": "boolean",
-            "locked": "boolean"
+            "locked": "boolean",
+            "above": "string",
+            "below": "string",
+            "placement": "string"
+        },
+        "enumValues": {
+            "placement": [
+                "top",
+                "bottom"
+            ]
         }
     },
     "layer_activate": {
@@ -325,6 +337,11 @@ var OP_PARAM_SCHEMAS = {
         "types": {
             "name": "string"
         }
+    },
+    "layer_list": {
+        "required": [],
+        "optional": [],
+        "types": {}
     },
     "style_set_fill": {
         "required": [
@@ -720,6 +737,18 @@ var OP_PARAM_SCHEMAS = {
             "above": "string",
             "below": "string",
             "pairs": "array"
+        }
+    },
+    "assert_layer_order": {
+        "required": [
+            "order"
+        ],
+        "optional": [
+            "strict"
+        ],
+        "types": {
+            "order": "array",
+            "strict": "boolean"
         }
     },
     "measure_bounds": {

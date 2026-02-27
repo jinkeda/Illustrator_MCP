@@ -280,11 +280,11 @@ illustrator_execute_script(
 | `ops_core` | Batch executor, global ID index, journal integration |
 | `ops_element` | Create / modify / delete shapes (rect, ellipse, line, polygon, star, text) |
 | `ops_group` | Group / ungroup, z-order, clipping masks |
-| `ops_layer` | Layer CRUD |
+| `ops_layer` | Layer CRUD, fail-loud reference checks, `placement` pinning, `layer_list` |
 | `ops_style` | Fill, stroke, opacity |
 | `ops_text` | Text frame creation and styling |
 | `ops_align` | Alignment and distribution |
-| `ops_measure` | Assertions (count, bounds, exists, style, alignment), snapshots, repair mode |
+| `ops_measure` | Assertions (count, bounds, exists, style, alignment, layer order), snapshots, repair mode |
 | `op_schemas` | Auto-generated parameter validation schemas |
 
 ### Advanced Libraries
@@ -784,6 +784,9 @@ Illustrator_MCP/
 │   ├── test_clip_ops.py          # Clipping mask schema + handler guard tests
 │   ├── test_grid_helper.py       # Grid discovery tests
 │   ├── test_vlm_grounding.py     # VLM grounding pipeline tests (42 tests)
+│   ├── test_layer_targeting.py   # Layer targeting resolution tests
+│   ├── test_layer_order.py       # Layer ordering fixes: fail-loud refs, placement, assert_layer_order (10 tests)
+│   ├── test_soc_contracts.py     # Contract sync tests across 4 registry layers (6 tests)
 │   ├── test_registry_snapshot.py  # Registry + canonical policy tests (11 tests)
 │   └── test_brand_social_kit_fixes.py
 ├── scripts/

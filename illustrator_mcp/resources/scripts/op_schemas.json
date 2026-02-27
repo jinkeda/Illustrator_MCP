@@ -116,6 +116,18 @@
       "ids": "array"
     }
   },
+  "assert_layer_order": {
+    "optional": [
+      "strict"
+    ],
+    "required": [
+      "order"
+    ],
+    "types": {
+      "order": "array",
+      "strict": "boolean"
+    }
+  },
   "assert_style": {
     "optional": [
       "fill",
@@ -525,18 +537,30 @@
     }
   },
   "layer_create": {
+    "enumValues": {
+      "placement": [
+        "top",
+        "bottom"
+      ]
+    },
     "optional": [
       "color",
       "visible",
-      "locked"
+      "locked",
+      "above",
+      "below",
+      "placement"
     ],
     "required": [
       "name"
     ],
     "types": {
+      "above": "string",
+      "below": "string",
       "color": "object",
       "locked": "boolean",
       "name": "string",
+      "placement": "string",
       "visible": "boolean"
     }
   },
@@ -548,6 +572,11 @@
     "types": {
       "name": "string"
     }
+  },
+  "layer_list": {
+    "optional": [],
+    "required": [],
+    "types": {}
   },
   "layer_lock": {
     "optional": [],

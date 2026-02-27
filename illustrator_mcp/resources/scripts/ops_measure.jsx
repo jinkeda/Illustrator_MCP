@@ -136,6 +136,90 @@ registerOpHandler("assert_z_order", function (params, targets, ctx) {
     };
 });
 
+// ==================== Assert Layer Order ====================
+
+/**
+ * Assert that layers appear in expected top-to-bottom order.
+ * Uses monotonicity check on index map: index[E0] < index[E1] < ...
+ *
+ * @param {string[]} params.order - Expected layer names, top-to-bottom
+ * @param {boolean} [params.strict=false] - false = subset ordering (extra layers ok),
+ *                                          true = exact match (no extra layers)
+ */
+registerOpHandler("assert_layer_order", function (params, targets, ctx) {
+    var doc = ctx.doc;
+    var expected = params.order;
+
+    if (!expected || expected.length < 2) {
+        return makeError(ErrorCodes.V_MISSING_REQUIRED_PARAM,
+            "assert_layer_order requires 'order' array with >= 2 names", "validate");
+    }
+
+    // Build actual order + index map (0 = topmost)
+    var actual = [];
+    var indexMap = {};
+    for (var i = 0; i < doc.layers.length; i++) {
+        var n = doc.layers[i].name;
+        actual.push(n);
+        if (indexMap[n] === undefined) indexMap[n] = i; // first occurrence
+    }
+
+    var missing = [];
+    var violations = [];
+
+    // Check existence + monotonicity: index[E0] < index[E1] < ...
+    var prevIdx = -1;
+    var prevName = null;
+    for (var i = 0; i < expected.length; i++) {
+        var name = expected[i];
+        if (indexMap[name] === undefined) {
+            missing.push(name);
+            continue;
+        }
+        var idx = indexMap[name];
+        if (prevIdx >= 0 && idx <= prevIdx) {
+            violations.push({
+                name: name,
+                issue: "expected below '" + prevName + "' (idx " + prevIdx
+                    + ") but found at idx " + idx
+                    + " (actual neighbor: '" + actual[idx > 0 ? idx - 1 : 0] + "')",
+                expectedAfter: prevIdx,
+                actualIndex: idx
+            });
+        }
+        prevIdx = idx;
+        prevName = name;
+    }
+
+    // strict: true = exact set match, no extra layers
+    // strict: false (default) = subset relative ordering, extras allowed
+    if (params.strict === true && actual.length !== expected.length) {
+        var extra = [];
+        for (var i = 0; i < actual.length; i++) {
+            var found = false;
+            for (var j = 0; j < expected.length; j++) {
+                if (actual[i] === expected[j]) { found = true; break; }
+            }
+            if (!found) extra.push(actual[i]);
+        }
+        violations.push({
+            name: "(strict)",
+            issue: "extra layers: expected " + expected.length + ", actual " + actual.length,
+            extra: extra
+        });
+    }
+
+    return {
+        ok: missing.length === 0 && violations.length === 0,
+        data: {
+            expectedOrder: expected,
+            actualOrder: actual,
+            missing: missing.length > 0 ? missing : undefined,
+            violations: violations.length > 0 ? violations : undefined
+        }
+    };
+});
+
 // ==================== Assert Bounds ====================
 
 registerOpHandler("assert_bounds", function (params, targets, ctx) {

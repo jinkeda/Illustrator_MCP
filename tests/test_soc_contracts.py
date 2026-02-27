@@ -27,7 +27,7 @@ KNOWN_SERVER_SIDE = {"path_boolean"}
 KNOWN_INTERNAL = set()  # None currently — both undocumented ops now have schemas
 
 # Ops that are readonly but whose name doesn't match readonly prefixes
-KNOWN_READONLY = {"style_snapshot"}
+KNOWN_READONLY = {"style_snapshot", "layer_list"}
 
 
 def _get_contract_ops() -> set:

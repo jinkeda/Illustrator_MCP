@@ -237,10 +237,13 @@ OP_SCHEMAS: List[OpSchema] = [
 
     # --- Layer ops ---
     OpSchema(name="layer_create", description="Create a new layer", params={
-        "name":    _p(S, required=True),
-        "color":   _p(O),
-        "visible": _p(B),
-        "locked":  _p(B),
+        "name":      _p(S, required=True),
+        "color":     _p(O),
+        "visible":   _p(B),
+        "locked":    _p(B),
+        "above":     _p(S, desc="Place above this layer (name)"),
+        "below":     _p(S, desc="Place below this layer (name)"),
+        "placement": _p(S, enum=["top", "bottom"], desc="Pin to stack edge"),
     }),
     OpSchema(name="layer_activate", description="Activate a layer", params={
         "name": _p(S, required=True),
@@ -256,6 +259,7 @@ OP_SCHEMAS: List[OpSchema] = [
     OpSchema(name="layer_delete", description="Delete a layer", params={
         "name": _p(S, required=True),
     }),
+    OpSchema(name="layer_list", description="List all layers (read-only)"),
 
     # --- Style ops ---
     OpSchema(name="style_set_fill", description="Set fill color", params={
@@ -389,6 +393,10 @@ OP_SCHEMAS: List[OpSchema] = [
         "above": _p(S, desc="MCP ID that should be above"),
         "below": _p(S, desc="MCP ID that should be below"),
         "pairs": _p(A, desc="Array of [aboveId, belowId] pairs for batch check"),
+    }),
+    OpSchema(name="assert_layer_order", description="Assert layer stacking order (monotonicity check)", params={
+        "order":  _p(A, required=True, desc="Layer names top-to-bottom"),
+        "strict": _p(B, desc="Exact match (no extra layers) if true"),
     }),
 
     # --- Measure/snapshot ops ---
