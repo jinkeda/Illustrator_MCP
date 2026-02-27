@@ -283,137 +283,60 @@ class ExecuteScriptInput(ToolInputBase):
     )
 
 
-@mcp.tool(
-    name="illustrator_execute_script",
-    annotations={
-        "title": "Execute JavaScript in Illustrator",
-        "readOnlyHint": False,
-        "destructiveHint": True,
-        "idempotentHint": False,
-        "openWorldHint": False
-    }
+from illustrator_mcp.tools.base import (
+    TOOL_ANNOTATIONS, ABSTRACTION_LADDER, COORDINATE_SYSTEM_BLOCK,
 )
+
+_NAME = "illustrator_execute_script"
+
+
+@mcp.tool(name=_NAME, annotations=TOOL_ANNOTATIONS[_NAME])
 async def illustrator_execute_script(params: ExecuteScriptInput) -> Union[str, list]:
-    """
-    Execute raw JavaScript/ExtendScript code in Adobe Illustrator.
+    """Execute raw JavaScript/ExtendScript code in Adobe Illustrator.
 
-    ═══════════════════════════════════════════════════════════════════
+    CONTRACT: readOnly=False, destructive=True, idempotent=False, openWorld=True
+
+    WHEN TO USE:
+      - Single one-off items, quick prototypes, or operations not covered by higher-level tools
+      - Full DOM access when structured tools are insufficient
+      - Reading document state with custom logic
+
     ABSTRACTION LADDER — prefer higher levels before using raw script:
-    ═══════════════════════════════════════════════════════════════════
+      Level 5 — illustrator_path_boolean: boolean sculpt (unite/subtract/intersect/xor)
+      Level 4 — illustrator_execute_task + element_create_batch: batch-create identical shapes
+      Level 3 — illustrator_path_import_svg: import SVG d-string paths
+      Level 2 — illustrator_execute_task + element_create: smooth curves, handles, mirror
+      Level 1 — illustrator_execute_script (THIS tool): raw ExtendScript
 
-    Level 5 — path_boolean tool:
-      Sculpt shapes via unite/subtract/intersect/xor.
-      USE WHEN: combining primitives, cutting holes, engine nacelles.
-      EXAMPLE: path_boolean(operation="unite", subject="body", clip=["canopy"])
-
-    Level 4 — element_create_batch (via execute_task):
-      Batch-create identical shapes in grids, rows, or scatter.
-      USE WHEN: ≥3 repeated shapes (windows, dots, grid cells).
-      EXAMPLE: {task: "element_create_batch", params: {
-        template: {type: "ellipse", rx: 4, ry: 3},
-        array: {count: 47, startX: 180, startY: 145, spacingX: 15}}}
-
-    Level 3 — path_import_svg tool:
-      Import SVG d-string paths. LLMs are fluent in SVG syntax (M/L/C/S/A/Z).
-      USE WHEN: complex outlines, organic shapes, arcs.
-      EXAMPLE: path_import_svg(d="M 10 50 C 20 20, 80 20, 90 50 S 170 80, 190 50")
-
-    Level 2 — element_create + smooth (via execute_task):
-      Smooth interpolation from waypoints. No handle math needed.
-      Params: smooth (bool), tension (0=straight, 0.5=default, 1.0=loose).
-      USE WHEN: fuselage profiles, wave shapes, smooth curves.
-      EXAMPLE: {task: "element_create", params: {
-        type: "path", points: [[0,50],[50,0],[100,50],[150,0],[200,50]],
-        smooth: true, tension: 0.5, fill: {r: 0, g: 150, b: 136}}}
-
-    Level 2b — element_create + handles (via execute_task):
-      Polar/relative handles for precise Bézier control without absolute coords.
-      Angles in degrees, 0°=+X, CCW positive, same frame as points.
-      USE WHEN: sharp tips, engineering profiles, precise tangent control.
-      EXAMPLE: {task: "element_create", params: {
-        type: "path", points: [[0,50],[100,0],[200,50]],
-        handles: [null, {angle: 0, length: 30, symmetric: true}, null],
-        fill: {r: 0, g: 150, b: 136}}}
-      NOTE: handles and smooth are mutually exclusive.
-
-    Level 2c — element_create + mirror (via execute_task):
-      Define half-profile, auto-mirror for bilateral symmetry.
-      Modes: mirror_y_bottom, mirror_y_top, mirror_x_right, mirror_x_left.
-      USE WHEN: fuselage cross-sections, symmetric wings, logos.
-      EXAMPLE: {task: "element_create", params: {
-        type: "path", points: [[0,0],[20,-15],[80,-15],[120,0]],
-        smooth: true, mirror: "mirror_y_bottom",
-        fill: {r: 200, g: 200, b: 200}}}
-
-    Level 1 — execute_script (THIS tool):
-      Raw ExtendScript. Full DOM access but verbose and error-prone.
-      USE WHEN: single one-off items, quick prototypes, or operations
-      not covered by higher-level tools.
-
-    DECISION RULES (hard stops):
-    - If you need to subtract/unite shapes → MUST use path_boolean tool.
-    - If creating ≥3 identical shapes      → MUST use element_create_batch.
-    - If setEntirePath has >12 coord pairs → STOP and use smooth:true or SVG d.
-
-    ═══════════════════════════════════════════════════════════════════
+    DECISION RULES:
+      - Subtract/unite shapes — MUST use illustrator_path_boolean
+      - Creating >=3 identical shapes — MUST use illustrator_execute_task + element_create_batch
+      - setEntirePath with >12 coord pairs — STOP and use smooth:true or illustrator_path_import_svg
 
     COORDINATE SYSTEM:
-    - Origin: Top-left of artboard
-    - Y-axis: NEGATIVE downward. Use -y for visual y positions.
-    - Units: Points (1 pt = 1/72 inch)
+      - API coordinates use top-left origin with y increasing downward (screen space)
+      - ExtendScript expects Y-up internally; use -y when calling Illustrator DOM methods
+      - Units: points (1 pt = 1/72 inch)
+      - Example: to place at visual position (100, 200), use position = [100, -200]
 
-    RAW EXTENDSCRIPT REFERENCE (Level 1 fallback):
+    EXAMPLES:
+      Rectangle: doc.pathItems.rectangle(top, left, width, height)
+      Ellipse: doc.pathItems.ellipse(top, left, width, height)
+      Line: var p = doc.pathItems.add(); p.setEntirePath([[x1,-y1], [x2,-y2]])
+      Color: var c = new RGBColor(); c.red=255; c.green=0; c.blue=0; shape.fillColor = c;
+      Text: var tf = doc.textFrames.add(); tf.contents = "text"; tf.position = [x, -y];
+      Grid helpers: artboardGrid(cols, rows), itemsInCell(cell, mode)
 
-    Shapes:
-    - Rectangle: doc.pathItems.rectangle(top, left, width, height)
-    - Ellipse: doc.pathItems.ellipse(top, left, width, height)
-    - Line: var p = doc.pathItems.add(); p.setEntirePath([[x1,-y1], [x2,-y2]])
-
-    Colors:
-    - var c = new RGBColor(); c.red=255; c.green=0; c.blue=0;
-    - shape.fillColor = c; shape.strokeColor = c;
-
-    Text:
-    - var tf = doc.textFrames.add(); tf.contents = "text"; tf.position = [x, -y];
-
-    Selection:
-    - var sel = doc.selection; // Array of selected items
-    - item.selected = true; // Select an item
-
-    ELEMENT DISCOVERY:
-    Use grid helpers to locate items on the artboard:
-    - artboardGrid(cols, rows) — divide artboard into labeled cells (A1, B2, ...)
-    - itemsInCell(cell, mode) — find items in a grid cell ("containsCenter" or "intersects")
-
-    MUTATION SAFETY:
-    Every execute_script call increments a mutation counter. An annotated preview
-    is auto-injected every VLM_QA_CADENCE calls for visual verification.
-    Set final_step=true on the last mutation to force a checkpoint.
-
-    KNOWN LIMITATIONS:
-
-    Boolean path ops:
-      Use the path_boolean TOOL instead of ExtendScript workarounds.
-
-    Bézier curves:
-      Prefer element_create with smooth:true or path_import_svg.
-      If raw handles are needed: setEntirePath() creates corner points only.
-      Set handles after creation:
-        path.pathPoints[0].leftDirection = [lx0, -ly0];
-        path.pathPoints[0].rightDirection = [rx0, -ry0];
+    NOTES:
+      - Every call increments a mutation counter; annotated preview auto-injected at VLM cadence
+      - Set final_step=true on the last mutation to force a VLM checkpoint
+      - setEntirePath() creates corner points only; set handles after creation
+      - ExtendScript can access File/Folder and OS — treat as open-world
 
     SAFETY:
-      A watchdog is injected before every script with dual limits:
-      - Op count: __mcp_check() throws after max_ops (default 500K)
-      - Wall clock: __mcp_check() throws after max_ms (default 25s)
-      Call __mcp_check() as the FIRST line inside every for/while body.
-
-      CRITICAL: Never iterate a live Illustrator collection if you add/remove
-      items in the loop. Use the injected snapshot helpers instead:
-        __mcp_forEachSnapshot(doc.pathItems, function(item, i) { ... });
-        var snap = __mcp_snapshot(doc.pathItems);
-
-    IMPORTANT: Always use -y for Y coordinates when positioning objects.
+      - __mcp_check() watchdog: call as FIRST line inside every for/while body
+      - Never iterate live Illustrator collections if adding/removing items
+      - Use __mcp_forEachSnapshot(collection, fn) or __mcp_snapshot(collection) instead
     """
     # Log script execution for telemetry
     script = params.script  # Already resolved by model_validator

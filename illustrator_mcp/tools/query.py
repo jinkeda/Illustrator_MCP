@@ -14,7 +14,7 @@ from illustrator_mcp.shared import mcp
 from illustrator_mcp.proxy_client import execute_script_with_context, format_envelope
 from illustrator_mcp.libraries import get_injection_metadata
 from illustrator_mcp.errors import ErrorCode, make_envelope
-from illustrator_mcp.tools.base import ToolInputBase
+from illustrator_mcp.tools.base import ToolInputBase, TOOL_ANNOTATIONS
 
 logger = logging.getLogger("illustrator_mcp")
 
@@ -59,30 +59,29 @@ class QueryItemsInput(ToolInputBase):
     )
 
 
-@mcp.tool(
-    name="illustrator_query_items",
-    annotations={
-        "title": "Query Items (Task Protocol)",
-        "readOnlyHint": True,
-        "destructiveHint": False
-    }
-)
+_QUERY_NAME = "illustrator_query_items"
+
+
+@mcp.tool(name=_QUERY_NAME, annotations=TOOL_ANNOTATIONS[_QUERY_NAME])
 async def illustrator_query_items(params: QueryItemsInput) -> str:
-    """
-    Query items using the Task Protocol with declarative target selection.
-    
-    This is a pilot tool demonstrating the new Task Protocol architecture:
-    - Uses collectTargets() for declarative selection
-    - Returns structured TaskReport with timing and stats
-    - Supports trace mode for debugging
-    
-    Target types:
-    - 'selection': Current selection (default)
-    - 'layer': All items on a specific layer
-    - 'all': All items in document
-    - 'query': Filter by itemType and/or namePattern
-    
-    Returns ItemRef for each matched item, enabling stable references.
+    """Query items using the Task Protocol with declarative target selection.
+
+    CONTRACT: readOnly=True, destructive=False, idempotent=True, openWorld=False
+
+    WHEN TO USE:
+      - Finding items by type, name pattern, or location before modification
+      - Inspecting current selection
+      - Listing all items on a layer or in the document
+
+    TARGET SELECTORS:
+      {type: "selection"} — current selection (default)
+      {type: "layer", layer: "Layer 1"} — all items on layer
+      {type: "all", recursive: true} — all items in document
+      {type: "query", itemType: "PathItem", pattern: "axis_*"} — filter by type/name
+
+    NOTES:
+      - Returns ItemRef for each matched item, enabling stable references
+      - Set include_trace=True for debugging
     """
     
     # Use targets directly from input (already matches Task Protocol format)
@@ -311,33 +310,27 @@ class PreflightCheckInput(ToolInputBase):
     )
 
 
-@mcp.tool(
-    name="illustrator_preflight_check",
-    annotations={
-        "title": "Preflight Document Check",
-        "readOnlyHint": True,
-        "destructiveHint": False,
-        "idempotentHint": True,
-        "openWorldHint": False
-    }
-)
+_PREFLIGHT_NAME = "illustrator_preflight_check"
+
+
+@mcp.tool(name=_PREFLIGHT_NAME, annotations=TOOL_ANNOTATIONS[_PREFLIGHT_NAME])
 async def illustrator_preflight_check(params: PreflightCheckInput) -> str:
-    """
-    Perform observational validation on the active document.
+    """Perform observational validation on the active document.
 
-    This is a READ-ONLY tool that checks for common issues:
-    - Items outside artboard bounds (configurable policy)
-    - Zero-size items (width or height = 0)
-    - Empty text frames
-    - Locked layers and items
+    CONTRACT: readOnly=True, destructive=False, idempotent=True, openWorld=False
 
-    Use this before export or to validate document state.
-    Does NOT modify the document.
+    WHEN TO USE:
+      - Before export to catch common issues
+      - Validating document state after a series of modifications
 
-    Returns standardized envelope with:
-    - ok: true if all checks pass
-    - warnings: list of issues found
-    - result: detailed validation data
+    KEY CONCEPTS:
+      Checks for: items outside artboard bounds, zero-size items,
+      empty text frames, locked layers/items.
+      Does NOT modify the document.
+
+    NOTES:
+      - Returns ok=true if all checks pass, with warnings for issues found
+      - Bounds policy: 'warn' (default) emits warnings; 'error' sets ok=false
     """
     ab_idx = params.artboard_index if params.artboard_index is not None else 'null'
 

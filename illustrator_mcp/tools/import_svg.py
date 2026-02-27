@@ -40,30 +40,29 @@ class PathImportSvgInput(ToolInputBase):
     )
 
 
-@mcp.tool(
-    name="illustrator_path_import_svg",
-    annotations={
-        "title": "Import SVG Path",
-        "readOnlyHint": False,
-        "destructiveHint": False,
-        "idempotentHint": False,
-        "openWorldHint": False,
-    },
-)
+from illustrator_mcp.tools.base import TOOL_ANNOTATIONS
+
+_SVG_NAME = "illustrator_path_import_svg"
+
+
+@mcp.tool(name=_SVG_NAME, annotations=TOOL_ANNOTATIONS[_SVG_NAME])
 async def illustrator_path_import_svg(params: PathImportSvgInput) -> str:
-    """Import an SVG path `d` attribute into the active document.
+    """Import an SVG path d attribute into the active document.
 
-    Parses the SVG `d` string server-side, converts arc commands to
-    cubic Beziers, and draws the result via geometry.drawPathPoints.
+    CONTRACT: readOnly=False, destructive=False, idempotent=False, openWorld=False
 
-    For new shapes, prefer geometry.drawPathPoints() via execute_script.
-    This tool is for importing existing SVG path data only.
+    WHEN TO USE:
+      - Importing existing SVG path data (d strings) into Illustrator
+      - Complex outlines, organic shapes, arcs described in SVG syntax
 
-    Safety limits (hardcoded, no override):
-    - MAX_D_LENGTH: 50,000 chars
-    - MAX_SEGMENTS: 5,000 total segments
-    - MAX_SUBPATHS: 100 subpaths
-    - MAX_COORD_ABS: +/-100,000
+    EXAMPLES:
+      illustrator_path_import_svg(d="M 10 50 C 20 20, 80 20, 90 50 Z")
+      illustrator_path_import_svg(d="M 0 0 L 100 0 L 100 100 Z", fill={r: 255, g: 0, b: 0})
+
+    NOTES:
+      - Parses SVG d string server-side, converts arcs to cubic Beziers
+      - Safety limits: 50,000 chars, 5,000 segments, 100 subpaths, +/-100,000 coords
+      - For new shapes prefer illustrator_execute_task + element_create with smooth:true
     """
     # F5: Track mutation cadence — lazy import avoids import-order risk
     from illustrator_mcp.tools.execute import _counter

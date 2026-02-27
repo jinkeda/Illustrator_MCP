@@ -18,7 +18,7 @@ from illustrator_mcp.shared import mcp
 from illustrator_mcp.proxy_client import execute_script_with_context, build_envelope_dict
 from illustrator_mcp.errors import make_envelope
 from illustrator_mcp.protocol import TaskPayload, TaskReport, format_task_report
-from illustrator_mcp.tools.base import ToolInputBase
+from illustrator_mcp.tools.base import ToolInputBase, TOOL_ANNOTATIONS
 from illustrator_mcp.tools.cadence import (
     _counter, VLM_QA_CADENCE, VLM_CHECKPOINT_INSTRUCTION,
 )
@@ -201,62 +201,44 @@ def _preprocess_element_create(payload_data: dict) -> None:
         params.pop("mirrorOrigin", None)
 
 
-@mcp.tool(
-    name="illustrator_execute_task",
-    annotations={
-        "title": "Execute Structured Task",
-        "readOnlyHint": False,
-        "destructiveHint": True,
-        "idempotentHint": False,
-        "openWorldHint": False
-    }
-)
-async def illustrator_execute_task(params: ExecuteTaskInput) -> Union[str, list]:
-    """
-    Execute a structured task using the Task Protocol v2.1.
-    
-    Benefits over raw execute_script:
-    - Standardized payload/report format
-    - Automatic timing and error context
-    - Declarative target selection (no manual selection micro-ops)
-    - Supports dryRun and trace modes
-    - Per-item error localization via itemRef
-    
-    COMMON PATTERNS (use these before falling back to raw execute_script):
+_TASK_NAME = "illustrator_execute_task"
 
-    Smooth curve (Catmull-Rom — no handle math):
-      {task: "element_create", params: {
+
+@mcp.tool(name=_TASK_NAME, annotations=TOOL_ANNOTATIONS[_TASK_NAME])
+async def illustrator_execute_task(params: ExecuteTaskInput) -> Union[str, list]:
+    """Execute a structured task using the Task Protocol v2.1.
+
+    CONTRACT: readOnly=False, destructive=True, idempotent=False, openWorld=False
+
+    WHEN TO USE:
+      - Creating/modifying elements with declarative ops (element_create, style_set, etc.)
+      - Batch element creation (element_create_batch)
+      - Any operation that benefits from structured error reports and target selectors
+
+    EXAMPLES:
+      Smooth curve: {task: "element_create", params: {
         type: "path", points: [[0,50],[50,0],[100,50],[150,0]],
         smooth: true, tension: 0.5, fill: {r: 0, g: 150, b: 136}}}
-
-    Batch shapes (47 windows in a row, 15pt apart):
-      {task: "element_create_batch", params: {
-        template: {type: "ellipse", rx: 4, ry: 3, fill: {r: 200, g: 220, b: 240}},
-        array: {count: 47, startX: 180, startY: 145, spacingX: 15},
-        name: "window"}}
-
-    Grid layout (10×5 grid of squares):
-      {task: "element_create_batch", params: {
-        template: {type: "rect", w: 8, h: 8, fill: {r: 100, g: 100, b: 100}},
-        array: {count: 50, startX: 10, startY: 10, spacingX: 15, spacingY: 15, cols: 10}}}
-
-    Boolean sculpt (use path_boolean tool instead):
-      path_boolean(operation="unite", subject="body_id", clip=["canopy_id"])
-
-    SVG path import (use path_import_svg tool):
-      path_import_svg(d="M 0 100 C 30 20, 70 20, 100 100", fill={r: 200, g: 50, b: 50})
+      Batch shapes: {task: "element_create_batch", params: {
+        template: {type: "ellipse", rx: 4, ry: 3}, array: {count: 47, startX: 180, spacingX: 15}}}
+      Grid layout: {task: "element_create_batch", params: {
+        template: {type: "rect", w: 8, h: 8}, array: {count: 50, cols: 10, spacingX: 15, spacingY: 15}}}
 
     TARGET SELECTORS:
-    - {type: "selection"} - Current selection (default)
-    - {type: "layer", layer: "Layer 1"} - All items in layer
-    - {type: "query", itemType: "PathItem", pattern: "axis_*"} - Pattern match
-    - {type: "all", recursive: true} - All items in document
-    - {type: "id", ids: ["A1", "A2"]} - Stable MCP ID targeting
-    
+      {type: "selection"} — current selection (default)
+      {type: "layer", layer: "Layer 1"} — all items on layer
+      {type: "query", itemType: "PathItem", pattern: "axis_*"} — pattern match
+      {type: "all", recursive: true} — all items in document
+      {type: "id", ids: ["A1", "A2"]} — stable MCP ID targeting
+
     OPTIONS:
-    - dryRun: true - Compute actions but don't apply
-    - trace: true - Include execution trace in report
-    - assignIds: true - Write unique IDs to item.note (opt-in)
+      dryRun: true — compute actions without applying
+      trace: true — include execution trace in report
+      assignIds: true — write unique IDs to item.note (opt-in)
+
+    NOTES:
+      - For boolean ops use illustrator_path_boolean, not execute_task
+      - For raw SVG path data use illustrator_path_import_svg
     """
     # ── SVG d-param removed — redirect to path_import_svg ──────
     payload = params.payload
@@ -521,12 +503,6 @@ JSON.stringify(report);
         # B3: Decrement counter so failed tasks don't pollute cadence
         _counter.decrement()
         logger.error(f"Task execution failed: {str(e)}")
-        # Include checkpoint name for recovery if available
-        if checkpoint_name:
-            raise RuntimeError(
-                f"{e}\n\nRecovery: restore checkpoint '{checkpoint_name}' "
-                f"via illustrator_history(action='checkpoint_restore', name='{checkpoint_name}')"
-            ) from e
         raise
 
 
@@ -570,32 +546,34 @@ class PathBooleanInput(ToolInputBase):
     )
 
 
-@mcp.tool()
+_BOOL_NAME = "illustrator_path_boolean"
+
+
+@mcp.tool(name=_BOOL_NAME, annotations=TOOL_ANNOTATIONS[_BOOL_NAME])
 async def illustrator_path_boolean(params: PathBooleanInput) -> str:
-    """
-    Perform boolean operations (subtract, unite, intersect, xor) on paths.
+    """Perform boolean operations (subtract, unite, intersect, xor) on paths.
 
-    Uses Python Clipper (pyclipper) for boolean computation.
-    Operates on fill geometry only — strokes are ignored (warning emitted).
+    CONTRACT: readOnly=False, destructive=True, idempotent=False, openWorld=False
 
-    Pipeline:
-    1. Extract geometry from Illustrator paths (ExtendScript)
-    2. Flatten Bézier curves if present (Python)
-    3. Run boolean operation via Clipper (Python)
-    4. Reconstruct result as PathItem or CompoundPathItem (ExtendScript)
-    5. Delete originals on success (if delete_originals=True)
+    WHEN TO USE:
+      - Combining shapes (unite), cutting holes (subtract), finding overlaps (intersect)
+      - Any shape sculpting that needs boolean geometry
 
-    Result types:
-    - Simple shapes → PathItem
-    - Shapes with holes (e.g., donut from subtract) → CompoundPathItem
+    PIPELINE:
+      1. Extract geometry from Illustrator paths (ExtendScript)
+      2. Flatten Bezier curves if present (Python)
+      3. Run boolean operation via Clipper (Python)
+      4. Reconstruct result as PathItem or CompoundPathItem (ExtendScript)
+      5. Delete originals on success (if delete_originals=True)
 
-    Args:
-        operation: "subtract", "unite", "intersect", or "xor"
-        subject: MCP ID of the subject (kept) path
-        clip: MCP ID(s) of the clip (cutting) path(s)
-        flatten_tolerance: Bézier flattening precision (points)
-        delete_originals: Whether to remove input paths after boolean
-        style: "subject" (copy subject's style) or "none"
+    EXAMPLES:
+      illustrator_path_boolean(operation="unite", subject="body_id", clip=["wing_id"])
+      illustrator_path_boolean(operation="subtract", subject="plate_id", clip=["hole_id"])
+
+    NOTES:
+      - Operates on fill geometry only — strokes are ignored (warning emitted)
+      - Simple results produce PathItem; shapes with holes produce CompoundPathItem
+      - Subject and clip identified by MCP ID (@mcp:id in item.note)
     """
     # ── Track mutation cadence before any early return ──────────
     # B3: Decremented in except block if execution fails

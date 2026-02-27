@@ -13,7 +13,7 @@ from typing import Dict, List, Literal, Optional
 from pydantic import Field
 
 from illustrator_mcp.shared import mcp
-from illustrator_mcp.tools.base import ToolInputBase, execute_jsx_tool
+from illustrator_mcp.tools.base import ToolInputBase, execute_jsx_tool, TOOL_ANNOTATIONS
 from illustrator_mcp.errors import make_envelope
 from illustrator_mcp import templates
 
@@ -143,51 +143,35 @@ class GetDocumentInput(ToolInputBase):
     layer_index: Optional[int] = Field(None, ge=0, description="Filter to single layer by index")
 
 
-@mcp.tool(
-    name="illustrator_get_document",
-    annotations={
-        "title": "Get Document",
-        "readOnlyHint": True,
-        "destructiveHint": False,
-        "idempotentHint": True,
-        "openWorldHint": False
-    }
-)
+_GETDOC_NAME = "illustrator_get_document"
+
+
+@mcp.tool(name=_GETDOC_NAME, annotations=TOOL_ANNOTATIONS[_GETDOC_NAME])
 async def illustrator_get_document(params: GetDocumentInput) -> str:
-    """
-    Get complete document information and structure as a JSON tree.
+    """Get complete document information and structure as a JSON tree.
 
-    Returns layers, sublayers, and items with their names, types, positions, and properties.
-    Essential for understanding canvas state before writing modification scripts.
+    CONTRACT: readOnly=True, destructive=False, idempotent=True, openWorld=False
 
-    SCOPE:
-    - "document" (default): document structure with layers and items
-    - "app": Illustrator application info (works without an open document)
-    - "both": returns {document: {...}, app: {...}} (document may be null)
+    WHEN TO USE:
+      - Understanding canvas state before writing modification scripts
+      - Inspecting layers, items, positions, and properties
+      - Getting Illustrator application info (scope='app')
 
-    PAGINATION:
-    By default returns up to 200 items per layer and 50 layers.
-    If a layer is truncated, the response includes:
-      - truncated: true
-      - totalItems: total item count
-      - nextOffset: use as 'offset' in next call
-    To page through a single layer:
-      get_document({layer_name: "Layer 1", offset: 200, max_items: 200})
+    OPTIONS:
+      scope: 'document' (default), 'app', or 'both'
+      max_items: items per layer, 1-5000 (default 200)
+      max_layers: layers to return, 1-200 (default 50)
+      offset: skip first N items per layer (for paging)
+      layer_name / layer_index: filter to single layer
 
-    Args:
-        scope: 'document', 'app', or 'both' (default: 'document')
-        max_items: Max items per layer (1-5000, default 200)
-        max_layers: Max layers to return (1-200, default 50)
-        offset: Skip first N items per layer for paging (default 0)
-        layer_name: Filter to a single layer by name
-        layer_index: Filter to a single layer by index
+    EXAMPLES:
+      illustrator_get_document()
+      illustrator_get_document(scope="app")
+      illustrator_get_document(layer_name="Layer 1", offset=200, max_items=200)
 
-    Returns:
-        JSON with:
-        - document: name, width, height, colorMode, saved, layerCount, artboards
-        - layers: array of layer objects with:
-            - name, visible, locked, itemCount, offset, nextOffset
-            - items: array of {name, type, position, bounds}
+    NOTES:
+      - If a layer is truncated, response includes truncated=true and nextOffset
+      - scope='both' returns {document: {...}, app: {...}}
     """
     scope = params.scope
 

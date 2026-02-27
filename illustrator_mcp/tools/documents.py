@@ -16,7 +16,7 @@ from pydantic import Field
 from mcp.types import ImageContent
 from illustrator_mcp.shared import mcp
 from illustrator_mcp import templates
-from illustrator_mcp.tools.base import execute_jsx_tool, ToolInputBase
+from illustrator_mcp.tools.base import execute_jsx_tool, ToolInputBase, TOOL_ANNOTATIONS
 from illustrator_mcp.utils import escape_path_for_jsx
 from illustrator_mcp.proxy_client import execute_script_with_context, format_envelope
 from illustrator_mcp.errors import make_envelope
@@ -136,18 +136,30 @@ async def _place_item_impl(
 
 
 # Unified document CRUD tool
-@mcp.tool(
-    name="illustrator_document",
-    annotations={"title": "Document", "readOnlyHint": False, "destructiveHint": False}
-)
+_DOC_NAME = "illustrator_document"
+
+
+@mcp.tool(name=_DOC_NAME, annotations=TOOL_ANNOTATIONS[_DOC_NAME])
 async def illustrator_document(params: DocumentInput) -> str:
     """Create, open, save, or close an Illustrator document.
 
-    Args:
-        params.action: 'create', 'open', 'save', or 'close'
-        params.width/height/name/color_mode: create params
-        params.file_path: required for open, optional for save-as
-        params.save_before_close: close param
+    CONTRACT: readOnly=False, destructive=True, idempotent=False, openWorld=True
+
+    WHEN TO USE:
+      - Starting a new illustration (action='create')
+      - Opening an existing .ai file (action='open', file_path required)
+      - Saving current work (action='save', file_path for save-as)
+      - Closing the active document (action='close')
+
+    EXAMPLES:
+      illustrator_document(action="create", width=800, height=600, color_mode="RGB")
+      illustrator_document(action="open", file_path="C:/art/figure.ai")
+      illustrator_document(action="save", file_path="C:/art/figure_v2.ai")
+      illustrator_document(action="close", save_before_close=True)
+
+    NOTES:
+      - close without save_before_close=True discards unsaved changes
+      - open/save interact with the filesystem (openWorld)
     """
     action = params.action
 
@@ -202,12 +214,31 @@ async def illustrator_document(params: DocumentInput) -> str:
         )
 
 
-@mcp.tool(
-    name="illustrator_export_document",
-    annotations={"title": "Export Document", "readOnlyHint": False, "destructiveHint": False}
-)
+_EXPORT_NAME = "illustrator_export_document"
+
+
+@mcp.tool(name=_EXPORT_NAME, annotations=TOOL_ANNOTATIONS[_EXPORT_NAME])
 async def illustrator_export_document(params: ExportDocumentInput) -> Union[str, list]:
-    """Export the document to PNG, JPG, SVG, or PDF."""
+    """Export the active document to PNG, JPG, SVG, or PDF.
+
+    CONTRACT: readOnly=False, destructive=True, idempotent=False, openWorld=True
+
+    WHEN TO USE:
+      - Generating raster output (PNG, JPG) with optional scale factor
+      - Exporting vector formats (SVG, PDF)
+      - Getting visual feedback by setting return_image=True (PNG/JPG only)
+
+    EXAMPLES:
+      illustrator_export_document(file_path="C:/out/fig.png", format="png", scale=2.0)
+      illustrator_export_document(file_path="C:/out/fig.pdf", format="pdf")
+      illustrator_export_document(file_path="C:/out/fig.png", return_image=True, artboard_only=True)
+
+    NOTES:
+      - artboard_only=True clips export to artboard; a pre-check warns if nothing is on it
+      - PDF export uses saveAs (longer timeout)
+      - return_image returns base64 image bytes as ImageContent for visual verification
+      - Overwrites existing file at file_path (destructive to filesystem)
+    """
     path = escape_path_for_jsx(params.file_path)
     scale = params.scale * 100
     fmt_name = params.format.value.upper()
@@ -414,27 +445,30 @@ async def _handle_checkpoint(params: HistoryInput) -> str:
     )
 
 
-@mcp.tool(
-    name="illustrator_history",
-    annotations={"title": "Undo/Redo History", "readOnlyHint": False, "destructiveHint": False}
-)
+_HISTORY_NAME = "illustrator_history"
+
+
+@mcp.tool(name=_HISTORY_NAME, annotations=TOOL_ANNOTATIONS[_HISTORY_NAME])
 async def illustrator_history(params: HistoryInput) -> str:
     """Undo or redo actions in Illustrator.
-    
-    Args:
-        action: 'undo' to revert changes, 'redo' to restore undone changes
-        count: Number of times to perform the action (default 1)
-    
-    Use this to revert mistakes or restore undone changes.
-    
-    Checkpoint actions:
-        checkpoint_save: Save current state as a named checkpoint (requires 'name')
-        checkpoint_restore: Restore document to a saved checkpoint (requires 'name')
-        checkpoint_list: List all checkpoints for the current document
-        checkpoint_delete: Delete a named checkpoint (requires 'name')
-    
-    Note: Checkpoints capture MCP-managed items only (those with @mcp:id).
-    Restore is mutate-in-place and may require multiple undo steps to revert.
+
+    CONTRACT: readOnly=False, destructive=True, idempotent=False, openWorld=False
+
+    WHEN TO USE:
+      - Reverting mistakes (action='undo', count=N)
+      - Restoring undone changes (action='redo')
+      - Saving/restoring named checkpoints for recovery
+
+    EXAMPLES:
+      illustrator_history(action="undo", count=3)
+      illustrator_history(action="checkpoint_save", name="before_boolean")
+      illustrator_history(action="checkpoint_restore", name="before_boolean")
+      illustrator_history(action="checkpoint_list")
+
+    NOTES:
+      - Checkpoints capture MCP-managed items only (those with @mcp:id)
+      - checkpoint_restore is mutate-in-place; may require multiple undo to revert
+      - undo/redo change document state (destructive)
     """
     # Dispatch checkpoint actions
     if params.action.startswith("checkpoint_"):
@@ -501,33 +535,35 @@ class PlaceFileInput(ToolInputBase):
                 )
 
 
-@mcp.tool(
-    name="illustrator_place_file",
-    annotations={"title": "Place File", "readOnlyHint": False, "destructiveHint": False}
-)
+_PLACE_NAME = "illustrator_place_file"
+
+
+@mcp.tool(name=_PLACE_NAME, annotations=TOOL_ANNOTATIONS[_PLACE_NAME])
 async def illustrator_place_file(params: PlaceFileInput) -> str:
     """Place an external file (EPS, AI, PDF, image) into the document.
-    
-    Supports all placeable formats: PNG, JPG, EPS, AI, PDF, SVG, etc.
-    For raster images (PNG, JPG), this is the standard way to import them.
-    
-    Workflow:
-    - linked=True (drafting): File updates automatically when source changes
-    - linked=False (final): File is embedded and fully editable
-    - embed_editable=True: Opens PDF, copies content as editable vectors (slower)
-    - trace=True: Place raster image, then run Image Trace to vectorize it.
-      The AI acts as art director (selecting presets, recoloring, simplifying)
-      rather than manually computing paths.
-    
-    Trace notes:
-    - expand=True (default): Converts to editable PathItem/CompoundPathItem group.
-      Higher DOM complexity, but paths are fully editable and support boolean ops.
-    - expand=False: Keeps live trace PluginItem. Lighter DOM, but limited editability.
-    - High-complexity images may produce thousands of paths. A warning is emitted
-      if the expanded group exceeds 2000 items.
-    
-    Use linked=True during iterative work (e.g., updating MATLAB plots),
-    then embed when ready for submission.
+
+    CONTRACT: readOnly=False, destructive=True, idempotent=False, openWorld=True
+
+    WHEN TO USE:
+      - Importing raster images (PNG, JPG) into Illustrator
+      - Placing vector files (EPS, AI, PDF, SVG)
+      - Vectorizing raster images via Image Trace (trace=True)
+
+    KEY CONCEPTS:
+      linked=True (drafting) — file updates automatically when source changes
+      linked=False (final) — file is embedded and fully editable
+      embed_editable=True — opens PDF, copies content as editable vectors (slower)
+      trace=True — place raster, then run Image Trace to vectorize
+
+    EXAMPLES:
+      illustrator_place_file(file_path="C:/img/photo.png", x=100, y=50, linked=True)
+      illustrator_place_file(file_path="C:/img/photo.png", trace=True, trace_preset="6 Colors")
+
+    NOTES:
+      - trace + expand=True: editable paths, higher DOM complexity
+      - trace + expand=False: live trace PluginItem, lighter but limited editability
+      - High-complexity images may produce >2000 paths (warning emitted)
+      - Reads external files from filesystem (openWorld)
     """
     return await _place_item_impl(
         file_path=params.file_path,
@@ -654,23 +690,32 @@ def _extract_dominant_colors(
         return []
 
 
-@mcp.tool(
-    name="illustrator_set_reference",
-    annotations={"title": "Set Reference Overlay", "readOnlyHint": False, "destructiveHint": False}
-)
+_REF_NAME = "illustrator_set_reference"
+
+
+@mcp.tool(name=_REF_NAME, annotations=TOOL_ANNOTATIONS[_REF_NAME])
 async def illustrator_set_reference(params: SetReferenceInput) -> str:
     """Set or clear a reference image on a locked background layer for tracing.
 
-    Places a reference image on a dedicated '__reference__' layer at the bottom
-    of the layer stack. The layer is locked, dimmed, and non-printable to prevent
-    accidental edits or export contamination.
+    CONTRACT: readOnly=False, destructive=True, idempotent=True, openWorld=True
 
-    Modes:
-    - Set: Provide file_path to place/replace a reference image
-    - Clear: Omit file_path (or pass null) to remove the reference layer
+    WHEN TO USE:
+      - Preparing a reference image overlay before manual or automated tracing
+      - Clearing a previous reference (omit file_path)
 
-    Idempotent: calling again replaces the previous reference automatically.
-    Uses the active artboard for fit/center calculations.
+    KEY CONCEPTS:
+      Places image on a dedicated '__reference__' layer at the bottom of the stack.
+      Layer is locked, dimmed, and non-printable to prevent accidental edits.
+      Calling again with the same file replaces the previous reference (idempotent).
+
+    EXAMPLES:
+      illustrator_set_reference(file_path="C:/ref/sketch.png", opacity=50)
+      illustrator_set_reference()  -- clears the reference layer
+
+    NOTES:
+      - Removal mode (no file_path) is destructive — deletes the reference layer
+      - Uses the active artboard for fit/center calculations
+      - Extracts dominant colors from reference image if Pillow is available
     """
     payload = params.model_dump()
     payload["layer_name"] = _REFERENCE_LAYER_NAME

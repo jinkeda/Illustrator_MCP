@@ -196,6 +196,8 @@ No additional servers or processes needed.
 
 This server follows a **Scripting First** architecture: one powerful script executor handles most operations, complemented by purpose-built tools for document I/O, state inspection, and structured queries.
 
+Every tool carries a `CONTRACT:` line in its docstring and machine-checkable annotation hints (`readOnlyHint`, `destructiveHint`, `idempotentHint`, `openWorldHint`) sourced from a canonical `TOOL_ANNOTATIONS` registry in `base.py`. Hints follow the **worst-case capability rule**: if *any* action of a multi-action tool is destructive, the tool is annotated as destructive.
+
 ### Script Execution (2)
 
 | Tool | Description |
@@ -731,7 +733,7 @@ Illustrator_MCP/
 │   ├── schemas/                  # Generated JSON schemas
 │   ├── tools/
 │   │   ├── __init__.py           # Tool registration
-│   │   ├── base.py               # Shared execute_jsx_tool helper
+│   │   ├── base.py               # Shared base + TOOL_ANNOTATIONS registry (SSOT)
 │   │   ├── execute.py            # execute_script + auto-grounding
 │   │   ├── task_execution.py     # execute_task + path boolean operations
 │   │   ├── cadence.py            # VLM QA cadence counter + constants
@@ -782,7 +784,7 @@ Illustrator_MCP/
 │   ├── test_clip_ops.py          # Clipping mask schema + handler guard tests
 │   ├── test_grid_helper.py       # Grid discovery tests
 │   ├── test_vlm_grounding.py     # VLM grounding pipeline tests (42 tests)
-│   ├── test_registry_snapshot.py  # Registry snapshot test (12 tools, 3 resources)
+│   ├── test_registry_snapshot.py  # Registry + canonical policy tests (11 tests)
 │   └── test_brand_social_kit_fixes.py
 ├── scripts/
 │   └── gen_schemas.py            # Schema codegen (Python -> JSX)
@@ -832,6 +834,7 @@ python -m scripts.gen_schemas
 6. **Fail Fast with Structured Errors** -- Typed error codes (V/R/S/C/SVG categories) with actionable recovery suggestions.
 7. **Auto-Grounding** -- SOC task results always include an annotated artboard preview, forcing the AI to see the visual state before its next action. No opt-in required.
 8. **VLM QA Cadence** -- Every 5th `execute_script` call auto-injects an annotated preview. Combined with `final_step=True`, the AI is periodically forced to visually verify and catch defects.
+9. **Canonical Tool Annotations** -- A single `TOOL_ANNOTATIONS` registry in `base.py` defines `readOnly`, `destructive`, `idempotent`, and `openWorld` hints for all 12 tools. Each docstring contains a `CONTRACT:` line that is verified against the registry by automated tests, preventing annotation drift.
 
 ---
 
