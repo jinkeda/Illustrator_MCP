@@ -691,15 +691,19 @@ async def illustrator_set_reference(params: SetReferenceInput) -> str:
         if os.path.isfile(resolved):
             colors = _extract_dominant_colors(resolved)
             if colors:
-                # Merge colors into the response envelope
                 try:
                     parsed = json.loads(result)
-                    parsed["dominant_colors"] = colors
-                    result = json.dumps(parsed, indent=2)
+                    # Inject into result (not top-level) to preserve 5-key envelope
+                    if isinstance(parsed.get("result"), dict):
+                        parsed["result"]["dominant_colors"] = colors
+                    elif parsed.get("result") is None:
+                        parsed["result"] = {"dominant_colors": colors}
+                    else:
+                        # result is a non-dict (string) — put in diagnostics instead
+                        parsed.setdefault("diagnostics", {})["dominant_colors"] = colors
+                    result = json.dumps(parsed)
                 except (json.JSONDecodeError, TypeError):
-                    # Response isn't JSON — append as separate block
-                    color_json = json.dumps({"dominant_colors": colors}, indent=2)
-                    result = f"{result}\n\n--- Dominant Colors ---\n{color_json}"
+                    pass  # Non-JSON response — skip color injection
 
     return result
 

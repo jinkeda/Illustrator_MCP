@@ -14,6 +14,7 @@ from pydantic import Field
 
 from illustrator_mcp.shared import mcp
 from illustrator_mcp.tools.base import ToolInputBase, execute_jsx_tool
+from illustrator_mcp.errors import make_envelope
 from illustrator_mcp import templates
 
 logger = logging.getLogger(__name__)
@@ -242,23 +243,46 @@ async def illustrator_get_document(params: GetDocumentInput) -> str:
         params={"scope": "both", "part": "app"}
     )
 
-    # Try to parse and combine; fall back to raw strings
+    # Parse sub-results (execute_jsx_tool returns canonical envelope JSON strings)
+    # Extract inner result to avoid nesting envelopes
     warnings = []
+    doc_env = None
+    app_env = None
     try:
-        doc_data = json.loads(doc_result) if isinstance(doc_result, str) else doc_result
+        doc_env = json.loads(doc_result) if isinstance(doc_result, str) else doc_result
     except (json.JSONDecodeError, TypeError):
-        doc_data = None
         warnings.append("Failed to parse document info (no active document?)")
     try:
-        app_data = json.loads(app_result) if isinstance(app_result, str) else app_result
+        app_env = json.loads(app_result) if isinstance(app_result, str) else app_result
     except (json.JSONDecodeError, TypeError):
-        app_data = None
         warnings.append("Failed to parse app info")
 
-    combined = {"document": doc_data, "app": app_data}
-    if warnings:
-        combined["warnings"] = warnings
-    return json.dumps(combined, indent=2)
+    doc_ok = bool(doc_env and isinstance(doc_env, dict) and doc_env.get("ok") is True)
+    app_ok = bool(app_env and isinstance(app_env, dict) and app_env.get("ok") is True)
+    doc_data = doc_env.get("result") if isinstance(doc_env, dict) else doc_env
+    app_data = app_env.get("result") if isinstance(app_env, dict) else app_env
+
+    if doc_ok and app_ok:
+        return make_envelope(
+            ok=True,
+            result={"document": doc_data, "app": app_data},
+            warnings=warnings,
+        )
+
+    # Partial or full failure — strict semantics: ok=false, partials in diagnostics
+    if not doc_ok and not app_ok:
+        msg = "Failed to collect document and app context."
+    elif not doc_ok:
+        msg = "Failed to collect document context (no active document?)."
+    else:
+        msg = "Failed to collect app context."
+
+    return make_envelope(
+        ok=False,
+        error=msg,
+        warnings=warnings,
+        diagnostics={"partials": {"document": doc_data, "app": app_data}},
+    )
 
 
 def _get_scripting_reference() -> str:

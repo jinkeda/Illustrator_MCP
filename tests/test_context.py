@@ -67,18 +67,21 @@ class TestGetDocument:
 
     @pytest.mark.asyncio
     async def test_scope_both(self, mock_execute):
-        """Test scope='both' returns nested {document, app} structure."""
+        """Test scope='both' returns canonical envelope with {document, app} in result."""
+        # execute_jsx_tool returns canonical envelope JSON strings
         mock_execute.side_effect = [
-            json.dumps({"document": {"name": "Test.ai"}, "layers": []}),
-            json.dumps({"name": "Adobe Illustrator", "version": "30.0"})
+            json.dumps({"ok": True, "result": {"name": "Test.ai"}, "error": None, "warnings": [], "diagnostics": {}}),
+            json.dumps({"ok": True, "result": {"name": "Adobe Illustrator", "version": "30.0"}, "error": None, "warnings": [], "diagnostics": {}})
         ]
 
         result = await illustrator_get_document(params=GetDocumentInput(scope="both"))
 
         assert mock_execute.call_count == 2
         parsed = json.loads(result)
-        assert "document" in parsed
-        assert "app" in parsed
+        # Canonical 5-key envelope
+        assert parsed["ok"] is True
+        assert "document" in parsed["result"]
+        assert "app" in parsed["result"]
 
     @pytest.mark.asyncio
     async def test_scope_defaults_to_document(self, mock_execute):
