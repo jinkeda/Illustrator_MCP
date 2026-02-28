@@ -22,10 +22,12 @@ from mcp.types import ImageContent, TextContent
 from illustrator_mcp.tools.cadence import (
     _MutationCounter, _counter, VLM_QA_CADENCE, VLM_CHECKPOINT_INSTRUCTION,
     get_mutation_count, reset_mutation_count,
+    format_z_telemetry,
 )
 from illustrator_mcp.tools.preview import (
     _build_export_script, _capture_artboard, _capture_artboard_png,
     _generate_preview, _COLLECT_ITEMS_JSX, _filter_items, _annotate_preview,
+    _run_occlusion_guard, _guard_checkpoint, GuardCheckpointResult,
 )
 
 # Set up logging for telemetry
@@ -327,6 +329,17 @@ async def illustrator_execute_script(params: ExecuteScriptInput) -> Union[str, l
       Text: var tf = doc.textFrames.add(); tf.contents = "text"; tf.position = [x, -y];
       Grid helpers: artboardGrid(cols, rows), itemsInCell(cell, mode)
 
+    ELEMENT DISCOVERY:
+      - Use artboardGrid(cols, rows) to partition the artboard into a labeled grid
+      - Use itemsInCell(cell, mode) to find items in a specific grid cell
+      - Modes: 'containsCenter' (default) or 'intersects'
+      - Cell labels follow A1 scheme (letter row + number col, e.g. A1, B3)
+
+    MUTATION SAFETY:
+      - Each call increments a mutation counter for VLM QA cadence tracking
+      - Failed executions auto-decrement the counter to avoid cadence drift
+      - Use final_step=true on the last mutation to force a visual checkpoint
+
     NOTES:
       - Every call increments a mutation counter; annotated preview auto-injected at VLM cadence
       - Set final_step=true on the last mutation to force a VLM checkpoint
@@ -366,6 +379,9 @@ async def illustrator_execute_script(params: ExecuteScriptInput) -> Union[str, l
     is_checkpoint = (count % VLM_QA_CADENCE == 0) or params.final_step
     is_vlm_checkpoint = False  # True only when cadence auto-injects
 
+    # Record checkpoint skip before execution (preview gating decided here,
+    # but guard runs AFTER execution to check post-mutation state)
+    checkpoint_skipped = False
     if is_checkpoint:
         if params.return_preview is False and not params.final_step:
             # AI explicitly disabled preview — soft override: warn but respect
@@ -374,14 +390,15 @@ async def illustrator_execute_script(params: ExecuteScriptInput) -> Union[str, l
                 "Consider using return_preview=True, preview_mode='annotated' "
                 "to visually verify the document state."
             )
+            checkpoint_skipped = True
         else:
-            # Auto-inject annotated preview
+            # Mark for post-execution guard + preview
             params.return_preview = True
             params.preview_mode = "annotated"
             is_vlm_checkpoint = True
             logger.info(
-                f"VLM QA cadence: auto-injecting annotated preview "
-                f"(mutation #{count}, final_step={params.final_step})"
+                f"VLM QA cadence: checkpoint at mutation #{count} "
+                f"(final_step={params.final_step})"
             )
 
     # Get canonicalized includes metadata
@@ -486,6 +503,72 @@ async def illustrator_execute_script(params: ExecuteScriptInput) -> Union[str, l
         has_error = response.get("error") is not None
         diagnostics["preview_state"] = "pre_execution" if has_error else "post_execution"
 
+        # ── Occlusion guard: run AFTER script execution, BEFORE preview ──
+        # Checks the POST-MUTATION document state (what the VLM would see).
+        guard_telemetry = {}
+
+        if is_vlm_checkpoint and not checkpoint_skipped:
+            gcp = await _guard_checkpoint(
+                timeout=params.timeout or 15.0,
+                checkpoint_label="execute_script",
+            )
+            guard_telemetry = gcp.guard_telemetry
+            diagnostics["guard_status"] = gcp.guard_status
+
+            if gcp.should_abort:
+                # ABORT: occlusion detected — skip annotated preview
+                params.return_preview = False
+                diagnostics.update(gcp.diag_extras)
+                warnings.append(gcp.abort_message)
+
+                # Build abort response: envelope + evidence + telemetry + checkpoint
+                env_text = format_envelope(
+                    response=response,
+                    context=context,
+                    warnings=warnings,
+                    diagnostics=diagnostics,
+                )
+                abort_parts = [TextContent(type="text", text=env_text)]
+
+                # Evidence preview (raw) — cheap proof of occlusion
+                try:
+                    from types import SimpleNamespace
+                    evidence_params = SimpleNamespace(
+                        preview_format="png",
+                        preview_max_dim=800,
+                        clip_box=None,
+                    )
+                    evidence_img = await _generate_preview(
+                        params=evidence_params,
+                        timeout=params.timeout or 15.0,
+                    )
+                    if evidence_img:
+                        abort_parts.append(TextContent(
+                            type="text",
+                            text="Evidence preview (raw) — guard aborted before annotation.",
+                        ))
+                        abort_parts.append(evidence_img)
+                except Exception as e:
+                    logger.debug("Evidence preview skipped: %s", e)
+
+                if gcp.telemetry_text:
+                    abort_parts.append(TextContent(
+                        type="text",
+                        text=gcp.telemetry_text,
+                    ))
+                abort_parts.append(TextContent(
+                    type="text",
+                    text=VLM_CHECKPOINT_INSTRUCTION.format(
+                        count=_counter.value
+                    ),
+                ))
+                return abort_parts
+            else:
+                # Guard passed (possibly with Q004 warnings)
+                warnings.extend(gcp.warn_messages)
+        else:
+            diagnostics["guard_status"] = "skipped"
+
         # Return standardized envelope
         envelope = format_envelope(
             response=response,
@@ -516,16 +599,34 @@ async def illustrator_execute_script(params: ExecuteScriptInput) -> Union[str, l
                         ann_b64 = _b64.b64encode(annotated_bytes).decode('utf-8')
                         result_parts = [
                             TextContent(type="text", text=envelope),
-                            ImageContent(
-                                type="image",
-                                data=ann_b64,
-                                mimeType=preview_result.mimeType,
-                            ),
-                            TextContent(
-                                type="text",
-                                text=json.dumps(annotation_result, indent=2),
-                            ),
                         ]
+
+                        # Dual-image at VLM checkpoints: raw + annotated
+                        if is_vlm_checkpoint:
+                            raw_b64 = preview_result.data  # already b64
+                            result_parts.append(ImageContent(
+                                type="image",
+                                data=raw_b64,
+                                mimeType=preview_result.mimeType,
+                            ))
+
+                        result_parts.append(ImageContent(
+                            type="image",
+                            data=ann_b64,
+                            mimeType=preview_result.mimeType,
+                        ))
+                        result_parts.append(TextContent(
+                            type="text",
+                            text=json.dumps(annotation_result, indent=2),
+                        ))
+
+                        # Z-order telemetry (VLM checkpoints only)
+                        if is_vlm_checkpoint and guard_telemetry and gcp.telemetry_text:
+                            result_parts.append(TextContent(
+                                type="text",
+                                text=gcp.telemetry_text,
+                            ))
+
                         # Clip box system note
                         if params.clip_box:
                             result_parts.append(TextContent(

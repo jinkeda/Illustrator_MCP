@@ -89,3 +89,41 @@ class TestPreviewStateLogic:
         preview_state = "post_execution" if envelope_obj.get("ok") else "pre_execution"
         envelope_obj.setdefault("diagnostics", {})["preview_state"] = preview_state
         assert envelope_obj["diagnostics"]["preview_state"] == "post_execution"
+
+
+class TestOcclusionGuardIntegration:
+    """Verify occlusion guard is wired into both execute_script and execute_task."""
+
+    def test_guard_checkpoint_imported_in_execute(self):
+        """execute.py imports _guard_checkpoint from preview."""
+        assert "_guard_checkpoint" in EXECUTE_SRC
+
+    def test_guard_checkpoint_imported_in_task_execution(self):
+        """task_execution.py imports _guard_checkpoint from preview."""
+        assert "_guard_checkpoint" in TASK_EXECUTION_SRC
+
+    def test_guard_checkpoint_called_in_execute(self):
+        """execute.py calls _guard_checkpoint at VLM checkpoints."""
+        assert "await _guard_checkpoint(" in EXECUTE_SRC
+
+    def test_guard_checkpoint_called_in_task_execution(self):
+        """task_execution.py calls _guard_checkpoint at task checkpoints."""
+        assert "await _guard_checkpoint(" in TASK_EXECUTION_SRC
+
+    def test_checkpoint_label_execute_script(self):
+        """execute.py passes checkpoint_label='execute_script'."""
+        assert 'checkpoint_label="execute_script"' in EXECUTE_SRC
+
+    def test_checkpoint_label_execute_task(self):
+        """task_execution.py passes checkpoint_label='execute_task'."""
+        assert 'checkpoint_label="execute_task"' in TASK_EXECUTION_SRC
+
+    def test_telemetry_text_in_both(self):
+        """Both paths use gcp.telemetry_text for consistent telemetry formatting."""
+        assert "gcp.telemetry_text" in EXECUTE_SRC, "Missing gcp.telemetry_text in execute.py"
+        assert "gcp.telemetry_text" in TASK_EXECUTION_SRC, "Missing gcp.telemetry_text in task_execution.py"
+
+    def test_guard_checkpoint_result_imported_in_both(self):
+        """Both files import GuardCheckpointResult."""
+        assert "GuardCheckpointResult" in EXECUTE_SRC
+        assert "GuardCheckpointResult" in TASK_EXECUTION_SRC

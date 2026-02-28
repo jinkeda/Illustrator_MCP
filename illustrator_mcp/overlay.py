@@ -310,6 +310,14 @@ def composite_overlay(
             fill = fill_color if box_area >= MIN_FILL_AREA_PX else None
             draw.rectangle([l, t, r, b], outline=outline_color, fill=fill, width=outline_width)
 
+            # 2b. Cover-ratio tint: red overlay for items covering >90% of artboard
+            cover = ann.get("coverRatio")
+            if cover is not None and cover > 0.90 and box_area >= MIN_FILL_AREA_PX:
+                tw = max(1, r - l)
+                th = max(1, b - t)
+                tint = Image.new("RGBA", (tw, th), (255, 0, 0, 50))
+                overlay.paste(tint, (l, t), tint)
+
             # 3. Measure label text
             text_w, text_h = _measure_text(font, label_text)
 

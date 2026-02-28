@@ -21,9 +21,11 @@ from illustrator_mcp.protocol import TaskPayload, TaskReport, format_task_report
 from illustrator_mcp.tools.base import ToolInputBase, TOOL_ANNOTATIONS
 from illustrator_mcp.tools.cadence import (
     _counter, VLM_QA_CADENCE, VLM_CHECKPOINT_INSTRUCTION,
+    format_z_telemetry,
 )
 from illustrator_mcp.tools.preview import (
     _capture_artboard, _annotate_preview,
+    _guard_checkpoint, GuardCheckpointResult,
 )
 
 logger = logging.getLogger("illustrator_mcp")
@@ -428,8 +430,66 @@ JSON.stringify(report);
                 diagnostics=merged_diag,
             )
 
+        # ── Occlusion guard: run AFTER task execution, BEFORE preview ──
+        guard_telemetry = {}
+        gcp = None
+        if is_task_checkpoint:
+            gcp = await _guard_checkpoint(
+                timeout=30.0,
+                checkpoint_label="execute_task",
+            )
+            guard_telemetry = gcp.guard_telemetry
+            merged_diag["guard_status"] = gcp.guard_status
+
+            if gcp.should_abort:
+                merged_diag.update(gcp.diag_extras)
+                merged_warnings.append(gcp.abort_message)
+                # Rebuild envelope with abort info
+                envelope = make_envelope(
+                    ok=report.ok if 'report' in dir() else False,
+                    result=envelope if isinstance(envelope, str) else None,
+                    warnings=merged_warnings,
+                    diagnostics=merged_diag,
+                )
+                # Return abort parts: envelope + evidence + telemetry + checkpoint
+                abort_parts = [TextContent(type="text", text=envelope)]
+                try:
+                    evidence_png = await _capture_artboard(
+                        max_dim=800, timeout=15.0,
+                    )
+                    if evidence_png:
+                        import base64 as _b64
+                        abort_parts.append(TextContent(
+                            type="text",
+                            text="Evidence preview (raw) — guard aborted before annotation.",
+                        ))
+                        abort_parts.append(ImageContent(
+                            type="image",
+                            data=_b64.b64encode(evidence_png).decode('utf-8'),
+                            mimeType="image/png",
+                        ))
+                except Exception as e:
+                    logger.debug("Evidence preview skipped: %s", e)
+                if gcp.telemetry_text:
+                    abort_parts.append(TextContent(
+                        type="text", text=gcp.telemetry_text,
+                    ))
+                abort_parts.append(TextContent(
+                    type="text",
+                    text=VLM_CHECKPOINT_INSTRUCTION.format(count=_counter.value),
+                ))
+                return abort_parts
+            else:
+                merged_warnings.extend(gcp.warn_messages)
+        else:
+            merged_diag["guard_status"] = "skipped"
+
         # ── Auto-Grounding: preview at cadence, manual request, or final_step ──
-        should_preview = (is_task_checkpoint or params.return_preview is True) and not is_dry_run
+        should_preview = (
+            (is_task_checkpoint or params.return_preview is True)
+            and not is_dry_run
+            and not (gcp and gcp.should_abort)
+        )
         if should_preview:
             try:
                 import base64 as _b64
@@ -481,6 +541,12 @@ JSON.stringify(report);
                             ),
                         ]
                     if is_task_checkpoint:
+                        # Z-order telemetry (task checkpoints)
+                        if gcp and gcp.telemetry_text:
+                            result_parts.append(TextContent(
+                                type="text",
+                                text=gcp.telemetry_text,
+                            ))
                         result_parts.append(TextContent(
                             type="text",
                             text=VLM_CHECKPOINT_INSTRUCTION.format(
@@ -491,12 +557,16 @@ JSON.stringify(report);
             except Exception as e:
                 logger.warning(f"Auto-grounding overlay failed (non-fatal): {e}")
 
-        # Fallback: text-only envelope (+ checkpoint instruction if cadence)
+        # Fallback: text-only envelope (+ telemetry + checkpoint instruction if cadence)
         if is_task_checkpoint:
-            return [
-                TextContent(type="text", text=envelope),
-                TextContent(type="text", text=VLM_CHECKPOINT_INSTRUCTION.format(count=_counter.value)),
-            ]
+            fallback_parts = [TextContent(type="text", text=envelope)]
+            if gcp and gcp.telemetry_text:
+                fallback_parts.append(TextContent(type="text", text=gcp.telemetry_text))
+            fallback_parts.append(TextContent(
+                type="text",
+                text=VLM_CHECKPOINT_INSTRUCTION.format(count=_counter.value),
+            ))
+            return fallback_parts
         return envelope
 
     except Exception as e:

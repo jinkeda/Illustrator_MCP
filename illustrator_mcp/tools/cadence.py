@@ -71,6 +71,60 @@ VLM_CHECKPOINT_INSTRUCTION: str = (
 )
 
 
+def format_z_telemetry(telemetry: dict) -> str:
+    """Format z-order telemetry as compact text for VLM checkpoint.
+
+    Designed for maximum information density in minimal tokens.
+    Two-tier cover markers:
+      🚨  cover ≥ 0.90  (abort-class / extreme)
+      ⚡  cover ≥ 0.70  (high suspicion)
+
+    Args:
+        telemetry: Raw telemetry dict from z_telemetry.jsx
+            {layers, topLayerItems, artboardRect, totalItemCount}
+
+    Returns:
+        Compact multi-line text string.
+    """
+    lines = ["Z-ORDER TELEMETRY"]
+
+    # Layers
+    layers = telemetry.get("layers", [])
+    lines.append(f"Layers ({len(layers)} total, 0=top):")
+    for lyr in layers[:8]:  # Cap display at 8
+        vis = "1" if lyr.get("visible") else "0"
+        lock = "1" if lyr.get("locked") else "0"
+        items = lyr.get("itemCount", 0)
+        lines.append(
+            f"  {lyr.get('index', '?')} {lyr.get('name', '?')} "
+            f"vis={vis} lock={lock} items={items}"
+        )
+
+    # Top items
+    top_items = telemetry.get("topLayerItems", [])
+    lines.append(f"Top items ({len(top_items)}, topmost visible layers):")
+    for i, item in enumerate(top_items[:10]):  # Cap at 10
+        name = item.get("name", "?")
+        tn = item.get("typename", "?")
+        layer = item.get("layerName", "?")
+        op = item.get("opacity", 100)
+        blend = item.get("blendingMode", "Normal")
+        cover = item.get("coverRatio", 0)
+        fill_hex = item.get("fillColorHex", "none")
+
+        flag = "  ← 🚨" if cover >= 0.90 else ("  ← ⚡" if cover >= 0.70 else "")
+        lines.append(
+            f"  #{i+1} \"{name}\" {tn} L={layer} op={op} "
+            f"blend={blend} fill={fill_hex} cover={cover}{flag}"
+        )
+
+    # Total
+    total = telemetry.get("totalItemCount", "?")
+    lines.append(f"Total items: {total}")
+
+    return "\n".join(lines)
+
+
 def get_mutation_count() -> int:
     """Return the current mutation counter value."""
     return _counter.value

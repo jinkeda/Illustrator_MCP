@@ -865,6 +865,41 @@ class TestAnnotatePreviewEnvelopeUnwrap(unittest.TestCase):
             "Should have found items after string-inside-data unwrap",
         )
 
+@unittest.skipUnless(HAS_PILLOW, "Pillow not installed")
+class TestCoverRatioTint(unittest.TestCase):
+    """Test red tint overlay for high coverRatio items."""
+
+    def test_cover_ratio_tint_applied(self):
+        """Annotation with coverRatio=0.95 should produce tinted output."""
+        png = _make_blank_png(200, 200)
+        # Large box (100x100px = 10000px^2 >= MIN_FILL_AREA_PX=400)
+        ann_tint = [{"label": "1", "bounds_px": [10, 10, 110, 110], "coverRatio": 0.95}]
+        ann_no_tint = [{"label": "1", "bounds_px": [10, 10, 110, 110]}]
+
+        result_tint = composite_overlay(png, ann_tint)
+        result_no_tint = composite_overlay(png, ann_no_tint)
+
+        # Both should render valid PNGs
+        from PIL import Image
+        Image.open(io.BytesIO(result_tint))
+        Image.open(io.BytesIO(result_no_tint))
+        # Tinted output should differ from non-tinted
+        self.assertNotEqual(result_tint, result_no_tint,
+                           "coverRatio=0.95 tint should change output")
+
+    def test_cover_ratio_below_threshold_no_tint(self):
+        """Annotation with coverRatio=0.80 should NOT produce tint."""
+        png = _make_blank_png(200, 200)
+        ann_below = [{"label": "1", "bounds_px": [10, 10, 110, 110], "coverRatio": 0.80}]
+        ann_none = [{"label": "1", "bounds_px": [10, 10, 110, 110]}]
+
+        result_below = composite_overlay(png, ann_below)
+        result_none = composite_overlay(png, ann_none)
+
+        # Below threshold should produce same output as no coverRatio
+        self.assertEqual(result_below, result_none,
+                        "coverRatio=0.80 should NOT differ from no coverRatio")
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -3,13 +3,13 @@
  * Part of Illustrator MCP SOC Framework
  * 
  * AUTO-GENERATED - DO NOT EDIT MANUALLY
- * Generated: 2026-02-26T21:02:00Z
+ * Generated: 2026-02-27T15:31:37Z
  * Source: illustrator_mcp/schemas/contracts.py
  * 
  * To regenerate: python -m illustrator_mcp.tools.compile_contracts
  */
 
-var CONTRACTS_CHECKSUM = "44be87f1566667dd";
+var CONTRACTS_CHECKSUM = "85bb1b243d2ec4a5";
 
 // ==================== Protocol Version ====================
 var TASK_PROTOCOL_VERSION = "3.0.0";
@@ -77,7 +77,11 @@ var ErrorCodes = {
     SVG_TOO_MANY_SEGMENTS: "SVG002",
     SVG_TOO_MANY_SUBPATHS: "SVG003",
     SVG_COORD_OVERFLOW: "SVG004",
-    SVG_TOO_MANY_TOKENS: "SVG005"
+    SVG_TOO_MANY_TOKENS: "SVG005",
+    Q_OCCLUSION_LIKELY: "Q001",
+    Q_RENDER_UNIFORM: "Q002",
+    Q_BG_LAYER_ON_TOP: "Q003",
+    Q_NONNORMAL_BLEND_COVER: "Q004"
 };
 
 var RETRYABLE_CODES = [ErrorCodes.R_COLLECT_FAILED, ErrorCodes.R_COMPUTE_FAILED];
@@ -342,12 +346,18 @@ var OP_PARAM_SCHEMAS = {
     },
     "layer_create": {
         "required": ["name"],
-        "optional": ["color", "visible", "locked"],
+        "optional": ["color", "visible", "locked", "above", "below", "placement"],
         "types": {
             "name": "string",
             "color": "object",
             "visible": "boolean",
-            "locked": "boolean"
+            "locked": "boolean",
+            "above": "string",
+            "below": "string",
+            "placement": "string"
+        },
+        "enumValues": {
+            "placement": ["top", "bottom"]
         }
     },
     "layer_activate": {
@@ -379,6 +389,11 @@ var OP_PARAM_SCHEMAS = {
         "types": {
             "name": "string"
         }
+    },
+    "layer_list": {
+        "required": [],
+        "optional": [],
+        "types": {}
     },
     "style_set_fill": {
         "required": ["r", "g", "b"],
@@ -656,6 +671,14 @@ var OP_PARAM_SCHEMAS = {
             "above": "string",
             "below": "string",
             "pairs": "array"
+        }
+    },
+    "assert_layer_order": {
+        "required": ["order"],
+        "optional": ["strict"],
+        "types": {
+            "order": "array",
+            "strict": "boolean"
         }
     },
     "measure_bounds": {

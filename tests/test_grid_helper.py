@@ -223,19 +223,101 @@ class TestGridOverlay(unittest.TestCase):
 # ==================== Tool Description Tests ====================
 
 class TestToolDescription(unittest.TestCase):
-    """Verify execute_script docstring includes discovery guidance."""
+    """Verify execute_script docstring includes all required sections and content."""
+
+    @classmethod
+    def setUpClass(cls):
+        from illustrator_mcp.tools.execute import illustrator_execute_script
+        cls.doc = illustrator_execute_script.__doc__ or ""
+
+    # ── Section headers ──────────────────────────────────────────
+
+    def test_contract_section(self):
+        """CONTRACT section with annotation summary must be present."""
+        self.assertIn("CONTRACT:", self.doc)
+        for term in ("readOnly=", "destructive=", "idempotent=", "openWorld="):
+            self.assertIn(term, self.doc)
+
+    def test_when_to_use_section(self):
+        """WHEN TO USE section must be present."""
+        self.assertIn("WHEN TO USE:", self.doc)
+
+    def test_abstraction_ladder_section(self):
+        """ABSTRACTION LADDER section with all 5 levels must be present."""
+        self.assertIn("ABSTRACTION LADDER", self.doc)
+        for level in range(1, 6):
+            self.assertIn(f"Level {level}", self.doc)
+
+    def test_decision_rules_section(self):
+        """DECISION RULES section must reference key thresholds."""
+        self.assertIn("DECISION RULES:", self.doc)
+        self.assertIn("path_boolean", self.doc)
+        self.assertIn("element_create_batch", self.doc)
+
+    def test_coordinate_system_section(self):
+        """COORDINATE SYSTEM section must document Y-down convention."""
+        self.assertIn("COORDINATE SYSTEM:", self.doc)
+        self.assertIn("screen space", self.doc)
+        self.assertIn("-y", self.doc)
+
+    def test_examples_section(self):
+        """EXAMPLES section must include common API patterns."""
+        self.assertIn("EXAMPLES:", self.doc)
+        for pattern in ("Rectangle:", "Ellipse:", "Line:", "Color:", "Text:"):
+            self.assertIn(pattern, self.doc)
 
     def test_discovery_guidance_present(self):
-        from illustrator_mcp.tools.execute import illustrator_execute_script
-        doc = illustrator_execute_script.__doc__ or ""
-        self.assertIn("ELEMENT DISCOVERY", doc)
-        self.assertIn("artboardGrid", doc)
-        self.assertIn("itemsInCell", doc)
+        """ELEMENT DISCOVERY section must reference grid helpers."""
+        self.assertIn("ELEMENT DISCOVERY", self.doc)
+        self.assertIn("artboardGrid", self.doc)
+        self.assertIn("itemsInCell", self.doc)
+
+    def test_discovery_modes_documented(self):
+        """ELEMENT DISCOVERY must document both query modes."""
+        self.assertIn("containsCenter", self.doc)
+        self.assertIn("intersects", self.doc)
 
     def test_mutation_safety_preserved(self):
-        from illustrator_mcp.tools.execute import illustrator_execute_script
-        doc = illustrator_execute_script.__doc__ or ""
-        self.assertIn("MUTATION SAFETY", doc)
+        """MUTATION SAFETY section must be present."""
+        self.assertIn("MUTATION SAFETY", self.doc)
+        self.assertIn("mutation counter", self.doc)
+        self.assertIn("final_step", self.doc)
+
+    def test_notes_section(self):
+        """NOTES section must be present."""
+        self.assertIn("NOTES:", self.doc)
+
+    def test_safety_section(self):
+        """SAFETY section must reference watchdog and snapshot helpers."""
+        self.assertIn("SAFETY:", self.doc)
+        self.assertIn("__mcp_check()", self.doc)
+        self.assertIn("__mcp_forEachSnapshot", self.doc)
+        self.assertIn("__mcp_snapshot", self.doc)
+
+    # ── Cross-cutting concerns ───────────────────────────────────
+
+    def test_grid_helpers_in_examples(self):
+        """Grid helpers must appear in EXAMPLES for discoverability."""
+        # Find the EXAMPLES section content
+        examples_idx = self.doc.index("EXAMPLES:")
+        discovery_idx = self.doc.index("ELEMENT DISCOVERY")
+        examples_block = self.doc[examples_idx:discovery_idx]
+        self.assertIn("artboardGrid(cols, rows)", examples_block)
+        self.assertIn("itemsInCell(cell, mode)", examples_block)
+
+    def test_no_duplicate_section_headers(self):
+        """Each section header should appear exactly once."""
+        headers = [
+            "CONTRACT:", "WHEN TO USE:", "ABSTRACTION LADDER",
+            "DECISION RULES:", "COORDINATE SYSTEM:", "EXAMPLES:",
+            "ELEMENT DISCOVERY:", "MUTATION SAFETY:", "NOTES:", "SAFETY:",
+        ]
+        for hdr in headers:
+            # Match header only at line start (after optional whitespace)
+            # to avoid "SAFETY:" matching inside "MUTATION SAFETY:"
+            pattern = r'^\s*' + re.escape(hdr)
+            count = len(re.findall(pattern, self.doc, re.MULTILINE))
+            self.assertEqual(count, 1, f"Header '{hdr}' appears {count} times, expected 1")
 
 
 if __name__ == "__main__":

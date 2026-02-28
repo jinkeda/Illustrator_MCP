@@ -247,8 +247,10 @@ class TestCheckpointInstruction(unittest.TestCase):
 
     def test_checkpoint_instruction_injected_on_cadence(self):
         """Integration test: at cadence boundary, the returned content list should
-        have 4 elements with the checkpoint instruction as the absolute last one."""
+        have 7 elements (envelope, raw_img, ann_img, annotations, telemetry, CHECKPOINT)
+        with the checkpoint instruction as the absolute last one."""
         from illustrator_mcp.tools import execute
+        from illustrator_mcp.occlusion_guard import OcclusionResult
 
         # Set mutation counter to 4 so the next call hits 5 (cadence boundary)
         reset_mutation_count()
@@ -277,6 +279,14 @@ class TestCheckpointInstruction(unittest.TestCase):
             "annotations": [],
             "warnings": [],
         }
+        mock_guard = OcclusionResult(ok=True, diagnostics={})
+        mock_telemetry = {
+            "layers": [{"name": "Layer 1", "index": 0, "visible": True,
+                       "locked": False, "itemCount": 1}],
+            "topLayerItems": [],
+            "artboardRect": [0, 0, 800, -600],
+            "totalItemCount": 1,
+        }
 
         params = ExecuteScriptInput(script="var x = 1;")
 
@@ -286,7 +296,10 @@ class TestCheckpointInstruction(unittest.TestCase):
                     new_callable=AsyncMock, return_value=mock_preview), \
              patch("illustrator_mcp.tools.execute._annotate_preview",
                     new_callable=AsyncMock,
-                    return_value=(tiny_png, mock_annotation_result)):
+                    return_value=(tiny_png, mock_annotation_result)), \
+             patch("illustrator_mcp.tools.preview._run_occlusion_guard",
+                    new_callable=AsyncMock,
+                    return_value=(mock_guard, mock_telemetry)):
 
             result = asyncio.get_event_loop().run_until_complete(
                 illustrator_execute_script(params)
@@ -295,24 +308,31 @@ class TestCheckpointInstruction(unittest.TestCase):
         # Should be a list (multi-content response)
         self.assertIsInstance(result, list)
 
-        # Should have 4 elements: envelope, image, annotations, CHECKPOINT
-        self.assertEqual(len(result), 4, f"Expected 4 content items, got {len(result)}")
+        # Should have 6 elements: envelope, raw_img, ann_img, annotations, telemetry, CHECKPOINT
+        self.assertEqual(len(result), 6, f"Expected 6 content items, got {len(result)}")
 
-        # Element order: Text, Image, Text, Text
+        # Element order: Text, Image(raw), Image(ann), Text(annotations), Text(telemetry), Text(checkpoint)
         self.assertIsInstance(result[0], TextContent)
-        self.assertIsInstance(result[1], ImageContent)
-        self.assertIsInstance(result[2], TextContent)
-        self.assertIsInstance(result[3], TextContent)
+        self.assertIsInstance(result[1], ImageContent)  # raw image
+        self.assertIsInstance(result[2], ImageContent)  # annotated image
+        self.assertIsInstance(result[3], TextContent)    # annotation map
+        self.assertIsInstance(result[4], TextContent)    # z-order telemetry
+        self.assertIsInstance(result[5], TextContent)    # checkpoint instruction
 
         # The LAST element must be the checkpoint instruction
-        checkpoint_text = result[3].text
+        checkpoint_text = result[5].text
         self.assertIn("VLM QA CHECKPOINT", checkpoint_text)
         self.assertIn("mutation #5", checkpoint_text)
         self.assertIn("DO NOT call any tools", checkpoint_text)
 
-        # Verify is_vlm_checkpoint is True in envelope diagnostics
+        # Z-order telemetry should contain layer info
+        telemetry_text = result[4].text
+        self.assertIn("Z-ORDER TELEMETRY", telemetry_text)
+
+        # Verify is_vlm_checkpoint and guard_status in envelope diagnostics
         envelope = json.loads(result[0].text)
         self.assertTrue(envelope["diagnostics"]["is_vlm_checkpoint"])
+        self.assertEqual(envelope["diagnostics"]["guard_status"], "passed")
 
     def test_no_checkpoint_instruction_on_non_cadence(self):
         """On non-cadence step with manual preview, response should have 3 elements, not 4."""
@@ -382,18 +402,23 @@ class TestReviewFixes(unittest.TestCase):
         """When preview generation returns None at a cadence boundary,
         the checkpoint instruction should still be injected."""
         from illustrator_mcp.tools import execute
+        from illustrator_mcp.occlusion_guard import OcclusionResult
 
         # Set to 4 so next call hits 5 (cadence boundary)
         for _ in range(4):
             execute._counter.increment()
 
         mock_response = {"result": "'ok'", "error": None}
+        mock_guard = OcclusionResult(ok=True, diagnostics={})
         params = ExecuteScriptInput(script="var x = 1;")
 
         with patch("illustrator_mcp.tools.execute.execute_script_with_context",
                     new_callable=AsyncMock, return_value=mock_response), \
              patch("illustrator_mcp.tools.execute._generate_preview",
-                    new_callable=AsyncMock, return_value=None):
+                    new_callable=AsyncMock, return_value=None), \
+             patch("illustrator_mcp.tools.preview._run_occlusion_guard",
+                    new_callable=AsyncMock,
+                    return_value=(mock_guard, {})):
 
             result = asyncio.get_event_loop().run_until_complete(
                 illustrator_execute_script(params)

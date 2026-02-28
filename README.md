@@ -479,6 +479,26 @@ The `vlm_grounding` module provides three features that transform VLM checkpoint
 | **Proposer / Verifier** | `VLMHypothesis`, `verify_hypothesis` | VLM proposes structured hypotheses (misalignment, overlap, spacing, off-artboard, style mismatch). Pure-Python verifier confirms or discards each claim using bounds math. |
 | **Before / After Diffing** | `capture_dom_snapshot`, `diff_dom_snapshots` | Captures DOM state before mutations, diffs after. Two-pass matching: stable `mcp_id` first, then IoU + center proximity scoring for destructive operations. |
 
+### Occlusion Guard
+
+A **shift-left** safety net that catches full-canvas occlusion *before* the VLM preview. Runs deterministically in Python/ExtendScript — no LLM cost.
+
+| Check | Code | Severity | Fires when |
+|---|---|---|---|
+| Opaque full cover | `Q001` | abort | Item covers ≥90% of artboard, normal blend, opacity ≥95% |
+| Background layer on top | `Q003` | abort | Layer named Sky/Background/BG is topmost visible |
+| Non-normal blend cover | `Q004` | warn | Full cover but Multiply/Screen/etc. blend |
+
+Guard results are reported via `diagnostics.guard_status`:
+
+| Status | Meaning |
+|---|---|
+| `"skipped"` | Not a VLM checkpoint, guard did not run |
+| `"passed"` | Guard ran, no abort-level findings |
+| `"aborted"` | Guard blocked the annotated preview |
+
+On abort, the response includes: envelope with `guard_status: "aborted"`, a **raw evidence image** (proof of occlusion), Z-order telemetry with `🚨` (≥0.90) / `⚡` (≥0.70) cover markers, and the VLM checkpoint instruction.
+
 Key design decisions:
 - **`mcp_id` is the primary key** — overlay IDs are a view layer for VLM communication only
 - **Screen-space Y-down coordinates** — all bounds normalized to `[x, y, width, height]` matching the exported image
@@ -670,6 +690,9 @@ If occupied, change `WS_PORT` in `.env` and restart.
 | `SVG004` | SVG Import | Coordinate overflow (>±100k) |
 | `SVG005` | SVG Import | Too many tokens (>50k) |
 | `R010` | Runtime | Could not parse TaskReport |
+| `Q001` | Occlusion | Opaque item covers ≥90% of artboard |
+| `Q003` | Occlusion | Background layer is topmost visible |
+| `Q004` | Occlusion | Non-normal blend full cover (warning) |
 
 All errors include actionable recovery suggestions.
 

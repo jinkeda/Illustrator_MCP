@@ -11,6 +11,7 @@ import logging
 import math
 import os
 import tempfile
+from dataclasses import dataclass, field
 from typing import List, Optional
 
 from mcp.types import ImageContent
@@ -18,6 +19,194 @@ from mcp.types import ImageContent
 from illustrator_mcp.proxy_client import execute_script_with_context
 
 logger = logging.getLogger("illustrator_mcp")
+
+
+# ── Occlusion guard runner ─────────────────────────────────────────
+
+async def _run_occlusion_guard(
+    timeout: Optional[float] = None,
+    bg_layer_names: Optional[set] = None,
+) -> tuple:
+    """Execute z_telemetry.jsx and run OcclusionGuard checks.
+
+    Returns:
+        (OcclusionResult, raw_telemetry_dict)
+        raw_telemetry_dict is the parsed JSON from z_telemetry.jsx, or {}
+        on failure.
+    """
+    from illustrator_mcp.occlusion_guard import check_occlusion, OcclusionResult
+
+    # Read the JSX script
+    script_path = os.path.join(
+        os.path.dirname(os.path.dirname(__file__)),
+        "resources", "scripts", "z_telemetry.jsx",
+    )
+    # Fallback if path doesn't exist yet (import guard)
+    if not os.path.isfile(script_path):
+        logger.warning("z_telemetry.jsx not found at %s", script_path)
+        return OcclusionResult(ok=True, diagnostics={"bypass": "no_script"}), {}
+
+    with open(script_path, "r", encoding="utf-8") as f:
+        jsx_code = f.read()
+
+    try:
+        resp = await execute_script_with_context(
+            script=jsx_code,
+            command_type="z_telemetry",
+            tool_name="_run_occlusion_guard",
+            timeout=timeout or 15.0,
+        )
+    except Exception as e:
+        logger.warning("z_telemetry execution failed: %s", e)
+        return OcclusionResult(ok=True, diagnostics={"bypass": "exec_error", "error": str(e)}), {}
+
+    # Parse response
+    raw = resp.get("result")
+    if not raw:
+        return OcclusionResult(ok=True, diagnostics={"bypass": "empty_response"}), {}
+
+    try:
+        if isinstance(raw, str):
+            parsed = json.loads(raw)
+        else:
+            parsed = raw
+    except (json.JSONDecodeError, TypeError):
+        return OcclusionResult(ok=True, diagnostics={"bypass": "parse_error"}), {}
+
+    # Unwrap {ok: true, data: {...}} envelope
+    telemetry = parsed
+    if isinstance(parsed, dict) and "data" in parsed:
+        telemetry = parsed["data"]
+
+    layers = telemetry.get("layers", [])
+    top_items = telemetry.get("topLayerItems", [])
+    artboard = telemetry.get("artboardRect", [0, 0, 0, 0])
+    total = telemetry.get("totalItemCount", 0)
+
+    result = check_occlusion(layers, top_items, artboard, total,
+                             bg_layer_names=bg_layer_names)
+    return result, telemetry
+
+
+# ── Guard checkpoint helper ────────────────────────────────────────
+
+@dataclass
+class GuardCheckpointResult:
+    """Result of a guard checkpoint — consumed by execute_script and execute_task."""
+    guard_result: object  # Optional[OcclusionResult]
+    guard_telemetry: dict
+    should_abort: bool
+    guard_status: str = "skipped"     # "skipped" | "passed" | "aborted"
+    abort_message: str = ""           # empty if not aborting
+    diag_extras: dict = field(default_factory=dict)
+    # Preview policy (callers don't re-encode)
+    should_preview: bool = True
+    preview_mode: Optional[str] = None  # "annotated" at checkpoints
+    # Formatted telemetry text (both paths append identically)
+    telemetry_text: Optional[str] = None
+    # Q004 warn-level warnings for callers to append
+    warn_messages: List[str] = field(default_factory=list)
+
+
+async def _guard_checkpoint(
+    *,
+    timeout: float,
+    bg_layer_names: Optional[set] = None,
+    auto_fix: bool = False,
+    max_retries: int = 1,
+    checkpoint_label: str,
+) -> GuardCheckpointResult:
+    """Run the occlusion guard and return a structured result.
+
+    Encapsulates guard check + abort message + diagnostics + telemetry
+    so both execute_script and execute_task get identical behavior.
+
+    Args:
+        timeout: Bridge call timeout in seconds.
+        bg_layer_names: Optional override for background layer name matching.
+        auto_fix: If True, attempt to execute suggested_fix ops (NOT YET IMPLEMENTED).
+        max_retries: Max fix-retry attempts (only used when auto_fix=True).
+        checkpoint_label: "execute_script" or "execute_task" for logging.
+
+    Returns:
+        GuardCheckpointResult with abort/pass state, diagnostics, and
+        preview policy pre-computed.
+    """
+    from illustrator_mcp.occlusion_guard import format_abort_message
+    from illustrator_mcp.tools.cadence import format_z_telemetry
+
+    guard_result = None
+    guard_telemetry = {}
+
+    try:
+        guard_result, guard_telemetry = await _run_occlusion_guard(
+            timeout=timeout,
+            bg_layer_names=bg_layer_names,
+        )
+    except Exception as e:
+        logger.warning("Occlusion guard failed in %s: %s", checkpoint_label, e)
+        return GuardCheckpointResult(
+            guard_result=None,
+            guard_telemetry={},
+            should_abort=False,
+            guard_status="skipped",
+            should_preview=True,
+            preview_mode="annotated",
+        )
+
+    # Compute formatted telemetry text
+    telemetry_text = None
+    if guard_telemetry:
+        telemetry_text = format_z_telemetry(guard_telemetry)
+
+    if guard_result and not guard_result.ok:
+        # ABORT: occlusion detected
+        abort_msg = format_abort_message(guard_result)
+        diag_extras = {
+            "occlusion_guard": guard_result.diagnostics,
+            "suggested_fix": [
+                f.__dict__ if hasattr(f, '__dict__') else f
+                for f in guard_result.suggested_fix
+            ],
+            "occlusion_findings": [
+                {"code": f.code, "severity": f.severity,
+                 "message": f.message, "offender": f.offender}
+                for f in guard_result.findings
+            ],
+        }
+        logger.warning(
+            "Occlusion guard ABORT in %s: %s",
+            checkpoint_label, [f.code for f in guard_result.findings]
+        )
+        return GuardCheckpointResult(
+            guard_result=guard_result,
+            guard_telemetry=guard_telemetry,
+            should_abort=True,
+            guard_status="aborted",
+            abort_message=abort_msg,
+            diag_extras=diag_extras,
+            should_preview=False,
+            preview_mode=None,
+            telemetry_text=telemetry_text,
+        )
+
+    # PASS (possibly with Q004 warnings)
+    warn_messages = []
+    if guard_result and guard_result.findings:
+        for f in guard_result.findings:
+            if f.severity == "warn":
+                warn_messages.append(f"⚠️ {f.code}: {f.message}")
+
+    return GuardCheckpointResult(
+        guard_result=guard_result,
+        guard_telemetry=guard_telemetry,
+        should_abort=False,
+        guard_status="passed",
+        should_preview=True,
+        preview_mode="annotated",
+        telemetry_text=telemetry_text,
+        warn_messages=warn_messages,
+    )
 
 # Illustrator's ExportOptionsPNG24.horizontalScale has an empirical
 # engine limit of ~776%.  Centralised here so tests & JSX both reference
@@ -545,6 +734,15 @@ async def _annotate_preview(
         bounds_pt = item.get("bounds", [0, 0, 0, 0])
         mcp_id = item.get("mcp_id", "") or ""
 
+        # Compute coverRatio from bounds vs effective artboard rect (Python-side)
+        from illustrator_mcp.occlusion_guard import _intersection_area, _artboard_area
+        ab_area = _artboard_area(effective_rect)
+        cover_ratio = (
+            _intersection_area(bounds_pt, effective_rect) / ab_area
+            if ab_area > 0 else 0.0
+        )
+        cover_ratio = round(cover_ratio, 3)
+
         # map_bounds_to_pixels uses effective_rect as the "artboard" origin,
         # so when clip_box is active, pixel positions are crop-relative.
         bounds_px = map_bounds_to_pixels(bounds_pt, effective_rect, png_size)
@@ -552,6 +750,7 @@ async def _annotate_preview(
         pixel_annotations.append({
             "label": label,
             "bounds_px": bounds_px,
+            "coverRatio": cover_ratio,
         })
 
         # bounds_pt stays in GLOBAL Illustrator coords for follow-up edits
@@ -562,6 +761,7 @@ async def _annotate_preview(
             "name": item.get("name", ""),
             "type": item.get("type", "Item"),
             "bounds_pt": bounds_pt,
+            "coverRatio": cover_ratio,
         })
 
     # 5. Draw ruler overlay (behind ID pills) then composite bounding boxes

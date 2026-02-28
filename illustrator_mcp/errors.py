@@ -126,6 +126,12 @@ class ErrorCode(str, Enum):
     SVG_COORD_OVERFLOW = "SVG004"     # Coordinate exceeds ±MAX_COORD_ABS
     SVG_TOO_MANY_TOKENS = "SVG005"   # Tokenizer output exceeds MAX_TOKENS
 
+    # === QA / OCCLUSION GUARD (Q) ===
+    Q_OCCLUSION_LIKELY = "Q001"           # abort: opaque top cover ≥90%
+    Q_RENDER_UNIFORM = "Q002"             # reserved P2: pixel-based diversity
+    Q_BG_LAYER_ON_TOP = "Q003"            # abort: bg-named layer topmost
+    Q_NONNORMAL_BLEND_COVER = "Q004"      # warn: non-normal blend full cover
+
 
 # =============================================================================
 # LEGACY CODE MAP — ad-hoc string identifiers → canonical codes
@@ -424,6 +430,33 @@ ERROR_SUGGESTIONS.update({
             f"Maximum token count is 50,000",
         ],
     },
+    # QA / Occlusion guard
+    ErrorCode.Q_OCCLUSION_LIKELY.value: {
+        "message": "Occlusion detected — opaque item covers ≥90% of artboard",
+        "recoverable": True,
+        "suggestions": [
+            "Move the occluding item to the bottom layer or send to back",
+            "Check layer stacking order — background layers should be bottommost",
+            "Use assert_layer_order to verify layer stack before drawing",
+        ],
+    },
+    ErrorCode.Q_BG_LAYER_ON_TOP.value: {
+        "message": "Background layer is topmost visible",
+        "recoverable": True,
+        "suggestions": [
+            "Move the background layer to the bottom of the stack",
+            "Use layer_create with placement='bottom' to pin background layers",
+            "Use assert_layer_order to verify correct stacking",
+        ],
+    },
+    ErrorCode.Q_NONNORMAL_BLEND_COVER.value: {
+        "message": "Full-cover item with non-normal blend mode",
+        "recoverable": True,
+        "suggestions": [
+            "Verify this is an intentional overlay (e.g., Multiply tint)",
+            "If accidental, change blend mode to Normal or reduce opacity",
+        ],
+    },
 })
 
 
@@ -522,6 +555,11 @@ ERROR_PATTERNS = [
     (r"\[SVG003\]|E_TOO_MANY_SUBPATHS", ErrorCode.SVG_TOO_MANY_SUBPATHS),
     (r"\[SVG004\]|E_COORD_OVERFLOW", ErrorCode.SVG_COORD_OVERFLOW),
     (r"\[SVG005\]|E_TOO_MANY_TOKENS", ErrorCode.SVG_TOO_MANY_TOKENS),
+
+    # QA / Occlusion guard
+    (r"\[Q001\]|OCCLUSION_LIKELY", ErrorCode.Q_OCCLUSION_LIKELY),
+    (r"\[Q003\]|BG_LAYER_ON_TOP", ErrorCode.Q_BG_LAYER_ON_TOP),
+    (r"\[Q004\]|NONNORMAL_BLEND_COVER", ErrorCode.Q_NONNORMAL_BLEND_COVER),
 ]
 
 

@@ -112,7 +112,7 @@ class TestContractsSchema:
         assert '"xor"' in self.source
 
     def test_schema_version_updated(self):
-        assert "1.6" in self.source
+        assert "1.7" in self.source
 
 
 class TestPythonGeometryModule:
@@ -165,7 +165,7 @@ class TestPythonHandler:
         # Check there's a @mcp.tool() before illustrator_path_boolean
         idx = self.source.index("async def illustrator_path_boolean")
         before = self.source[max(0, idx - 200):idx]
-        assert "@mcp.tool()" in before
+        assert "@mcp.tool(" in before
 
     def test_three_step_pipeline(self):
         """Handler should call extract, reconstruct, and delete steps."""
