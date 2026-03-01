@@ -4,6 +4,10 @@ Core execute_script tool for Adobe Illustrator.
 This is the PRIMARY tool for interacting with Illustrator.
 Following the "Scripting First" pattern (like blender-mcp), most operations
 should be done via this tool rather than specialized atomic tools.
+
+Auto-assign MCP IDs: after script execution, newly created items can be
+automatically tagged with @mcp:id= so they're targetable by SOC ops.
+Controlled by auto_assign_ids parameter ("delta"|"converge"|"off").
 """
 
 import json
@@ -46,7 +50,46 @@ _PATHFINDER_CMD_RE = re.compile(
     r'executeMenuCommand\s*\(\s*["\'](?:Live Pathfinder|pathfinder)',
     re.IGNORECASE,
 )
-_MAX_ADVISORY_HINTS = 2
+# Fix 3: fresh pathPoints patterns
+_ADD_PATH_VAR_RE = re.compile(
+    r'(?:var|let|const)\s+(\w+)\s*=\s*.*?pathItems\.add\s*\(\s*\)',
+)
+_ADD_PATH_ASSIGN_RE = re.compile(
+    r'(\w+)\s*=\s*.*?pathItems\.add\s*\(\s*\)',
+)
+_ADD_PATH_CHAINED_RE = re.compile(
+    r'pathItems\.add\s*\(\s*\)\s*\.\s*pathPoints\s*\[',
+)
+# Fix 5: rectangle/ellipse call detection
+_RECT_ELLIPSE_CALL_RE = re.compile(
+    r'(?:rectangle|ellipse)\s*\(',
+)
+_MAX_ADVISORY_HINTS = 3
+
+
+def _split_call_args(text: str, start: int) -> "list[str] | None":
+    """Split function args by top-level commas (respects nesting).
+    `start` points to the opening '('. Returns None if unbalanced."""
+    depth = 0
+    args: list[str] = []
+    current: list[str] = []
+    for ch in text[start:]:
+        if ch == '(':
+            depth += 1
+            if depth == 1:
+                continue  # skip the opening paren itself
+        elif ch == ')':
+            depth -= 1
+            if depth == 0:
+                args.append(''.join(current).strip())
+                return args
+        elif ch == ',' and depth == 1:
+            args.append(''.join(current).strip())
+            current = []
+            continue
+        if depth >= 1:
+            current.append(ch)
+    return None  # unbalanced
 
 
 def _abstraction_advisory(script: str) -> list:
@@ -91,7 +134,131 @@ def _abstraction_advisory(script: str) -> list:
             "\U0001f4a1 Use the path_boolean tool for reliable boolean ops."
         )
 
+    # Fix 3: pathPoints on fresh pathItems.add() — three patterns
+    if len(hints) < _MAX_ADVISORY_HINTS:
+        _fresh_path_warned = False
+        # Pattern 1: chained form — pathItems.add().pathPoints[
+        if _ADD_PATH_CHAINED_RE.search(script):
+            _fresh_path_warned = True
+        # Pattern 2: var-declared + same var .pathPoints[
+        if not _fresh_path_warned:
+            for m in _ADD_PATH_VAR_RE.finditer(script):
+                var_name = m.group(1)
+                if re.search(rf'\b{re.escape(var_name)}\.pathPoints\s*\[', script):
+                    _fresh_path_warned = True
+                    break
+        # Pattern 3: assignment without var + same var .pathPoints[
+        if not _fresh_path_warned:
+            for m in _ADD_PATH_ASSIGN_RE.finditer(script):
+                var_name = m.group(1)
+                if var_name in ('var', 'let', 'const'):
+                    continue  # already handled by pattern 2
+                if re.search(rf'\b{re.escape(var_name)}\.pathPoints\s*\[', script):
+                    _fresh_path_warned = True
+                    break
+        if _fresh_path_warned:
+            hints.append(
+                "\u26a0\ufe0f pathItems.add() creates a path with zero points. "
+                ".pathPoints[N] will throw 'Index out of bounds'. "
+                "Use setEntirePath() or element_create instead."
+            )
+
+    # Fix 5: rectangle/ellipse with negative width/height (args 2 or 3)
+    if len(hints) < _MAX_ADVISORY_HINTS:
+        for m in _RECT_ELLIPSE_CALL_RE.finditer(script):
+            # Find the opening paren
+            paren_pos = m.end() - 1  # position of '('
+            args = _split_call_args(script, paren_pos)
+            if args and len(args) >= 4:
+                neg_params = []
+                # args[2] = width, args[3] = height
+                for idx, label in ((2, "width"), (3, "height")):
+                    val = args[idx].lstrip()
+                    if val.startswith('-'):
+                        neg_params.append(label)
+                if neg_params:
+                    hints.append(
+                        f"\u26a0\ufe0f rectangle/ellipse called with negative "
+                        f"{'/'.join(neg_params)}. "
+                        "Negative width/height creates an invisible shape "
+                        "above the artboard. Use positive values."
+                    )
+                    break  # one warning is enough
+
     return hints[:_MAX_ADVISORY_HINTS]
+
+
+# ── Auto-tag helper ────────────────────────────────────────────────
+
+_AUTO_TAG_SCRIPT_PATH = os.path.join(
+    os.path.dirname(os.path.dirname(__file__)),
+    "resources", "scripts", "auto_tag.jsx",
+)
+
+
+async def _run_auto_tag(
+    *,
+    mode: str,
+    scope: str,
+    cap: int,
+    pre_count: int,
+    cushion: int = 2,
+    timeout: Optional[float] = None,
+) -> Optional[dict]:
+    """Execute auto_tag.jsx to assign MCP IDs to untagged items.
+
+    Returns parsed result dict or None on failure.  The JSX script
+    handles selection-first priority (delta mode) and scope scanning.
+
+    Delta mode tags only items likely created by the preceding script:
+    items created AND deleted within the script are intentionally not tagged.
+    """
+    if not os.path.isfile(_AUTO_TAG_SCRIPT_PATH):
+        logger.warning("auto_tag.jsx not found at %s", _AUTO_TAG_SCRIPT_PATH)
+        return None
+
+    with open(_AUTO_TAG_SCRIPT_PATH, "r", encoding="utf-8") as f:
+        jsx_code = f.read()
+
+    # Inject params as preamble
+    params_obj = json.dumps({
+        "mode": mode,
+        "scope": scope,
+        "cap": cap,
+        "preCount": pre_count,
+        "cushion": cushion,
+    })
+    jsx_with_params = f"var __PARAMS__ = {params_obj};\n{jsx_code}"
+
+    try:
+        resp = await execute_script_with_context(
+            script=jsx_with_params,
+            command_type="auto_tag",
+            tool_name="illustrator_execute_script",
+            timeout=timeout or 10.0,
+        )
+    except Exception as e:
+        logger.debug("auto_tag.jsx execution failed: %s", e)
+        return None
+
+    raw = resp.get("result")
+    if not raw:
+        return None
+
+    try:
+        if isinstance(raw, str):
+            parsed = json.loads(raw)
+        else:
+            parsed = raw
+        # Unwrap host.jsx envelope if present
+        if isinstance(parsed, dict) and "data" in parsed:
+            parsed = parsed["data"]
+        if isinstance(parsed, str):
+            parsed = json.loads(parsed)
+    except (json.JSONDecodeError, TypeError):
+        return None
+
+    return parsed
 
 
 class ExecuteScriptInput(ToolInputBase):
@@ -284,6 +451,33 @@ class ExecuteScriptInput(ToolInputBase):
                     "label (str, optional). Only drawn when preview_mode='annotated'."
     )
 
+    # Auto-assign MCP IDs to items created by this script
+    auto_assign_ids: Literal["delta", "converge", "off"] = Field(
+        default="delta",
+        description='Auto-tag mode for items created by this script. '
+                    '"delta": tag items likely created by this script (selection-first, '
+                    'bounded by count delta + cushion). '
+                    '"converge": tag ALL untagged items in scope (up to cap, explicit migration). '
+                    '"off": no scanning, no tagging. '
+                    'Auto-tagging mutates item.note by writing @mcp:id= tags. '
+                    'Delta mode is cheap (skips entirely when no items created). '
+                    'Converge mode can be expensive on large legacy documents.'
+    )
+
+    max_auto_tag: int = Field(
+        default=200,
+        ge=1,
+        le=1000,
+        description="Maximum number of items to auto-tag per call. "
+                    "A warning is emitted when the cap is hit."
+    )
+
+    auto_tag_scope: Literal["activeLayer", "document"] = Field(
+        default="activeLayer",
+        description='Scope for auto-tagging scan. "activeLayer" narrows to the active layer '
+                    '(recommended). "document" scans all pageItems.'
+    )
+
 
 from illustrator_mcp.tools.base import (
     TOOL_ANNOTATIONS, ABSTRACTION_LADDER, COORDINATE_SYSTEM_BLOCK,
@@ -323,6 +517,7 @@ async def illustrator_execute_script(params: ExecuteScriptInput) -> Union[str, l
 
     EXAMPLES:
       Rectangle: doc.pathItems.rectangle(top, left, width, height)
+        ⚠ width & height must be POSITIVE. Negative height → shape above artboard (invisible).
       Ellipse: doc.pathItems.ellipse(top, left, width, height)
       Line: var p = doc.pathItems.add(); p.setEntirePath([[x1,-y1], [x2,-y2]])
       Color: var c = new RGBColor(); c.red=255; c.green=0; c.blue=0; shape.fillColor = c;
@@ -364,6 +559,41 @@ async def illustrator_execute_script(params: ExecuteScriptInput) -> Union[str, l
         script = "\n".join(safety_overrides) + "\n" + script
 
     script_len = len(script)
+
+    # ── Auto-tag: pre-exec count capture ──────────────────────────────
+    auto_tag_pre_count = None
+    if params.auto_assign_ids != "off":
+        _scope_expr = (
+            "doc.activeLayer.pageItems.length"
+            if params.auto_tag_scope == "activeLayer"
+            else "doc.pageItems.length"
+        )
+        _count_script = (
+            f"(function(){{ var doc = app.activeDocument; "
+            f"return JSON.stringify({{count: {_scope_expr}}}); }})()"
+        )
+        try:
+            _count_resp = await execute_script_with_context(
+                script=_count_script,
+                command_type="auto_tag_precount",
+                tool_name="illustrator_execute_script",
+                timeout=5.0,
+            )
+            _count_raw = _count_resp.get("result", "{}")
+            if isinstance(_count_raw, str):
+                _count_data = json.loads(_count_raw)
+            else:
+                _count_data = _count_raw
+            # Unwrap host.jsx envelope if present
+            if isinstance(_count_data, dict) and "data" in _count_data:
+                _count_data = _count_data["data"]
+            if isinstance(_count_data, str):
+                _count_data = json.loads(_count_data)
+            auto_tag_pre_count = _count_data.get("count", 0)
+        except Exception as e:
+            logger.debug("Auto-tag pre-count failed: %s", e)
+            auto_tag_pre_count = None  # Graceful degradation: skip auto-tag
+
     desc = params.description.strip() if params.description else None
 
     warnings = []
@@ -570,6 +800,31 @@ async def illustrator_execute_script(params: ExecuteScriptInput) -> Union[str, l
             diagnostics["guard_status"] = "skipped"
 
         # Return standardized envelope
+        # ── Auto-tag: post-exec scan (before envelope so diagnostics are included) ──
+        if (
+            params.auto_assign_ids != "off"
+            and auto_tag_pre_count is not None
+            and not response.get("error")
+        ):
+            try:
+                _auto_tag_result = await _run_auto_tag(
+                    mode=params.auto_assign_ids,
+                    scope=params.auto_tag_scope,
+                    cap=params.max_auto_tag,
+                    pre_count=auto_tag_pre_count,
+                    timeout=params.timeout,
+                )
+                if _auto_tag_result:
+                    diagnostics["auto_assign_ids"] = _auto_tag_result
+                    if _auto_tag_result.get("cap_hit"):
+                        warnings.append(
+                            f"Auto-tag cap hit: tagged {_auto_tag_result['tagged']}/{params.max_auto_tag} items. "
+                            "Increase max_auto_tag or use auto_assign_ids='off' if unneeded."
+                        )
+            except Exception as e:
+                logger.debug("Auto-tag post-scan failed: %s", e)
+                diagnostics["auto_assign_ids"] = {"error": str(e)}
+
         envelope = format_envelope(
             response=response,
             context=context,
@@ -687,7 +942,6 @@ async def illustrator_execute_script(params: ExecuteScriptInput) -> Union[str, l
                         TextContent(type="text", text=VLM_CHECKPOINT_INSTRUCTION.format(count=_counter.value)),
                     ]
                 return env_text
-
         return envelope
 
     except Exception as e:

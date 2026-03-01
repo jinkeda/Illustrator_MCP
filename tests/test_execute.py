@@ -77,8 +77,14 @@ class TestExecuteScript:
             ExecuteScriptInput(script="alert('test');")
         )
         
-        mock_execute.assert_called_once()
-        call_kwargs = mock_execute.call_args.kwargs
+        # Find the user script call (not the auto_tag precount call)
+        user_calls = [
+            c for c in mock_execute.call_args_list
+            if c.kwargs.get('command_type') != 'auto_tag_precount'
+               and c.kwargs.get('command_type') != 'auto_tag'
+        ]
+        assert len(user_calls) >= 1, "Expected at least one user script call"
+        call_kwargs = user_calls[0].kwargs
         assert call_kwargs['script'] == "alert('test');"
         assert call_kwargs['tool_name'] == "illustrator_execute_script"
     

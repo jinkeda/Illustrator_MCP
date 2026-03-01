@@ -202,7 +202,7 @@ Every tool carries a `CONTRACT:` line in its docstring and machine-checkable ann
 
 | Tool | Description |
 |---|---|
-| `illustrator_execute_script` | **Primary tool.** Execute any ExtendScript code in Illustrator. Supports library injection, params, bounds validation, and preview export. |
+| `illustrator_execute_script` | **Primary tool.** Execute any ExtendScript code in Illustrator. Supports library injection, params, bounds validation, preview export, and auto-assign MCP IDs to newly created items. |
 | `illustrator_execute_task` | Execute a structured task using the Task Protocol (collect > compute > apply). |
 
 ### Document Operations (4)
@@ -296,6 +296,7 @@ illustrator_execute_script(
 | `session` | Multi-call IR handoff via `$.global` session stash |
 | `ops_journal` | Op journal for batch replay and recomputability |
 | `assets` | Asset analysis (bounds, aspect ratio, orientation) |
+| `auto_tag` | Auto-assign `@mcp:id=` tags to untagged items (delta / converge modes) |
 
 ---
 
@@ -468,6 +469,28 @@ execute_script(
 ```
 
 The cadence counter is module-level and resets on server restart. Configurable via `VLM_QA_CADENCE` in `execute.py`.
+
+### Auto-assign MCP IDs
+
+Items created by `execute_script` are automatically tagged with `@mcp:id=` so they can be targeted by SOC operations. Controlled by `auto_assign_ids`:
+
+| Mode | Behavior | Use Case |
+|---|---|---|
+| `"delta"` (default) | Tag items likely created by this script. Selection-first, bounded by count delta + cushion. | Normal usage — cheap, safe |
+| `"converge"` | Tag ALL untagged items in scope up to cap. | Bulk migration of legacy documents |
+| `"off"` | No scanning, no tagging. | Read-only scripts, performance-critical calls |
+
+```python
+execute_script(
+    script="doc.pathItems.rectangle(-100, 50, 200, 100);",
+    auto_assign_ids="delta",      # default — tag new items
+    max_auto_tag=200,             # hard cap per call
+    auto_tag_scope="activeLayer"  # or "document"
+)
+# → diagnostics.auto_assign_ids: {tagged: 1, assigned: [{id: "mcp_...", typename: "PathItem"}]}
+```
+
+Delta mode uses a **selection-first** heuristic: newly created items are typically left selected, so the scan prioritizes `doc.selection` before falling back to scope-wide scanning. This avoids mis-tagging pre-existing untagged items in the active layer.
 
 ### VLM Grounding Pipeline
 
@@ -787,7 +810,7 @@ Illustrator_MCP/
 │   │   ├── components/MCPControlPanel.tsx
 │   │   └── hooks/useMCP.ts       # WebSocket connection hook
 │   └── vite.config.ts
-├── tests/                        # Unit tests (pytest, 1350+ tests)
+├── tests/                        # Unit tests (pytest, 1450+ tests)
 │   ├── conftest.py               # Shared fixtures + collection-error guard
 │   ├── test_execute.py
 │   ├── test_documents.py
@@ -811,6 +834,7 @@ Illustrator_MCP/
 │   ├── test_layer_order.py       # Layer ordering fixes: fail-loud refs, placement, assert_layer_order (10 tests)
 │   ├── test_soc_contracts.py     # Contract sync tests across 4 registry layers (6 tests)
 │   ├── test_registry_snapshot.py  # Registry + canonical policy tests (11 tests)
+│   ├── test_auto_tag.py          # Auto-assign MCP IDs tests (19 tests)
 │   └── test_brand_social_kit_fixes.py
 ├── scripts/
 │   └── gen_schemas.py            # Schema codegen (Python -> JSX)

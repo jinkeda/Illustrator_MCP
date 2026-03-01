@@ -454,6 +454,15 @@
             ],
             "description": "MCP ID utilities: extraction, assignment, note manipulation, and targeted index removal"
         },
+        "auto_tag": {
+            "file": "auto_tag.jsx",
+            "version": "1.0.0",
+            "dependencies": [
+                "mcp_id"
+            ],
+            "exports": [],
+            "description": "Auto-assign MCP IDs to untagged items. Supports delta (selection-first) and converge modes."
+        },
         "checkpoint": {
             "file": "checkpoint.jsx",
             "version": "1.0.0",
