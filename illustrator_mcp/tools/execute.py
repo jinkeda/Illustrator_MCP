@@ -217,8 +217,16 @@ async def _run_auto_tag(
         logger.warning("auto_tag.jsx not found at %s", _AUTO_TAG_SCRIPT_PATH)
         return None
 
-    with open(_AUTO_TAG_SCRIPT_PATH, "r", encoding="utf-8") as f:
-        jsx_code = f.read()
+    # Use the library resolver to get auto_tag.jsx WITH its dependencies
+    # (mcp_id.jsx provides extractMcpId/setMcpId used by auto_tag.jsx)
+    from illustrator_mcp.libraries import get_resolver
+    try:
+        resolved_code = get_resolver().resolve(
+            ["auto_tag"], skip_collision_check=True
+        )
+    except Exception as e:
+        logger.warning("auto_tag library resolution failed: %s", e)
+        return None
 
     # Inject params as preamble
     params_obj = json.dumps({
@@ -228,7 +236,7 @@ async def _run_auto_tag(
         "preCount": pre_count,
         "cushion": cushion,
     })
-    jsx_with_params = f"var __PARAMS__ = {params_obj};\n{jsx_code}"
+    jsx_with_params = f"var __PARAMS__ = {params_obj};\n{resolved_code}"
 
     try:
         resp = await execute_script_with_context(
