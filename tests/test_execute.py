@@ -155,3 +155,99 @@ class TestExecuteScript:
         
         assert "success" in result
         mock_format.assert_called()
+
+
+# ── Canary tests for phase refactor invariants ─────────────────────
+
+
+class TestPhaseRefactorInvariants:
+    """Canary tests ensuring post-execution hooks run exactly once."""
+
+    @pytest.fixture
+    def mock_execute(self):
+        """Mock execute_script_with_context."""
+        with patch('illustrator_mcp.tools.execute.execute_script_with_context') as m:
+            yield m
+
+    @pytest.fixture
+    def mock_format(self):
+        """Mock format_envelope."""
+        with patch('illustrator_mcp.tools.execute.format_envelope') as m:
+            m.return_value = '{"ok": true}'
+            yield m
+
+    @pytest.mark.asyncio
+    async def test_guard_abort_still_runs_auto_tag(self, mock_execute, mock_format):
+        """Canary: auto-tag must run even when guard aborts.
+
+        Pre-refactor bug: guard abort returned early before auto-tag.
+        """
+        from dataclasses import dataclass, field
+        from illustrator_mcp.tools.preview import GuardCheckpointResult
+
+        # Guard will abort
+        abort_gcp = GuardCheckpointResult(
+            guard_result=None,
+            guard_telemetry={},
+            should_abort=True,
+            guard_status="aborted",
+            abort_message="Occlusion detected",
+            diag_extras={"occlusion": True},
+            warn_messages=[],
+        )
+
+        mock_execute.return_value = {"result": "done"}
+
+        with patch(
+            'illustrator_mcp.tools.execute._guard_checkpoint',
+            new_callable=AsyncMock,
+            return_value=abort_gcp,
+        ), patch(
+            'illustrator_mcp.tools.execute._run_auto_tag',
+            new_callable=AsyncMock,
+            return_value={"tagged": 2, "cap_hit": False, "assigned": []},
+        ) as mock_auto_tag, patch(
+            'illustrator_mcp.tools.execute._generate_preview',
+            new_callable=AsyncMock,
+            return_value=None,
+        ), patch(
+            'illustrator_mcp.tools.execute.VLM_QA_CADENCE', 1,  # Force checkpoint
+        ):
+            result = await illustrator_execute_script(
+                ExecuteScriptInput(
+                    script="var x = 1;",
+                    auto_assign_ids="delta",
+                )
+            )
+
+            # Auto-tag must have been called despite guard abort
+            assert mock_auto_tag.called, (
+                "auto_tag must run even when guard aborts"
+            )
+            # The diagnostics in the envelope should contain auto-tag info
+            format_call = mock_format.call_args
+            diagnostics = format_call.kwargs.get('diagnostics', {})
+            assert "auto_assign_ids" in diagnostics, (
+                "auto_tag diagnostics must appear in envelope even on guard abort"
+            )
+
+    @pytest.mark.asyncio
+    async def test_counter_decrement_on_exception(self, mock_execute, mock_format):
+        """Canary: counter must decrement even when execution throws.
+
+        Ensures try/finally safety prevents counter leaks.
+        """
+        from illustrator_mcp.tools.cadence import _counter
+
+        initial = _counter.value
+        mock_execute.side_effect = Exception("Bridge timeout")
+
+        with pytest.raises(Exception, match="Bridge timeout"):
+            await illustrator_execute_script(
+                ExecuteScriptInput(script="crash();")
+            )
+
+        # Counter must be back to initial (increment + decrement in finally)
+        assert _counter.value == initial, (
+            f"Counter leaked: was {initial}, now {_counter.value}"
+        )

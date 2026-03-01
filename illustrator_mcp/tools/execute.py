@@ -463,6 +463,420 @@ from illustrator_mcp.tools.base import (
 _NAME = "illustrator_execute_script"
 
 
+# ── Phase decomposition types ─────────────────────────────────────
+
+from dataclasses import dataclass, field as dc_field
+
+
+@dataclass
+class _ExecContext:
+    """Shared state flowing through pre → post → present phases."""
+
+    warnings: list = dc_field(default_factory=list)
+    diagnostics: dict = dc_field(default_factory=dict)
+    auto_tag_pre_count: Optional[int] = None
+    is_vlm_checkpoint: bool = False
+    checkpoint_skipped: bool = False
+    command_type: str = ""
+    context: str = ""  # for format_envelope
+    guard_result: Optional[GuardCheckpointResult] = None
+
+
+# ── Phase 1: Pre-execution ────────────────────────────────────────
+
+def _pre_execute(params: ExecuteScriptInput, count: int) -> tuple:
+    """Setup: safety overrides, precount, advisories, VLM cadence, diagnostics.
+
+    Returns (script, ctx) where script is the potentially modified JS code.
+    """
+    script = params.script  # Already resolved by model_validator
+
+    # Safety guard: inject max_ops / max_ms overrides if non-default
+    safety_overrides = []
+    if params.max_ops != 500000:
+        safety_overrides.append(f"var __MCP_MAX_OPS = {params.max_ops};")
+    if params.max_ms != 25000:
+        safety_overrides.append(f"var __MCP_MAX_MS = {params.max_ms};")
+    if safety_overrides:
+        script = "\n".join(safety_overrides) + "\n" + script
+
+    ctx = _ExecContext()
+
+    # Abstraction advisory: non-blocking hints
+    advisory_hints = _abstraction_advisory(script)
+    if advisory_hints:
+        ctx.warnings.extend(advisory_hints)
+
+    # VLM QA Cadence
+    is_checkpoint = (count % VLM_QA_CADENCE == 0) or params.final_step
+
+    if is_checkpoint:
+        if params.return_preview is False and not params.final_step:
+            ctx.warnings.append(
+                f"VLM QA checkpoint skipped (mutation #{count}). "
+                "Consider using return_preview=True, preview_mode='annotated' "
+                "to visually verify the document state."
+            )
+            ctx.checkpoint_skipped = True
+        else:
+            params.return_preview = True
+            params.preview_mode = "annotated"
+            ctx.is_vlm_checkpoint = True
+            logger.info(
+                f"VLM QA cadence: checkpoint at mutation #{count} "
+                f"(final_step={params.final_step})"
+            )
+
+    # Canonicalized includes metadata
+    if params.includes:
+        meta = get_injection_metadata(params.includes)
+        includes_canonical = meta["includes_canonical"]
+        prelude_hash = meta["prelude_hash"]
+    else:
+        includes_canonical = []
+        prelude_hash = None
+
+    ctx.diagnostics = {
+        "includes": includes_canonical,
+        "prelude_hash": prelude_hash,
+        "validate_bounds": params.validate_bounds,
+        "bounds_type": params.bounds_type,
+        "bounds_source": params.bounds_source,
+        "bounds_scope": params.bounds_scope,
+        "artboard_index": params.artboard_index,
+        "is_vlm_checkpoint": ctx.is_vlm_checkpoint,
+    }
+
+    # Command type for CEP panel
+    desc = params.description.strip() if params.description else None
+    if desc:
+        ctx.command_type = desc[:50]
+    else:
+        lines = [l.strip() for l in script.split('\n') if l.strip() and not l.strip().startswith('//')]
+        preview = lines[0][:40] if lines else "script"
+        ctx.command_type = f"script: {preview}..."
+
+    ctx.context = f"execute_script: {desc}" if desc else "execute_script"
+
+    return script, ctx
+
+
+# ── Phase 2: Pre-execution async (precount) ───────────────────────
+
+async def _pre_execute_async(params: ExecuteScriptInput, ctx: _ExecContext) -> _ExecContext:
+    """Async pre-execution: auto-tag precount (requires bridge call)."""
+    if params.auto_assign_ids != "off":
+        _scope_expr = (
+            "doc.activeLayer.pageItems.length"
+            if params.auto_tag_scope == "activeLayer"
+            else "doc.pageItems.length"
+        )
+        _count_script = (
+            f"(function(){{ var doc = app.activeDocument; "
+            f"return JSON.stringify({{count: {_scope_expr}}}); }})()"
+        )
+        try:
+            _count_resp = await execute_script_with_context(
+                script=_count_script,
+                command_type="auto_tag_precount",
+                tool_name="illustrator_execute_script",
+                timeout=5.0,
+            )
+            _count_data = unwrap_jsx_result(
+                _count_resp, context="auto_tag_precount"
+            )
+            ctx.auto_tag_pre_count = _count_data.get("count", 0)
+        except Exception as e:
+            logger.debug("Auto-tag pre-count failed: %s", e)
+            ctx.auto_tag_pre_count = None  # Graceful degradation: skip auto-tag
+    return ctx
+
+
+# ── Phase 3: Post-execution ───────────────────────────────────────
+
+async def _post_execute(
+    response: dict,
+    params: ExecuteScriptInput,
+    ctx: _ExecContext,
+) -> tuple:
+    """Post-execution hooks. Runs exactly once after successful execution.
+
+    Order: bounds validation → preview_state → guard → auto-tag.
+    Guard computes result but does NOT return early — _present handles abort.
+    Auto-tag always runs (if mode != off) regardless of guard outcome.
+
+    Returns (response, ctx) with updated diagnostics/warnings.
+    """
+    # ── Bounds validation ──
+    if params.validate_bounds:
+        ab_idx = params.artboard_index if params.artboard_index is not None else 'null'
+        check_script = f"""
+        countItemsOnArtboard({{
+            artboardIndex: {ab_idx},
+            boundsType: "{params.bounds_type}",
+            boundsSource: "{params.bounds_source}",
+            ignoreHidden: {str(params.ignore_hidden).lower()},
+            ignoreLocked: {str(params.ignore_locked).lower()},
+            policy: "fully-contained",
+            scope: "{params.bounds_scope}"
+        }});
+        """
+        try:
+            check_response = await execute_script_with_context(
+                script=check_script,
+                command_type="bounds_validation",
+                tool_name="illustrator_execute_script",
+                includes=["validate"]
+            )
+            cep_result = check_response.get("result", {})
+            if isinstance(cep_result, str):
+                cep_result = json.loads(cep_result)
+
+            if cep_result.get("ok") is False or cep_result.get("error"):
+                error_info = cep_result.get("error", {})
+                error_msg = error_info.get("message", "unknown error") if isinstance(error_info, dict) else str(error_info)
+                ctx.warnings.append(f"Bounds validation failed: {error_msg}")
+            else:
+                inner_result = cep_result.get("result", "{}")
+                if isinstance(inner_result, str):
+                    bounds = json.loads(inner_result)
+                else:
+                    bounds = inner_result
+
+                if bounds:
+                    ctx.diagnostics["validation_result"] = bounds
+                    if bounds.get('off_artboard', 0) > 0:
+                        ctx.warnings.append(
+                            f"{bounds['off_artboard']} items outside artboard bounds "
+                            f"(policy: fully-contained, {params.bounds_type}Bounds)"
+                        )
+        except Exception as e:
+            ctx.warnings.append(f"Bounds validation failed: {e}")
+
+    # ── Preview state injection ──
+    has_error = response.get("error") is not None
+    ctx.diagnostics["preview_state"] = "pre_execution" if has_error else "post_execution"
+
+    # ── Occlusion guard ──
+    if ctx.is_vlm_checkpoint and not ctx.checkpoint_skipped:
+        gcp = await _guard_checkpoint(
+            timeout=params.timeout or 15.0,
+            checkpoint_label="execute_script",
+        )
+        ctx.guard_result = gcp
+        ctx.diagnostics["guard_status"] = gcp.guard_status
+
+        if gcp.should_abort:
+            # Mark for abort in _present, but do NOT return early
+            params.return_preview = False
+            ctx.diagnostics.update(gcp.diag_extras)
+            ctx.warnings.append(gcp.abort_message)
+        else:
+            # Guard passed (possibly with Q004 warnings)
+            ctx.warnings.extend(gcp.warn_messages)
+    else:
+        ctx.diagnostics["guard_status"] = "skipped"
+
+    # ── Auto-tag (always runs if mode != off, regardless of guard outcome) ──
+    if (
+        params.auto_assign_ids != "off"
+        and ctx.auto_tag_pre_count is not None
+        and not response.get("error")
+    ):
+        try:
+            _auto_tag_result = await _run_auto_tag(
+                mode=params.auto_assign_ids,
+                scope=params.auto_tag_scope,
+                cap=params.max_auto_tag,
+                pre_count=ctx.auto_tag_pre_count,
+                timeout=params.timeout,
+            )
+            if _auto_tag_result:
+                ctx.diagnostics["auto_assign_ids"] = _auto_tag_result
+                if _auto_tag_result.get("cap_hit"):
+                    ctx.warnings.append(
+                        f"Auto-tag cap hit: tagged {_auto_tag_result['tagged']}/{params.max_auto_tag} items. "
+                        "Increase max_auto_tag or use auto_assign_ids='off' if unneeded."
+                    )
+        except Exception as e:
+            logger.debug("Auto-tag post-scan failed: %s", e)
+            ctx.diagnostics["auto_assign_ids"] = {"error": str(e)}
+
+    return response, ctx
+
+
+# ── Phase 4: Presentation ─────────────────────────────────────────
+
+async def _present(
+    response: dict,
+    params: ExecuteScriptInput,
+    ctx: _ExecContext,
+) -> Union[str, list]:
+    """Build final response. No mutations — only formatting, preview, VLM packaging.
+
+    Preview export (PNG generation) is the only side-effect: read-only export.
+    """
+    # Compute envelope once
+    envelope = format_envelope(
+        response=response,
+        context=ctx.context,
+        warnings=ctx.warnings,
+        diagnostics=ctx.diagnostics,
+    )
+
+    # ── Guard abort path ──
+    gcp = ctx.guard_result
+    if gcp and gcp.should_abort:
+        abort_parts = [TextContent(type="text", text=envelope)]
+
+        # Evidence preview (raw) — cheap proof of occlusion
+        try:
+            from types import SimpleNamespace
+            evidence_params = SimpleNamespace(
+                preview_format="png",
+                preview_max_dim=800,
+                clip_box=None,
+            )
+            evidence_img = await _generate_preview(
+                params=evidence_params,
+                timeout=params.timeout or 15.0,
+            )
+            if evidence_img:
+                abort_parts.append(TextContent(
+                    type="text",
+                    text="Evidence preview (raw) — guard aborted before annotation.",
+                ))
+                abort_parts.append(evidence_img)
+        except Exception as e:
+            logger.debug("Evidence preview skipped: %s", e)
+
+        if gcp.telemetry_text:
+            abort_parts.append(TextContent(
+                type="text",
+                text=gcp.telemetry_text,
+            ))
+        abort_parts.append(TextContent(
+            type="text",
+            text=VLM_CHECKPOINT_INSTRUCTION.format(
+                count=_counter.value
+            ),
+        ))
+        return abort_parts
+
+    # ── Preview generation (read-only export) ──
+    if params.return_preview:
+        try:
+            preview_result = await _generate_preview(
+                params=params,
+                timeout=params.timeout
+            )
+            if preview_result:
+                if params.preview_mode == "annotated":
+                    import base64 as _b64
+                    raw_bytes = _b64.b64decode(preview_result.data)
+                    annotated_bytes, annotation_result = await _annotate_preview(
+                        img_bytes=raw_bytes,
+                        max_items=params.preview_max_items,
+                        timeout=params.timeout,
+                        probe_points=params.probe_points,
+                        clip_box=params.clip_box,
+                    )
+                    ann_b64 = _b64.b64encode(annotated_bytes).decode('utf-8')
+                    result_parts = [
+                        TextContent(type="text", text=envelope),
+                    ]
+
+                    # Dual-image at VLM checkpoints: raw + annotated
+                    if ctx.is_vlm_checkpoint:
+                        raw_b64 = preview_result.data  # already b64
+                        result_parts.append(ImageContent(
+                            type="image",
+                            data=raw_b64,
+                            mimeType=preview_result.mimeType,
+                        ))
+
+                    result_parts.append(ImageContent(
+                        type="image",
+                        data=ann_b64,
+                        mimeType=preview_result.mimeType,
+                    ))
+                    result_parts.append(TextContent(
+                        type="text",
+                        text=json.dumps(annotation_result, indent=2),
+                    ))
+
+                    # Z-order telemetry (VLM checkpoints only)
+                    if ctx.is_vlm_checkpoint and gcp and gcp.telemetry_text:
+                        result_parts.append(TextContent(
+                            type="text",
+                            text=gcp.telemetry_text,
+                        ))
+
+                    # Clip box system note
+                    if params.clip_box:
+                        result_parts.append(TextContent(
+                            type="text",
+                            text=(
+                                f"\u26a0\ufe0f CLIP BOX ACTIVE: This preview shows a "
+                                f"high-resolution crop of region "
+                                f"{params.clip_box} (screen-space Y-down, points). "
+                                f"All element IDs and coordinates in the annotation "
+                                f"map are in GLOBAL document coordinates. "
+                                f"Use global coordinates for all subsequent edits."
+                            ),
+                        ))
+
+                    # VLM checkpoint instruction — last for maximum recency weight
+                    if ctx.is_vlm_checkpoint:
+                        result_parts.append(TextContent(
+                            type="text",
+                            text=VLM_CHECKPOINT_INSTRUCTION.format(
+                                count=_counter.value
+                            ),
+                        ))
+                    return result_parts
+                else:
+                    return [
+                        TextContent(type="text", text=envelope),
+                        preview_result
+                    ]
+            else:
+                # Preview returned empty — rebuild envelope with warning
+                ctx.warnings.append("Preview generation returned empty")
+                envelope = format_envelope(
+                    response=response,
+                    context=ctx.context,
+                    warnings=ctx.warnings,
+                    diagnostics=ctx.diagnostics,
+                )
+                if ctx.is_vlm_checkpoint:
+                    return [
+                        TextContent(type="text", text=envelope),
+                        TextContent(type="text", text=VLM_CHECKPOINT_INSTRUCTION.format(count=_counter.value)),
+                    ]
+                return envelope
+        except Exception as e:
+            # Preview failed — rebuild envelope with warning
+            ctx.warnings.append(f"Preview failed: {e}")
+            envelope = format_envelope(
+                response=response,
+                context=ctx.context,
+                warnings=ctx.warnings,
+                diagnostics=ctx.diagnostics,
+            )
+            if ctx.is_vlm_checkpoint:
+                return [
+                    TextContent(type="text", text=envelope),
+                    TextContent(type="text", text=VLM_CHECKPOINT_INSTRUCTION.format(count=_counter.value)),
+                ]
+            return envelope
+
+    # ── No preview: return envelope only ──
+    return envelope
+
+
+# ── Main tool function ─────────────────────────────────────────────
+
 @mcp.tool(name=_NAME, annotations=TOOL_ANNOTATIONS[_NAME])
 async def illustrator_execute_script(params: ExecuteScriptInput) -> Union[str, list]:
     """Execute raw JavaScript/ExtendScript code in Adobe Illustrator.
@@ -523,402 +937,38 @@ async def illustrator_execute_script(params: ExecuteScriptInput) -> Union[str, l
       - Never iterate live Illustrator collections if adding/removing items
       - Use __mcp_forEachSnapshot(collection, fn) or __mcp_snapshot(collection) instead
     """
-    # Log script execution for telemetry
-    script = params.script  # Already resolved by model_validator
-
-    # ── Safety guard: inject max_ops / max_ms overrides if non-default ──
-    safety_overrides = []
-    if params.max_ops != 500000:
-        safety_overrides.append(f"var __MCP_MAX_OPS = {params.max_ops};")
-    if params.max_ms != 25000:
-        safety_overrides.append(f"var __MCP_MAX_MS = {params.max_ms};")
-    if safety_overrides:
-        script = "\n".join(safety_overrides) + "\n" + script
-
-    script_len = len(script)
-
-    # ── Auto-tag: pre-exec count capture ──────────────────────────────
-    auto_tag_pre_count = None
-    if params.auto_assign_ids != "off":
-        _scope_expr = (
-            "doc.activeLayer.pageItems.length"
-            if params.auto_tag_scope == "activeLayer"
-            else "doc.pageItems.length"
-        )
-        _count_script = (
-            f"(function(){{ var doc = app.activeDocument; "
-            f"return JSON.stringify({{count: {_scope_expr}}}); }})()"
-        )
-        try:
-            _count_resp = await execute_script_with_context(
-                script=_count_script,
-                command_type="auto_tag_precount",
-                tool_name="illustrator_execute_script",
-                timeout=5.0,
-            )
-            _count_data = unwrap_jsx_result(
-                _count_resp, context="auto_tag_precount"
-            )
-            auto_tag_pre_count = _count_data.get("count", 0)
-        except Exception as e:
-            logger.debug("Auto-tag pre-count failed: %s", e)
-            auto_tag_pre_count = None  # Graceful degradation: skip auto-tag
-
-    desc = params.description.strip() if params.description else None
-
-    warnings = []
-
-    # ── Abstraction advisory: non-blocking hints for raw scripts ──
-    advisory_hints = _abstraction_advisory(script)
-    if advisory_hints:
-        warnings.extend(advisory_hints)
-
-    # ── VLM QA Cadence: auto-inject annotated preview ──────────
-    # B3: Increment counter here; decremented in outer except if execution fails
     count = _counter.increment()
-    is_checkpoint = (count % VLM_QA_CADENCE == 0) or params.final_step
-    is_vlm_checkpoint = False  # True only when cadence auto-injects
-
-    # Record checkpoint skip before execution (preview gating decided here,
-    # but guard runs AFTER execution to check post-mutation state)
-    checkpoint_skipped = False
-    if is_checkpoint:
-        if params.return_preview is False and not params.final_step:
-            # AI explicitly disabled preview — soft override: warn but respect
-            warnings.append(
-                f"VLM QA checkpoint skipped (mutation #{count}). "
-                "Consider using return_preview=True, preview_mode='annotated' "
-                "to visually verify the document state."
-            )
-            checkpoint_skipped = True
-        else:
-            # Mark for post-execution guard + preview
-            params.return_preview = True
-            params.preview_mode = "annotated"
-            is_vlm_checkpoint = True
-            logger.info(
-                f"VLM QA cadence: checkpoint at mutation #{count} "
-                f"(final_step={params.final_step})"
-            )
-
-    # Get canonicalized includes metadata
-    if params.includes:
-        meta = get_injection_metadata(params.includes)
-        includes_canonical = meta["includes_canonical"]
-        prelude_hash = meta["prelude_hash"]
-    else:
-        includes_canonical = []
-        prelude_hash = None
-
-    diagnostics = {
-        "includes": includes_canonical,
-        "prelude_hash": prelude_hash,
-        "validate_bounds": params.validate_bounds,
-        "bounds_type": params.bounds_type,
-        "bounds_source": params.bounds_source,
-        "bounds_scope": params.bounds_scope,
-        "artboard_index": params.artboard_index,
-        "is_vlm_checkpoint": is_vlm_checkpoint,
-    }
-
-    # Create a descriptive command_type for CEP panel
-    # Priority: description > script snippet
-    if desc:
-        command_type = desc[:50]  # Limit length for display
-    else:
-        # Extract first meaningful line from script as fallback
-        lines = [l.strip() for l in script.split('\n') if l.strip() and not l.strip().startswith('//')]
-        preview = lines[0][:40] if lines else "script"
-        command_type = f"script: {preview}..."
-
-    logger.info(f"execute_script: {command_type} ({script_len} chars)")
-
     try:
+        # Phase 1: Pre-execution (sync setup)
+        script, ctx = _pre_execute(params, count)
+
+        # Phase 1b: Async pre-execution (precount bridge call)
+        ctx = await _pre_execute_async(params, ctx)
+
+        script_len = len(script)
+        logger.info(f"execute_script: {ctx.command_type} ({script_len} chars)")
+
+        # Phase 2: Execution
         response = await execute_script_with_context(
             script=script,
-            command_type=command_type,
+            command_type=ctx.command_type,
             tool_name="illustrator_execute_script",
-            params={"description": desc or "raw script", "length": script_len},
+            params={"description": params.description or "raw script", "length": script_len},
             timeout=params.timeout,
-            includes=params.includes
+            includes=params.includes,
         )
 
-        # Optional bounds validation after execution
-        if params.validate_bounds:
-            ab_idx = params.artboard_index if params.artboard_index is not None else 'null'
-            check_script = f"""
-            countItemsOnArtboard({{
-                artboardIndex: {ab_idx},
-                boundsType: "{params.bounds_type}",
-                boundsSource: "{params.bounds_source}",
-                ignoreHidden: {str(params.ignore_hidden).lower()},
-                ignoreLocked: {str(params.ignore_locked).lower()},
-                policy: "fully-contained",
-                scope: "{params.bounds_scope}"
-            }});
-            """
-            try:
-                check_response = await execute_script_with_context(
-                    script=check_script,
-                    command_type="bounds_validation",
-                    tool_name="illustrator_execute_script",
-                    includes=["validate"]
-                )
-                # CEP returns {"success": bool, "result": "JSON string"}
-                cep_result = check_response.get("result", {})
-                if isinstance(cep_result, str):
-                    cep_result = json.loads(cep_result)
+        # Phase 3: Post-execution (always runs on success)
+        response, ctx = await _post_execute(response, params, ctx)
 
-                # Check for validation errors (e.g., invalid artboard index)
-                if cep_result.get("ok") is False or cep_result.get("error"):
-                    error_info = cep_result.get("error", {})
-                    error_msg = error_info.get("message", "unknown error") if isinstance(error_info, dict) else str(error_info)
-                    warnings.append(f"Bounds validation failed: {error_msg}")
-                else:
-                    # Extract inner result (the actual validation data)
-                    inner_result = cep_result.get("result", "{}")
-                    if isinstance(inner_result, str):
-                        bounds = json.loads(inner_result)
-                    else:
-                        bounds = inner_result
-
-                    # Always include validation result in diagnostics when validation runs
-                    if bounds:
-                        diagnostics["validation_result"] = bounds
-
-                        # Add warning if items are off-artboard
-                        if bounds.get('off_artboard', 0) > 0:
-                            warnings.append(
-                                f"{bounds['off_artboard']} items outside artboard bounds "
-                                f"(policy: fully-contained, {params.bounds_type}Bounds)"
-                            )
-            except Exception as e:
-                warnings.append(f"Bounds validation failed: {e}")
-
-        # Log errors for debugging
-        context = f"execute_script: {desc}" if desc else "execute_script"
-
-        # B1: Inject preview_state into diagnostics BEFORE serialization
-        # (eliminates the old json.loads→mutate→json.dumps roundtrip)
-        has_error = response.get("error") is not None
-        diagnostics["preview_state"] = "pre_execution" if has_error else "post_execution"
-
-        # ── Occlusion guard: run AFTER script execution, BEFORE preview ──
-        # Checks the POST-MUTATION document state (what the VLM would see).
-        guard_telemetry = {}
-
-        if is_vlm_checkpoint and not checkpoint_skipped:
-            gcp = await _guard_checkpoint(
-                timeout=params.timeout or 15.0,
-                checkpoint_label="execute_script",
-            )
-            guard_telemetry = gcp.guard_telemetry
-            diagnostics["guard_status"] = gcp.guard_status
-
-            if gcp.should_abort:
-                # ABORT: occlusion detected — skip annotated preview
-                params.return_preview = False
-                diagnostics.update(gcp.diag_extras)
-                warnings.append(gcp.abort_message)
-
-                # Build abort response: envelope + evidence + telemetry + checkpoint
-                env_text = format_envelope(
-                    response=response,
-                    context=context,
-                    warnings=warnings,
-                    diagnostics=diagnostics,
-                )
-                abort_parts = [TextContent(type="text", text=env_text)]
-
-                # Evidence preview (raw) — cheap proof of occlusion
-                try:
-                    from types import SimpleNamespace
-                    evidence_params = SimpleNamespace(
-                        preview_format="png",
-                        preview_max_dim=800,
-                        clip_box=None,
-                    )
-                    evidence_img = await _generate_preview(
-                        params=evidence_params,
-                        timeout=params.timeout or 15.0,
-                    )
-                    if evidence_img:
-                        abort_parts.append(TextContent(
-                            type="text",
-                            text="Evidence preview (raw) — guard aborted before annotation.",
-                        ))
-                        abort_parts.append(evidence_img)
-                except Exception as e:
-                    logger.debug("Evidence preview skipped: %s", e)
-
-                if gcp.telemetry_text:
-                    abort_parts.append(TextContent(
-                        type="text",
-                        text=gcp.telemetry_text,
-                    ))
-                abort_parts.append(TextContent(
-                    type="text",
-                    text=VLM_CHECKPOINT_INSTRUCTION.format(
-                        count=_counter.value
-                    ),
-                ))
-                return abort_parts
-            else:
-                # Guard passed (possibly with Q004 warnings)
-                warnings.extend(gcp.warn_messages)
-        else:
-            diagnostics["guard_status"] = "skipped"
-
-        # Return standardized envelope
-        # ── Auto-tag: post-exec scan (before envelope so diagnostics are included) ──
-        if (
-            params.auto_assign_ids != "off"
-            and auto_tag_pre_count is not None
-            and not response.get("error")
-        ):
-            try:
-                _auto_tag_result = await _run_auto_tag(
-                    mode=params.auto_assign_ids,
-                    scope=params.auto_tag_scope,
-                    cap=params.max_auto_tag,
-                    pre_count=auto_tag_pre_count,
-                    timeout=params.timeout,
-                )
-                if _auto_tag_result:
-                    diagnostics["auto_assign_ids"] = _auto_tag_result
-                    if _auto_tag_result.get("cap_hit"):
-                        warnings.append(
-                            f"Auto-tag cap hit: tagged {_auto_tag_result['tagged']}/{params.max_auto_tag} items. "
-                            "Increase max_auto_tag or use auto_assign_ids='off' if unneeded."
-                        )
-            except Exception as e:
-                logger.debug("Auto-tag post-scan failed: %s", e)
-                diagnostics["auto_assign_ids"] = {"error": str(e)}
-
-        envelope = format_envelope(
-            response=response,
-            context=context,
-            warnings=warnings,
-            diagnostics=diagnostics
-        )
-
-        # Auto-preview: export thumbnail and return as ImageContent
-        if params.return_preview:
-            try:
-                preview_result = await _generate_preview(
-                    params=params,
-                    timeout=params.timeout
-                )
-                if preview_result:
-                    # Annotated mode: overlay numbered boxes + return annotation map
-                    if params.preview_mode == "annotated":
-                        import base64 as _b64
-                        raw_bytes = _b64.b64decode(preview_result.data)
-                        annotated_bytes, annotation_result = await _annotate_preview(
-                            img_bytes=raw_bytes,
-                            max_items=params.preview_max_items,
-                            timeout=params.timeout,
-                            probe_points=params.probe_points,
-                            clip_box=params.clip_box,
-                        )
-                        ann_b64 = _b64.b64encode(annotated_bytes).decode('utf-8')
-                        result_parts = [
-                            TextContent(type="text", text=envelope),
-                        ]
-
-                        # Dual-image at VLM checkpoints: raw + annotated
-                        if is_vlm_checkpoint:
-                            raw_b64 = preview_result.data  # already b64
-                            result_parts.append(ImageContent(
-                                type="image",
-                                data=raw_b64,
-                                mimeType=preview_result.mimeType,
-                            ))
-
-                        result_parts.append(ImageContent(
-                            type="image",
-                            data=ann_b64,
-                            mimeType=preview_result.mimeType,
-                        ))
-                        result_parts.append(TextContent(
-                            type="text",
-                            text=json.dumps(annotation_result, indent=2),
-                        ))
-
-                        # Z-order telemetry (VLM checkpoints only)
-                        if is_vlm_checkpoint and guard_telemetry and gcp.telemetry_text:
-                            result_parts.append(TextContent(
-                                type="text",
-                                text=gcp.telemetry_text,
-                            ))
-
-                        # Clip box system note
-                        if params.clip_box:
-                            result_parts.append(TextContent(
-                                type="text",
-                                text=(
-                                    f"\u26a0\ufe0f CLIP BOX ACTIVE: This preview shows a "
-                                    f"high-resolution crop of region "
-                                    f"{params.clip_box} (screen-space Y-down, points). "
-                                    f"All element IDs and coordinates in the annotation "
-                                    f"map are in GLOBAL document coordinates. "
-                                    f"Use global coordinates for all subsequent edits."
-                                ),
-                            ))
-                        # Cognitive Forcing Function: append checkpoint
-                        # instruction as absolute LAST element so it has
-                        # maximum recency weight in the LLM's attention.
-                        if is_vlm_checkpoint:
-                            result_parts.append(TextContent(
-                                type="text",
-                                text=VLM_CHECKPOINT_INSTRUCTION.format(
-                                    count=_counter.value
-                                ),
-                            ))
-                        return result_parts
-                    else:
-                        return [
-                            TextContent(type="text", text=envelope),
-                            preview_result
-                        ]
-                else:
-                    # B2: Rebuild envelope with added warning (reuse diagnostics,
-                    # don't call format_envelope a second time with stale state)
-                    warnings.append("Preview generation returned empty")
-                    env_text = format_envelope(
-                        response=response,
-                        context=context,
-                        warnings=warnings,
-                        diagnostics=diagnostics
-                    )
-                    if is_vlm_checkpoint:
-                        return [
-                            TextContent(type="text", text=env_text),
-                            TextContent(type="text", text=VLM_CHECKPOINT_INSTRUCTION.format(count=_counter.value)),
-                        ]
-                    return env_text
-            except Exception as e:
-                # B2: Single rebuild with the preview failure warning
-                warnings.append(f"Preview failed: {e}")
-                env_text = format_envelope(
-                    response=response,
-                    context=context,
-                    warnings=warnings,
-                    diagnostics=diagnostics
-                )
-                if is_vlm_checkpoint:
-                    return [
-                        TextContent(type="text", text=env_text),
-                        TextContent(type="text", text=VLM_CHECKPOINT_INSTRUCTION.format(count=_counter.value)),
-                    ]
-                return env_text
-        return envelope
+        # Phase 4: Presentation (multiple returns are fine here)
+        return await _present(response, params, ctx)
 
     except Exception as e:
-        # B3: Decrement counter so failed executions don't pollute cadence
-        _counter.decrement()
         logger.error(f"Script execution failed: {str(e)}")
         raise
+    finally:
+        _counter.decrement()
 
 
 # ── Backward-compatible re-exports ──────────────────────────────────
