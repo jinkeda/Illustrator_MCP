@@ -232,6 +232,17 @@ if (typeof executeTask !== "function" || typeof validatePayload !== "function") 
 
         # ok is authoritative: reflect report status in envelope
         if report.get("ok", True):
+            # Diagnostic hint when query returns 0 items
+            stats = report.get("stats", {})
+            if stats.get("itemsProcessed", -1) == 0:
+                warnings.append(
+                    "Query returned 0 items. Common causes: "
+                    "(1) hidden or locked layers, "
+                    "(2) items inside clipping masks, "
+                    "(3) items in hidden groups, "
+                    "(4) wrong active document, "
+                    "(5) all items are guides."
+                )
             return make_envelope(
                 ok=True,
                 result=report,

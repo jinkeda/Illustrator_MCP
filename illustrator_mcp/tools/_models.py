@@ -11,6 +11,29 @@ from pydantic import Field
 
 from illustrator_mcp.tools.base import ToolInputBase
 
+from pydantic import BaseModel
+
+
+# ── Shared appearance models ──────────────────────────────────────────
+
+
+class ColorRGB(BaseModel):
+    """RGB color with validated 0–255 channels."""
+    r: int = Field(..., ge=0, le=255, description="Red channel (0-255)")
+    g: int = Field(..., ge=0, le=255, description="Green channel (0-255)")
+    b: int = Field(..., ge=0, le=255, description="Blue channel (0-255)")
+
+
+class StrokeSpec(BaseModel):
+    """Stroke color with optional width."""
+    r: int = Field(..., ge=0, le=255, description="Red channel (0-255)")
+    g: int = Field(..., ge=0, le=255, description="Green channel (0-255)")
+    b: int = Field(..., ge=0, le=255, description="Blue channel (0-255)")
+    width: Optional[float] = Field(
+        default=None, gt=0,
+        description="Stroke width in points. None = use pipeline default."
+    )
+
 
 class ExportFormat(str, Enum):
     """Export file formats."""

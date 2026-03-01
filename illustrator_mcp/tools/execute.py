@@ -828,13 +828,22 @@ async def _present(
                         ))
 
                     # VLM checkpoint instruction — last for maximum recency weight
+                    # Skip checkpoint on empty canvas (0 annotations = nothing to review)
                     if ctx.is_vlm_checkpoint:
-                        result_parts.append(TextContent(
-                            type="text",
-                            text=VLM_CHECKPOINT_INSTRUCTION.format(
-                                count=_counter.value
-                            ),
-                        ))
+                        ann_count = annotation_result.get("meta", {}).get("annotated_count", 0)
+                        if ann_count == 0:
+                            ctx.diagnostics["checkpoint_skipped_empty_canvas"] = True
+                            result_parts.append(TextContent(
+                                type="text",
+                                text="⚠️ VLM checkpoint skipped: empty canvas (0 annotations).",
+                            ))
+                        else:
+                            result_parts.append(TextContent(
+                                type="text",
+                                text=VLM_CHECKPOINT_INSTRUCTION.format(
+                                    count=_counter.value
+                                ),
+                            ))
                     return result_parts
                 else:
                     return [
@@ -907,13 +916,27 @@ async def illustrator_execute_script(params: ExecuteScriptInput) -> Union[str, l
       - Units: points (1 pt = 1/72 inch)
       - Example: to place at visual position (100, 200), use position = [100, -200]
 
+    HELPERS (includes: ['geometry']):
+      Use these to avoid manual Y-negation — they convert screen-space coords internally:
+        rectXY(x, y, w, h)          — rectangle at screen-space (x,y)
+        ellipseXY(x, y, w, h)       — ellipse at screen-space (x,y)
+        lineXY(x1, y1, x2, y2)      — line between screen-space points
+        polygonXY([[x,y],...], closed)— polygon from screen-space points
+        pointXY(x, y)               — returns {left, top} for position assignments
+        drawPathPoints(spec)         — full path with handles, UUID, heap registration
+      Example: var rect = rectXY(100, 200, 50, 30);  // no -y needed
+
     EXAMPLES:
-      Rectangle: doc.pathItems.rectangle(top, left, width, height)
-        ⚠ width & height must be POSITIVE. Negative height → shape above artboard (invisible).
-      Ellipse: doc.pathItems.ellipse(top, left, width, height)
-      Line: var p = doc.pathItems.add(); p.setEntirePath([[x1,-y1], [x2,-y2]])
-      Color: var c = new RGBColor(); c.red=255; c.green=0; c.blue=0; shape.fillColor = c;
-      Text: var tf = doc.textFrames.add(); tf.contents = "text"; tf.position = [x, -y];
+      Using helpers (preferred — add includes: ['geometry']):
+        var rect = rectXY(50, 80, 200, 100);
+        rect.fillColor = makeRGBColor(255, 0, 0);
+      Raw DOM (when helpers are insufficient):
+        Rectangle: doc.pathItems.rectangle(top, left, width, height)
+          ⚠ width & height must be POSITIVE. Negative height → shape above artboard (invisible).
+        Ellipse: doc.pathItems.ellipse(top, left, width, height)
+        Line: var p = doc.pathItems.add(); p.setEntirePath([[x1,-y1], [x2,-y2]])
+        Color: var c = new RGBColor(); c.red=255; c.green=0; c.blue=0; shape.fillColor = c;
+        Text: var tf = doc.textFrames.add(); tf.contents = "text"; tf.position = [x, -y];
       Grid helpers: artboardGrid(cols, rows), itemsInCell(cell, mode)
 
     ELEMENT DISCOVERY:

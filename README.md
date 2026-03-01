@@ -230,7 +230,7 @@ Every tool carries a `CONTRACT:` line in its docstring and machine-checkable ann
 
 | Tool | Description |
 |---|---|
-| `illustrator_path_import_svg` | Import an SVG path `d` attribute. Parses server-side, converts arcs to cubic Béziers. Hardcoded safety limits. |
+| `illustrator_path_import_svg` | Import an SVG path `d` attribute. Supports typed `fill` (`ColorRGB` / `False` / `None`), `stroke` (`StrokeSpec` / `False` / `None`), and explicit `id` with collision checking. Parses server-side, converts arcs to cubic Béziers. Hardcoded safety limits. |
 | `illustrator_path_boolean` | Boolean operations (unite, subtract, intersect, xor) on paths. Uses [pyclipper](https://github.com/fonttools/pyclipper) for polygon clipping. Bézier curves are auto-flattened. Requires `geometry` extras. |
 
 ### Query & Validation (2)
@@ -345,7 +345,7 @@ Key capabilities: stable ID targeting (`@mcp:id=` in item.note), strict/continue
 
 Handles and mirror are resolved Python-side before reaching JSX — the AI provides intuitive specs, and trigonometry + mirroring are handled automatically.
 
-**SVG path import:** Use the dedicated `path_import_svg` tool to import SVG `d` attributes. The path string is parsed Python-side into geometry IR (supports M/L/H/V/C/S/Q/T/A/Z commands including arc-to-cubic conversion), then drawn via `geometry.drawPathPoints`. Hardcoded safety limits prevent abuse (50k chars, 5k segments, 100 subpaths, ±100k coordinates).
+**SVG path import:** Use the dedicated `path_import_svg` tool to import SVG `d` attributes. The path string is parsed Python-side into geometry IR (supports M/L/H/V/C/S/Q/T/A/Z commands including arc-to-cubic conversion), then drawn via `geometry.drawPathPoints`. Hardcoded safety limits prevent abuse (50k chars, 5k segments, 100 subpaths, ±100k coordinates). Supports typed `fill` (`ColorRGB` or `False`), `stroke` (`StrokeSpec` or `False`), and explicit `id` with collision checking — `None` leaves defaults, `False` forces off, a value forces the color/ID.
 
 **Path boolean:** Use `path_boolean` to unite, subtract, intersect, or xor shapes by MCP ID. The pipeline extracts geometry from Illustrator (ExtendScript), flattens any Bézier curves (Python), runs the boolean via pyclipper (Python), and reconstructs the result as a `PathItem` or `CompoundPathItem` (ExtendScript). Shapes with holes produce `CompoundPathItem` automatically. Requires `geometry` extras (`pip install -e ".[geometry]"`).
 
@@ -459,6 +459,7 @@ The server automatically injects an annotated preview every **5th** `execute_scr
 | Every 5th call | Auto-inject `return_preview=True, preview_mode="annotated"` |
 | `final_step=True` | Force annotated preview on the last mutation |
 | AI sets `return_preview=False` | Respected, but a skip warning is added to the envelope |
+| Empty canvas (0 annotations) | Checkpoint instruction **skipped** — no visual signal to review. Diagnostic flag `checkpoint_skipped_empty_canvas` is set. |
 
 ```python
 # Final mutation — forces VLM QA regardless of cadence count
@@ -786,8 +787,9 @@ Illustrator_MCP/
 │   │   ├── preview.py            # Preview capture + annotation pipeline
 │   │   ├── documents.py          # Document I/O + checkpoint tools
 │   │   ├── context.py            # State inspection tools
-│   │   ├── query.py              # query_items + preflight_check
-│   │   ├── import_svg.py         # SVG path import tool (d → drawPathPoints)
+│   │   ├── query.py              # query_items + preflight_check (0-result diagnostic hint)
+│   │   ├── import_svg.py         # SVG path import tool (d → drawPathPoints, typed fill/stroke/id)
+│   │   ├── _models.py            # Shared Pydantic models (ColorRGB, StrokeSpec)
 │   │   └── archive/              # Disabled legacy tools (reference only)
 │   ├── overlay.py                # VLM overlay (bounding boxes + ruler + probe markers + coordinate mapping)
 │   └── resources/
@@ -810,7 +812,7 @@ Illustrator_MCP/
 │   │   ├── components/MCPControlPanel.tsx
 │   │   └── hooks/useMCP.ts       # WebSocket connection hook
 │   └── vite.config.ts
-├── tests/                        # Unit tests (pytest, 1450+ tests)
+├── tests/                        # Unit tests (pytest, 1530+ tests)
 │   ├── conftest.py               # Shared fixtures + collection-error guard
 │   ├── test_execute.py
 │   ├── test_documents.py
@@ -825,7 +827,7 @@ Illustrator_MCP/
 │   ├── test_websocket_bridge.py
 │   ├── test_overlay.py
 │   ├── test_svgd.py              # SVG path parser tests (35 tests)
-│   ├── test_import_svg.py        # SVG import tool tests (14 tests)
+│   ├── test_import_svg.py        # SVG import tool tests (25 tests, typed fill/stroke/id)
 │   ├── test_clip_box.py          # Regional zoom / clip_box tests (28 tests)
 │   ├── test_clip_ops.py          # Clipping mask schema + handler guard tests
 │   ├── test_grid_helper.py       # Grid discovery tests
@@ -835,6 +837,7 @@ Illustrator_MCP/
 │   ├── test_soc_contracts.py     # Contract sync tests across 4 registry layers (6 tests)
 │   ├── test_registry_snapshot.py  # Registry + canonical policy tests (11 tests)
 │   ├── test_auto_tag.py          # Auto-assign MCP IDs tests (19 tests)
+│   ├── test_empty_canvas_checkpoint.py  # VLM checkpoint skip on empty canvas (3 tests)
 │   └── test_brand_social_kit_fixes.py
 ├── scripts/
 │   └── gen_schemas.py            # Schema codegen (Python -> JSX)

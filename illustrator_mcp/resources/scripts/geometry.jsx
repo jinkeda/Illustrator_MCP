@@ -439,8 +439,24 @@ function drawPathPoints(spec) {
         targetLayer = doc.activeLayer;
     }
 
-    // Generate UUID — self-contained, no dependency on ops_core
-    var uuid = _geometryUUID();
+    // Generate UUID — or use user-supplied spec.id
+    var uuid;
+    if (spec.id) {
+        // User-supplied ID: check for collision before using
+        if (typeof heapResolveMany === "function") {
+            var existing = heapResolveMany(doc, [spec.id]);
+            if (existing.length > 0) {
+                throw new Error(
+                    "DPP_ID_COLLISION: item with @mcp:id=" + spec.id +
+                    " already exists (typename=" + existing[0].typename +
+                    "). Use a unique id or remove the existing item first."
+                );
+            }
+        }
+        uuid = spec.id;
+    } else {
+        uuid = _geometryUUID();
+    }
 
     // Determine path mode
     var isSingle = !!spec.points;

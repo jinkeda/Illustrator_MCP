@@ -13,8 +13,10 @@ import pytest
 from illustrator_mcp.svgd import parse_svg_d
 from illustrator_mcp.tools.import_svg import (
     _ir_points_to_draw_spec,
+    _build_appearance,
     PathImportSvgInput,
 )
+from illustrator_mcp.tools._models import ColorRGB, StrokeSpec
 
 
 # ── IR-to-spec conversion tests ───────────────────────────────────────
@@ -74,6 +76,9 @@ class TestInputValidation:
         assert inp.layer is None
         assert inp.tag is None
         assert inp.name is None
+        assert inp.fill is None
+        assert inp.stroke is None
+        assert inp.id is None
 
     def test_full_input(self):
         """All optional fields can be set."""
@@ -82,10 +87,143 @@ class TestInputValidation:
             layer="Icons",
             tag="arrow",
             name="arrow_path",
+            fill=ColorRGB(r=255, g=0, b=0),
+            stroke=StrokeSpec(r=0, g=0, b=0, width=2.0),
+            id="my_arrow",
         )
         assert inp.layer == "Icons"
         assert inp.tag == "arrow"
         assert inp.name == "arrow_path"
+        assert inp.fill.r == 255
+        assert inp.stroke.width == 2.0
+        assert inp.id == "my_arrow"
+
+
+# ── Fill/stroke/id appearance tests ───────────────────────────────────
+
+
+class TestAppearanceSpec:
+    """Tests for _build_appearance and spec wiring."""
+
+    def test_fill_color_in_appearance(self):
+        """ColorRGB fill → spec.appearance.fill = {r, g, b}."""
+        params = PathImportSvgInput(
+            d="M 0,0 L 100,0 Z",
+            fill=ColorRGB(r=255, g=0, b=0),
+        )
+        app = _build_appearance(params)
+        assert app is not None
+        assert app["fill"] == {"r": 255, "g": 0, "b": 0}
+        assert "noFill" not in app
+
+    def test_fill_false_produces_nofill(self):
+        """fill=False → spec.appearance.noFill = True."""
+        params = PathImportSvgInput(d="M 0,0 L 100,0 Z", fill=False)
+        app = _build_appearance(params)
+        assert app is not None
+        assert app["noFill"] is True
+        assert "fill" not in app
+
+    def test_stroke_color_in_appearance(self):
+        """StrokeSpec → spec.appearance.stroke = {r, g, b, width}."""
+        params = PathImportSvgInput(
+            d="M 0,0 L 100,0 Z",
+            stroke=StrokeSpec(r=0, g=128, b=255, width=3.0),
+        )
+        app = _build_appearance(params)
+        assert app is not None
+        assert app["stroke"] == {"r": 0, "g": 128, "b": 255, "width": 3.0}
+        assert "noStroke" not in app
+
+    def test_stroke_false_produces_nostroke(self):
+        """stroke=False → spec.appearance.noStroke = True."""
+        params = PathImportSvgInput(d="M 0,0 L 100,0 Z", stroke=False)
+        app = _build_appearance(params)
+        assert app is not None
+        assert app["noStroke"] is True
+        assert "stroke" not in app
+
+    def test_stroke_width_default_omitted(self):
+        """StrokeSpec with no width → stroke dict has no width key."""
+        params = PathImportSvgInput(
+            d="M 0,0 L 100,0 Z",
+            stroke=StrokeSpec(r=0, g=0, b=0),
+        )
+        app = _build_appearance(params)
+        assert app is not None
+        assert "width" not in app["stroke"]
+        assert app["stroke"] == {"r": 0, "g": 0, "b": 0}
+
+    def test_fill_none_does_not_emit_appearance(self):
+        """None fill + None stroke → no appearance key at all."""
+        params = PathImportSvgInput(d="M 0,0 L 100,0 Z")
+        app = _build_appearance(params)
+        assert app is None
+
+    def test_fill_and_stroke_together(self):
+        """Both fill and stroke → both in appearance."""
+        params = PathImportSvgInput(
+            d="M 0,0 L 100,0 Z",
+            fill=ColorRGB(r=255, g=255, b=0),
+            stroke=StrokeSpec(r=0, g=0, b=0, width=1.5),
+        )
+        app = _build_appearance(params)
+        assert app["fill"] == {"r": 255, "g": 255, "b": 0}
+        assert app["stroke"] == {"r": 0, "g": 0, "b": 0, "width": 1.5}
+
+    def test_fill_false_stroke_color(self):
+        """fill=False + stroke=color → both noFill and stroke."""
+        params = PathImportSvgInput(
+            d="M 0,0 L 100,0 Z",
+            fill=False,
+            stroke=StrokeSpec(r=0, g=0, b=0),
+        )
+        app = _build_appearance(params)
+        assert app["noFill"] is True
+        assert app["stroke"] == {"r": 0, "g": 0, "b": 0}
+
+    def test_color_validation_rejects_garbage(self):
+        """Out-of-range values reject at validation time."""
+        with pytest.raises(Exception):
+            ColorRGB(r=300, g=0, b=0)
+        with pytest.raises(Exception):
+            ColorRGB(r=-1, g=0, b=0)
+        with pytest.raises(Exception):
+            StrokeSpec(r=0, g=0, b=0, width=-1.0)
+
+
+class TestIdSpec:
+    """Tests for user-supplied ID wiring."""
+
+    def test_id_in_input(self):
+        """id param is stored on the input model."""
+        inp = PathImportSvgInput(d="M 0,0 L 100,0 Z", id="triangle")
+        assert inp.id == "triangle"
+
+    @pytest.mark.asyncio
+    async def test_id_roundtrip_in_result(self):
+        """Returned ID matches user-supplied id."""
+        from unittest.mock import AsyncMock, patch, MagicMock
+        import illustrator_mcp.tools.execute as ex_mod
+
+        mock_draw = json.dumps({"ok": True, "uuid": "my_shape", "bounds": [0, 0, 100, 50]})
+
+        with patch.object(ex_mod, "_counter", MagicMock()):
+            from illustrator_mcp.tools.import_svg import illustrator_path_import_svg
+            params = PathImportSvgInput(d="M 0,0 L 100,0 L 100,50 Z", id="my_shape")
+            with patch(
+                "illustrator_mcp.tools.import_svg.execute_script_with_context",
+                new_callable=AsyncMock,
+                return_value={"result": mock_draw},
+            ) as mock_exec:
+                result = json.loads(await illustrator_path_import_svg(params))
+
+        assert result["ok"] is True
+        assert result["result"]["uuid"] == "my_shape"
+        # Verify spec.id was passed in the script
+        call_args = mock_exec.call_args
+        script_arg = call_args.kwargs.get("script", call_args[1].get("script", ""))
+        assert '"id": "my_shape"' in script_arg or '"id":"my_shape"' in script_arg
 
 
 # ── Error code passthrough tests (H7) ─────────────────────────────────
@@ -226,3 +364,4 @@ class TestFormatEnvelopePassthrough:
         assert env["ok"] is True
         assert env["result"] == {"x": 1, "imported": True}
         assert env["error"] is None
+

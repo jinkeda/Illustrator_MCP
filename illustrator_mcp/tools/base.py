@@ -84,9 +84,23 @@ COORDINATE SYSTEM:
   - ExtendScript expects Y-up internally; use -y when calling Illustrator DOM methods
   - Units: points (1 pt = 1/72 inch)
   - Example: to place at visual position (100, 200), use position = [100, -200]
-  - PITFALL: rectangle(top,left,width,height) and ellipse() need POSITIVE width/height.
+
+  HELPERS (includes: ['geometry']):
+    Use these to avoid manual Y-negation — they convert screen-space coords internally:
+      rectXY(x, y, w, h)          — rectangle at screen-space (x,y)
+      ellipseXY(x, y, w, h)       — ellipse at screen-space (x,y)
+      lineXY(x1, y1, x2, y2)      — line between screen-space points
+      polygonXY([[x,y],...], closed)— polygon from screen-space points
+      pointXY(x, y)               — returns {left, top} for position assignments
+      drawPathPoints(spec)         — full path with handles, UUID, heap registration
+    Example: var rect = rectXY(100, 200, 50, 30);  // no -y needed
+
+  RAW DOM (only when helpers are insufficient):
+    var ab = doc.artboards[doc.artboards.getActiveArtboardIndex()].artboardRect;
+    position = [ab[0] + x, ab[1] - y];  // artboard-relative, always correct
+    PITFALL: rectangle(top,left,w,h) and ellipse() need POSITIVE width/height.
     Negative height places the shape ABOVE the artboard (invisible).
-    rectangle(0, 0, 1000, 600) ✓ | rectangle(0, 0, 1000, -600) ✗ ghost element"""
+    rectangle(0, 0, 1000, 600) \u2713 | rectangle(0, 0, 1000, -600) \u2717 ghost element"""
 
 
 # ══════════════════════════════════════════════════════════════════

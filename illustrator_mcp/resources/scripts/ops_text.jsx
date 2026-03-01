@@ -46,9 +46,14 @@ registerOpHandler("text_create", function (params, targets, ctx) {
         if (ctx && ctx.warn) ctx.warn("No layer specified; using activeLayer '" + targetLayer.name + "'");
     }
 
+    // Convert to Illustrator coordinates (artboard-relative, Y-up)
+    // _artboardTop/_artboardLeft defined in ops_element.jsx (loaded before this file)
+    var abTop = _artboardTop(doc);
+    var abLeft = _artboardLeft(doc);
+
     // Create text frame
     var textFrame = targetLayer.textFrames.add();
-    textFrame.position = [x, -y];
+    textFrame.position = [abLeft + x, abTop - y];
     textFrame.contents = contents;
 
     // Assign ID

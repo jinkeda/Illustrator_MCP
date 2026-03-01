@@ -275,8 +275,15 @@ class TestCheckpointInstruction(unittest.TestCase):
             mimeType="image/png",
         )
         mock_annotation_result = {
-            "meta": {"annotated_count": 0},
-            "annotations": [],
+            "meta": {"annotated_count": 3},
+            "annotations": [
+                {"label": "1", "mcp_id": "a", "name": "r1", "type": "PathItem",
+                 "bounds_pt": [0, 0, 50, -50], "coverRatio": 0.1},
+                {"label": "2", "mcp_id": "b", "name": "r2", "type": "PathItem",
+                 "bounds_pt": [50, 0, 100, -50], "coverRatio": 0.1},
+                {"label": "3", "mcp_id": "c", "name": "r3", "type": "PathItem",
+                 "bounds_pt": [100, 0, 150, -50], "coverRatio": 0.1},
+            ],
             "warnings": [],
         }
         mock_guard = OcclusionResult(ok=True, diagnostics={})
