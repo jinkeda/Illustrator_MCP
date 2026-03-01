@@ -409,10 +409,10 @@ var OP_PARAM_SCHEMAS = {
     },
     "style_set_gradient": {
         "required": [
-            "type",
             "stops"
         ],
         "optional": [
+            "type",
             "angle",
             "origin",
             "length",

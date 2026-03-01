@@ -27,7 +27,9 @@ class TestDocument:
         params = DocumentInput(action="create")
         await illustrator_document(params)
 
-        mock_execute_script.assert_called_once()
+        assert mock_execute_script.called
+        # Validate payload: command_type confirms the right dispatch path
+        assert mock_execute_script.call_args.kwargs['command_type'] == 'create_document'
         script = mock_execute_script.call_args.kwargs['script']
         assert "preset.width = 800" in script
         assert "preset.height = 600" in script
@@ -143,8 +145,8 @@ class TestExportDocument:
         from unittest.mock import MagicMock
         esc_mock = AsyncMock(return_value={"result": '{"success": true}'})
         fmt_mock = MagicMock(return_value='{"success": true}')
-        with patch('illustrator_mcp.tools.documents.execute_script_with_context', esc_mock), \
-             patch('illustrator_mcp.tools.documents.format_envelope', fmt_mock):
+        with patch('illustrator_mcp.tools._export.execute_script_with_context', esc_mock), \
+             patch('illustrator_mcp.tools._export.format_envelope', fmt_mock):
             yield esc_mock
 
     @pytest.mark.asyncio

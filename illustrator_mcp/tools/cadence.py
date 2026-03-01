@@ -56,18 +56,11 @@ _counter = _MutationCounter()
 # when cadence fires, forcing the AI to produce reasoning tokens about
 # the visual state before it can formulate its next action.
 VLM_CHECKPOINT_INSTRUCTION: str = (
-    "⚠️ VLM QA CHECKPOINT (mutation #{count})\n"
-    "An annotated preview was auto-injected by the VLM QA cadence system.\n"
-    "Before proceeding with further edits OR concluding your workflow, you MUST:\n"
-    "1. Describe what you see in the preview image (layout, colors, positions)\n"
-    "2. Compare against the intended design — note any discrepancies\n"
-    "3. List corrections needed (if any) for the next step\n"
-    "\n"
-    "If no annotated preview image is attached above, proceed using the textual "
-    "report and request a manual preview via return_preview=True on your next call.\n"
-    "\n"
-    "In your immediate next response, DO NOT call any tools. "
-    "You must output ONLY your text analysis."
+    "⛔ VLM QA CHECKPOINT (mutation #{count})\n"
+    "STOP. Describe what you see in the images above. "
+    "List any discrepancies vs intended design. "
+    "Only THEN proceed.\n"
+    "DO NOT call any tools until you have written your visual analysis."
 )
 
 
@@ -117,6 +110,24 @@ def format_z_telemetry(telemetry: dict) -> str:
             f"  #{i+1} \"{name}\" {tn} L={layer} op={op} "
             f"blend={blend} fill={fill_hex} cover={cover}{flag}"
         )
+
+    # Ghosts: items that exist but have no artboard overlap (Fix 10)
+    ghosts = [
+        item for item in top_items
+        if item.get("coverRatio", 0) == 0
+        and not item.get("hidden", False)
+    ]
+    if ghosts:
+        lines.append(f"Ghosts ({len(ghosts)}, cover=0, bounds outside artboard):")
+        for item in ghosts[:5]:  # Cap at 5
+            name = item.get("name", "?")
+            tn = item.get("typename", "?")
+            layer = item.get("layerName", "?")
+            op = item.get("opacity", 100)
+            lines.append(
+                f"  👻 \"{name}\" {tn} L={layer} op={op}"
+                " — no artboard overlap"
+            )
 
     # Total
     total = telemetry.get("totalItemCount", "?")

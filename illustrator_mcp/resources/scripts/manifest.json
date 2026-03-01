@@ -458,7 +458,7 @@
             "file": "auto_tag.jsx",
             "version": "1.0.0",
             "dependencies": [
-                "mcp_id"
+                "item_ref"
             ],
             "exports": [],
             "description": "Auto-assign MCP IDs to untagged items. Supports delta (selection-first) and converge modes."

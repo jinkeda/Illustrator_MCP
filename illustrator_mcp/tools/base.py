@@ -83,7 +83,10 @@ COORDINATE SYSTEM:
   - API coordinates use top-left origin with y increasing downward (screen space)
   - ExtendScript expects Y-up internally; use -y when calling Illustrator DOM methods
   - Units: points (1 pt = 1/72 inch)
-  - Example: to place at visual position (100, 200), use position = [100, -200]"""
+  - Example: to place at visual position (100, 200), use position = [100, -200]
+  - PITFALL: rectangle(top,left,width,height) and ellipse() need POSITIVE width/height.
+    Negative height places the shape ABOVE the artboard (invisible).
+    rectangle(0, 0, 1000, 600) ✓ | rectangle(0, 0, 1000, -600) ✗ ghost element"""
 
 
 # ══════════════════════════════════════════════════════════════════

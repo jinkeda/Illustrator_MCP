@@ -89,7 +89,7 @@ for (var tl = 0; tl < topVisibleLayers.length; tl++) {
         var interArea = Math.max(0, interRight - interLeft) * Math.max(0, interTop - interBottom);
         var coverRatio = (abArea > 0) ? interArea / abArea : 0;
 
-        // Fill color (safe access)
+        // Fill color (safe access — all color types)
         var fillColorHex = null;
         var fillColorRGB = null;
         if (hasFilled && isFilled) {
@@ -104,9 +104,24 @@ for (var tl = 0; tl < topVisibleLayers.length; tl++) {
                         ('0' + gg.toString(16)).slice(-2) +
                         ('0' + bb.toString(16)).slice(-2);
                     fillColorRGB = { r: rr, g: gg, b: bb };
+                } else if (fc.typename === 'CMYKColor') {
+                    fillColorHex = '<cmyk>';
+                    fillColorRGB = null;
+                } else if (fc.typename === 'GradientColor') {
+                    fillColorHex = '<gradient>';
+                    fillColorRGB = null;
+                } else if (fc.typename === 'PatternColor') {
+                    fillColorHex = '<pattern>';
+                    fillColorRGB = null;
+                } else if (fc.typename === 'GrayColor') {
+                    fillColorHex = '<gray>';
+                    fillColorRGB = null;
+                } else if (fc.typename === 'NoColor') {
+                    fillColorHex = '<none>';
+                    fillColorRGB = null;
                 }
             } catch (e) {
-                // Swallow color read errors (e.g., pattern/gradient)
+                // Swallow color read errors
             }
         }
 

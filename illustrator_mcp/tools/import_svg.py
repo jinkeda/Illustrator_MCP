@@ -62,6 +62,7 @@ async def illustrator_path_import_svg(params: PathImportSvgInput) -> str:
     NOTES:
       - Parses SVG d string server-side, converts arcs to cubic Beziers
       - Safety limits: 50,000 chars, 5,000 segments, 100 subpaths, +/-100,000 coords
+      - Returned bounds are [left, top, right, bottom] in Illustrator's native Y-up space
       - For new shapes prefer illustrator_execute_task + element_create with smooth:true
     """
     # F5: Track mutation cadence — lazy import avoids import-order risk
@@ -82,7 +83,10 @@ async def _path_import_svg_impl(params: PathImportSvgInput) -> str:
     warnings = [
         "Prefer geometry.drawPathPoints for new shapes"
     ]
-    diagnostics: Dict[str, Any] = {"tool": "path_import_svg"}
+    diagnostics: Dict[str, Any] = {
+        "tool": "path_import_svg",
+        "bounds_space": "illustrator_native_y_up",
+    }
 
     # Compute d hash for metadata stamping
     d_hash = hashlib.sha256(d_str.encode("utf-8")).hexdigest()[:16]

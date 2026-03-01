@@ -67,6 +67,7 @@ def _build_create_document(width, height, color_space, title_line=""):
 
 
 CREATE_DOCUMENT = _CompatTemplate(_build_create_document)
+DOC_CREATE = CREATE_DOCUMENT  # Alias used by documents.py
 
 
 def _build_open_document(path):
@@ -85,6 +86,7 @@ def _build_open_document(path):
 
 
 OPEN_DOCUMENT = _CompatTemplate(_build_open_document)
+DOC_OPEN = OPEN_DOCUMENT  # Alias used by documents.py
 
 
 def _build_save_document(path):
@@ -97,6 +99,7 @@ def _build_save_document(path):
 
 
 SAVE_DOCUMENT = _CompatTemplate(_build_save_document)
+DOC_SAVE_AS = SAVE_DOCUMENT  # Alias: save-as (with path → doc.saveAs)
 
 
 SAVE_DOCUMENT_SIMPLE = wrap_script(
@@ -106,6 +109,7 @@ SAVE_DOCUMENT_SIMPLE = wrap_script(
     """,
     "save_document",
 )
+DOC_SAVE = SAVE_DOCUMENT_SIMPLE  # Alias: save in-place (no path → doc.save)
 
 
 def _build_close_document(save_option):
@@ -117,6 +121,7 @@ def _build_close_document(save_option):
 
 
 CLOSE_DOCUMENT = _CompatTemplate(_build_close_document)
+DOC_CLOSE = CLOSE_DOCUMENT  # Alias used by documents.py
 
 
 # ==================== Export Templates ====================

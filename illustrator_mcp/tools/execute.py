@@ -20,6 +20,8 @@ from illustrator_mcp.shared import mcp
 from illustrator_mcp.proxy_client import execute_script_with_context, format_envelope
 from illustrator_mcp.libraries import get_injection_metadata
 from illustrator_mcp.tools.base import ToolInputBase
+from illustrator_mcp.utils.load_script import load_script
+from illustrator_mcp.utils.response import unwrap_jsx_result
 from mcp.types import ImageContent, TextContent
 
 # Import from sibling modules
@@ -190,11 +192,6 @@ def _abstraction_advisory(script: str) -> list:
 
 # ── Auto-tag helper ────────────────────────────────────────────────
 
-_AUTO_TAG_SCRIPT_PATH = os.path.join(
-    os.path.dirname(os.path.dirname(__file__)),
-    "resources", "scripts", "auto_tag.jsx",
-)
-
 
 async def _run_auto_tag(
     *,
@@ -213,30 +210,18 @@ async def _run_auto_tag(
     Delta mode tags only items likely created by the preceding script:
     items created AND deleted within the script are intentionally not tagged.
     """
-    if not os.path.isfile(_AUTO_TAG_SCRIPT_PATH):
-        logger.warning("auto_tag.jsx not found at %s", _AUTO_TAG_SCRIPT_PATH)
-        return None
 
-    # Use the library resolver to get auto_tag.jsx WITH its dependencies
-    # (mcp_id.jsx provides extractMcpId/setMcpId used by auto_tag.jsx)
-    from illustrator_mcp.libraries import get_resolver
     try:
-        resolved_code = get_resolver().resolve(
-            ["auto_tag"], skip_collision_check=True
-        )
+        jsx_with_params = load_script("auto_tag", params={
+            "mode": mode,
+            "scope": scope,
+            "cap": cap,
+            "preCount": pre_count,
+            "cushion": cushion,
+        })
     except Exception as e:
-        logger.warning("auto_tag library resolution failed: %s", e)
+        logger.warning("auto_tag script loading failed: %s", e)
         return None
-
-    # Inject params as preamble
-    params_obj = json.dumps({
-        "mode": mode,
-        "scope": scope,
-        "cap": cap,
-        "preCount": pre_count,
-        "cushion": cushion,
-    })
-    jsx_with_params = f"var __PARAMS__ = {params_obj};\n{resolved_code}"
 
     try:
         resp = await execute_script_with_context(
@@ -249,24 +234,8 @@ async def _run_auto_tag(
         logger.debug("auto_tag.jsx execution failed: %s", e)
         return None
 
-    raw = resp.get("result")
-    if not raw:
-        return None
-
-    try:
-        if isinstance(raw, str):
-            parsed = json.loads(raw)
-        else:
-            parsed = raw
-        # Unwrap host.jsx envelope if present
-        if isinstance(parsed, dict) and "data" in parsed:
-            parsed = parsed["data"]
-        if isinstance(parsed, str):
-            parsed = json.loads(parsed)
-    except (json.JSONDecodeError, TypeError):
-        return None
-
-    return parsed
+    parsed = unwrap_jsx_result(resp, context="auto_tag")
+    return parsed or None
 
 
 class ExecuteScriptInput(ToolInputBase):
@@ -587,16 +556,9 @@ async def illustrator_execute_script(params: ExecuteScriptInput) -> Union[str, l
                 tool_name="illustrator_execute_script",
                 timeout=5.0,
             )
-            _count_raw = _count_resp.get("result", "{}")
-            if isinstance(_count_raw, str):
-                _count_data = json.loads(_count_raw)
-            else:
-                _count_data = _count_raw
-            # Unwrap host.jsx envelope if present
-            if isinstance(_count_data, dict) and "data" in _count_data:
-                _count_data = _count_data["data"]
-            if isinstance(_count_data, str):
-                _count_data = json.loads(_count_data)
+            _count_data = unwrap_jsx_result(
+                _count_resp, context="auto_tag_precount"
+            )
             auto_tag_pre_count = _count_data.get("count", 0)
         except Exception as e:
             logger.debug("Auto-tag pre-count failed: %s", e)

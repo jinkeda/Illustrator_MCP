@@ -98,9 +98,12 @@ class TestRunAutoTag:
     """Test the _run_auto_tag helper function."""
 
     @pytest.mark.asyncio
-    async def test_returns_none_when_script_missing(self):
-        """Should return None if auto_tag.jsx is not found."""
-        with patch('illustrator_mcp.tools.execute.os.path.isfile', return_value=False):
+    async def test_returns_none_when_script_loading_fails(self):
+        """Should return None if load_script raises (e.g., library not found)."""
+        with patch(
+            'illustrator_mcp.tools.execute.load_script',
+            side_effect=ValueError("Library 'auto_tag' not found"),
+        ):
             result = await _run_auto_tag(
                 mode="delta", scope="activeLayer", cap=200, pre_count=5
             )
@@ -119,12 +122,13 @@ class TestRunAutoTag:
             ],
             "errors": [],
         }
-        with patch('illustrator_mcp.tools.execute.os.path.isfile', return_value=True), \
-             patch('builtins.open', create=True) as mock_open, \
-             patch('illustrator_mcp.tools.execute.execute_script_with_context', new_callable=AsyncMock) as mock_exec:
-            mock_open.return_value.__enter__ = lambda s: s
-            mock_open.return_value.__exit__ = lambda s, *a: None
-            mock_open.return_value.read = lambda: "(function(){ return '{}'; })()"
+        with patch(
+            'illustrator_mcp.tools.execute.load_script',
+            return_value="(function(){ return '{}'; })()",
+        ), patch(
+            'illustrator_mcp.tools.execute.execute_script_with_context',
+            new_callable=AsyncMock,
+        ) as mock_exec:
             mock_exec.return_value = {"result": json.dumps(tag_result)}
 
             result = await _run_auto_tag(
@@ -137,18 +141,40 @@ class TestRunAutoTag:
     @pytest.mark.asyncio
     async def test_returns_none_on_exec_failure(self):
         """Should return None if JSX execution fails."""
-        with patch('illustrator_mcp.tools.execute.os.path.isfile', return_value=True), \
-             patch('builtins.open', create=True) as mock_open, \
-             patch('illustrator_mcp.tools.execute.execute_script_with_context', new_callable=AsyncMock) as mock_exec:
-            mock_open.return_value.__enter__ = lambda s: s
-            mock_open.return_value.__exit__ = lambda s, *a: None
-            mock_open.return_value.read = lambda: ""
-            mock_exec.side_effect = Exception("Bridge timeout")
-
+        with patch(
+            'illustrator_mcp.tools.execute.load_script',
+            return_value="(function(){})()",
+        ), patch(
+            'illustrator_mcp.tools.execute.execute_script_with_context',
+            new_callable=AsyncMock,
+            side_effect=Exception("Bridge timeout"),
+        ):
             result = await _run_auto_tag(
                 mode="delta", scope="activeLayer", cap=200, pre_count=5
             )
             assert result is None
+
+    @pytest.mark.asyncio
+    async def test_load_script_called_with_correct_params(self):
+        """Regression: verify load_script receives 'auto_tag' name and params dict."""
+        with patch(
+            'illustrator_mcp.tools.execute.load_script',
+            return_value="(function(){})()",
+        ) as mock_load, patch(
+            'illustrator_mcp.tools.execute.execute_script_with_context',
+            new_callable=AsyncMock,
+            return_value={"result": json.dumps({"tagged": 0, "assigned": []})},
+        ):
+            await _run_auto_tag(
+                mode="delta", scope="activeLayer", cap=100, pre_count=5, cushion=3,
+            )
+            mock_load.assert_called_once_with("auto_tag", params={
+                "mode": "delta",
+                "scope": "activeLayer",
+                "cap": 100,
+                "preCount": 5,
+                "cushion": 3,
+            })
 
 
 # ── Integration tests: execute_script with auto-tag ────────────────

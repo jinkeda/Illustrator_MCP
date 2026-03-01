@@ -1,7 +1,7 @@
 /**
  * auto_tag.jsx — Auto-assign MCP IDs to untagged items
  * Part of Illustrator MCP Standard Library
- * @version 1.0.0
+ * @version 1.1.0
  *
  * Called by execute_script post-execution to tag newly created items.
  *
@@ -24,7 +24,7 @@
  *   2. Scan scope pageItems, tag all untagged up to cap
  *   (No selection priority — this is a bulk migration tool)
  *
- * DEPENDENCIES: mcp_id (extractMcpId, setMcpId)
+ * DEPENDENCIES: item_ref (assignItemIdV2)
  *
  * RETURNS: {tagged, cap_hit, need, skipped, assigned, errors}
  */
@@ -80,39 +80,35 @@
     var assigned = [];
     var errors = [];
     var MAX_ERRORS = 10;
-    // Track already-processed items to avoid double-tagging
-    var seen = {};
-    var seenCount = 0;
+
+    // Reference-identity dedup: track seen items via array + === comparison
+    // O(n²) but fine for cap <= 200
+    var seen = [];
+
+    function alreadySeen(item) {
+        for (var i = 0; i < seen.length; i++) {
+            if (seen[i] === item) return true;
+        }
+        seen.push(item);
+        return false;
+    }
 
     /**
      * Try to tag a single item. Returns true if tagged.
+     * Delegates ID assignment to assignItemIdV2(item, "opt_in"):
+     *   - has existing ID → returns {assigned: false, id: existingId}
+     *   - no existing ID → generates + writes new ID {assigned: true, id: newId}
      */
     function tryTag(item) {
         if (tagged >= need) return false;
 
-        // Check if already has MCP ID
-        var note = "";
-        try { note = item.note || ""; } catch (e) { return false; }
-        var existingId = extractMcpId(note);
-        if (existingId) return false; // Already tagged
+        // Skip already-processed items (dedup across selection + scan phases)
+        if (alreadySeen(item)) return false;
 
-        // Generate dedup key from typename + index
-        // (We can't reliably hash PageItems in ES3, so use name+type+bounds)
-        var key = "";
+        // Delegate to assignItemIdV2 — handles check + assign in one call
+        var result;
         try {
-            var b = item.visibleBounds;
-            key = item.typename + "_" + b[0] + "_" + b[1] + "_" + b[2] + "_" + b[3];
-        } catch (e) {
-            key = item.typename + "_" + seenCount;
-        }
-        if (seen[key]) return false;
-        seen[key] = true;
-        seenCount++;
-
-        // Try to write ID
-        var newId = "mcp_" + (new Date().getTime()) + "_" + Math.floor(Math.random() * 10000);
-        try {
-            setMcpId(item, newId);
+            result = assignItemIdV2(item, "opt_in");
         } catch (e) {
             // Likely locked item
             if (e.message && e.message.indexOf("locked") >= 0) {
@@ -126,12 +122,22 @@
             return false;
         }
 
+        if (!result.assigned) return false; // Already had an ID
+
+        if (result.error) {
+            skippedError++;
+            if (errors.length < MAX_ERRORS) {
+                errors.push(result.error);
+            }
+            return false;
+        }
+
         // Get layer name safely
         var layerName = "";
         try { layerName = item.layer.name; } catch (e2) { }
 
         assigned.push({
-            id: newId,
+            id: result.id,
             typename: item.typename,
             name: item.name || "",
             layerName: layerName

@@ -75,7 +75,7 @@ class TestAbstractionAdvisory:
 
     def test_max_hints_cap(self):
         """Even with multiple triggers, cap at _MAX_ADVISORY_HINTS."""
-        # Trigger all three: loop+shape, large path, pathfinder
+        # Trigger all: loop+shape, large path, pathfinder, fresh pathPoints, neg dim
         points = ", ".join([f"[{i*10}, {i*5}]" for i in range(20)])
         script = f"""
         for (var i = 0; i < 10; i++) {{
@@ -84,6 +84,9 @@ class TestAbstractionAdvisory:
         }}
         path.setEntirePath([{points}]);
         app.executeMenuCommand("Live Pathfinder Add");
+        var p = doc.pathItems.add();
+        p.pathPoints[0].anchor = [0, 0];
+        doc.pathItems.rectangle(0, 0, 200, -300);
         """
         hints = _abstraction_advisory(script)
         assert len(hints) <= _MAX_ADVISORY_HINTS
@@ -100,3 +103,88 @@ class TestAbstractionAdvisory:
         """
         hints = _abstraction_advisory(script)
         assert len(hints) == 0
+
+    # ── Fix 3: fresh pathPoints advisory ──────────────────────────
+
+    def test_fresh_path_points_same_var_hits(self):
+        """var p = pathItems.add(); p.pathPoints[0] → warning."""
+        script = """
+        var p = doc.pathItems.add();
+        p.pathPoints[0].anchor = [100, -200];
+        """
+        hints = _abstraction_advisory(script)
+        assert len(hints) == 1
+        assert "pathItems.add()" in hints[0]
+        assert "pathPoints" in hints[0]
+
+    def test_fresh_path_points_chained_hits(self):
+        """doc.pathItems.add().pathPoints[0] → warning."""
+        script = "doc.pathItems.add().pathPoints[0].anchor = [100, -200];"
+        hints = _abstraction_advisory(script)
+        assert len(hints) == 1
+        assert "pathItems.add()" in hints[0]
+
+    def test_fresh_path_points_assignment_no_var_hits(self):
+        """p = pathItems.add(); p.pathPoints[0] (no var keyword) → warning."""
+        script = """
+        p = doc.pathItems.add();
+        p.pathPoints[0].anchor = [100, -200];
+        """
+        hints = _abstraction_advisory(script)
+        assert len(hints) == 1
+        assert "pathItems.add()" in hints[0]
+
+    def test_fresh_path_points_different_var_no_hit(self):
+        """var p = pathItems.add(); existing.pathPoints[0] → no warning."""
+        script = """
+        var p = doc.pathItems.add();
+        existing.pathPoints[0].anchor = [100, -200];
+        """
+        hints = _abstraction_advisory(script)
+        assert len(hints) == 0
+
+    def test_path_points_without_add_no_hit(self):
+        """pathPoints on existing item (no add()) → no warning."""
+        script = """
+        var item = doc.pathItems[0];
+        item.pathPoints[0].anchor = [100, -200];
+        """
+        hints = _abstraction_advisory(script)
+        assert len(hints) == 0
+
+    # ── Fix 5: negative dimension advisory ────────────────────────
+
+    def test_negative_height_literal_hits(self):
+        """rectangle(0, 0, 1000, -600) → warning mentioning height."""
+        script = "doc.pathItems.rectangle(0, 0, 1000, -600);"
+        hints = _abstraction_advisory(script)
+        assert len(hints) == 1
+        assert "height" in hints[0]
+        assert "negative" in hints[0].lower()
+
+    def test_negative_height_var_hits(self):
+        """rectangle(0, 0, w, -h) → warning."""
+        script = "doc.pathItems.rectangle(0, 0, w, -h);"
+        hints = _abstraction_advisory(script)
+        assert len(hints) == 1
+        assert "height" in hints[0]
+
+    def test_negative_width_float_hits(self):
+        """ellipse(-100, 50, -200.5, 100) → warning mentioning width."""
+        script = "doc.pathItems.ellipse(-100, 50, -200.5, 100);"
+        hints = _abstraction_advisory(script)
+        assert len(hints) == 1
+        assert "width" in hints[0]
+
+    def test_positive_dimensions_no_hit(self):
+        """rectangle(0, 0, 1000, 600) → no warning."""
+        script = "doc.pathItems.rectangle(0, 0, 1000, 600);"
+        hints = _abstraction_advisory(script)
+        assert len(hints) == 0
+
+    def test_negative_top_left_no_hit(self):
+        """rectangle(-100, -100, 200, 200) — negative top/left is valid."""
+        script = "doc.pathItems.rectangle(-100, -100, 200, 200);"
+        hints = _abstraction_advisory(script)
+        assert len(hints) == 0
+

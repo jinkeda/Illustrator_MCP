@@ -7,6 +7,9 @@ description: Checklist and heuristics for VLM QA checkpoints during Illustrator 
 
 Use this skill when a VLM QA checkpoint fires during illustration work. The system auto-injects an annotated preview every N mutations. Your job is to **verify the visual state before proceeding**.
 
+> [!NOTE]
+> The checkpoint instruction injected into responses is compact (3 lines). This skill contains the **full reference checklist** — consult it whenever a checkpoint fires.
+
 ## When This Fires
 
 The system provides you with:
@@ -24,6 +27,8 @@ At every VLM checkpoint, verify ALL of the following:
 - [ ] **Background position**: Layers named Sky/Background/BG are NOT topmost in telemetry
 - [ ] **Expected components visible**: Check that elements you've drawn are present
 - [ ] **Annotation count**: Labels match expected element count
+- [ ] **Ghost elements**: If a layer reports `items=N` but those items have **no annotations** and are invisible in the Raw image, their bounds are likely outside the artboard → verify with `geometricBounds` or `get_document()`
+- [ ] **Peer occlusion**: If an expected element is missing from Raw but exists in telemetry with cover < 0.90, check if another element on its or an adjacent layer overlaps it (z-order issue)
 
 ## Reading Z-Order Telemetry
 
@@ -53,6 +58,7 @@ Key signals:
 | Looks correct | Clean | **PROCEED** |
 | Missing elements | Clean telemetry | Check visibility/opacity |
 | Partial occlusion | No 🚨 flags | Review layer order manually |
+| Blank / no background | Layer has `items≥1` but 0 annotations | **Q005**: element bounds outside artboard |
 
 ## Dual-Image Comparison
 
@@ -80,6 +86,8 @@ When the guard aborts (`🛑 PREVIEW ABORTED`), the response contains:
 - `⚡` prefix in telemetry — high suspicion (cover ≥ 0.70)
 - All annotation labels clustered in one small region
 - `itemCount: 0` on layers that should have content
+- Layer has `items≥1` but **zero annotations** for those items — ghost element, bounds outside artboard
+- Raw image is blank/white but telemetry shows items exist — bounds are in wrong coordinate space
 - `⚠️ Q004` — non-normal blend mode full cover (review if intentional)
 
 ## Fix Patterns
@@ -100,3 +108,29 @@ illustrator_execute_script → item.move(doc.layers[doc.layers.length-1], Elemen
 Review the Raw Image:
 - If it shows expected tint/shadow effect → proceed (intentional overlay)
 - If it shows solid color → change blend mode to Normal or delete the overlay
+
+### Q005 — Ghost Element (Bounds Outside Artboard)
+A layer has `items≥1` in telemetry but those items produce **zero** annotation labels
+and are invisible in the Raw image. The item's `geometricBounds` are entirely outside
+the artboard rect.
+
+**Root cause**: Y-coordinate sign error. Common with `pathItems.rectangle(top, left, width, height)` — the `height` parameter must be **positive** (draws downward from `top`). A negative height pushes the shape above the artboard into positive-Y space.
+
+```
+# Bug: height=-600 places rect at y=0..+600 (ABOVE artboard)
+rectangle(0, 0, 1000, -600)  # ❌ bounds [0, +600, 1000, 0]
+
+# Fix: height=600 places rect at y=0..-600 (ON artboard)
+rectangle(0, 0, 1000, 600)   # ✓ bounds [0, 0, 1000, -600]
+```
+
+**Diagnosis**: Query the item's bounds and compare to artboard:
+```
+illustrator_execute_script → JSON.stringify({
+    itemBounds: item.geometricBounds,
+    artboard: doc.artboards[0].artboardRect
+})
+```
+If itemBounds Y-values are positive while artboard Y-values are negative → coordinate flip.
+
+**Fix**: Delete and recreate the item with correct height sign.

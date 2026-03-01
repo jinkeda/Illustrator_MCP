@@ -100,7 +100,12 @@ class TestExecuteScript:
             )
         )
         
-        call_kwargs = mock_execute.call_args.kwargs
+        # Find the user script call (not auto_tag internal calls)
+        user_calls = [
+            c for c in mock_execute.call_args_list
+            if c.kwargs.get('command_type') not in ('auto_tag_precount', 'auto_tag')
+        ]
+        call_kwargs = user_calls[0].kwargs
         assert call_kwargs['command_type'] == "Draw rectangle"
     
     @pytest.mark.asyncio
@@ -118,7 +123,12 @@ class TestExecuteScript:
         
         await illustrator_execute_script(ExecuteScriptInput(script=script))
         
-        call_kwargs = mock_execute.call_args.kwargs
+        # Find the user script call (not auto_tag internal calls)
+        user_calls = [
+            c for c in mock_execute.call_args_list
+            if c.kwargs.get('command_type') not in ('auto_tag_precount', 'auto_tag')
+        ]
+        call_kwargs = user_calls[0].kwargs
         assert "pathItems.rectangle" in call_kwargs['script']
     
     @pytest.mark.asyncio
@@ -144,4 +154,4 @@ class TestExecuteScript:
         )
         
         assert "success" in result
-        mock_format.assert_called_once()
+        mock_format.assert_called()

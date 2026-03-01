@@ -238,6 +238,7 @@ class TimingInfo(BaseModel):
 class TaskStats(BaseModel):
     """Statistics."""
     itemsProcessed: int = 0
+    itemsCreated: int = 0
     itemsModified: int = 0
     itemsSkipped: int = 0
 
@@ -362,7 +363,8 @@ def format_task_report(report: TaskReport, task_name: str) -> str:
     # Stats
     stats = report.stats
     lines.append(f"  Stats: {stats.itemsProcessed} ops, "
-                 f"{stats.itemsModified} created/modified, "
+                 f"{stats.itemsCreated} created, "
+                 f"{stats.itemsModified} modified, "
                  f"{stats.itemsSkipped} failed")
     
     # Warnings

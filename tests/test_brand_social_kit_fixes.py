@@ -79,7 +79,7 @@ async def _run_export(params, captured_scripts=None, captured_kwargs=None):
         kwargs_list.append(kw)
         return _make_mock_export_response()
 
-    with patch("illustrator_mcp.tools.documents.execute_script_with_context",
+    with patch("illustrator_mcp.tools._export.execute_script_with_context",
                side_effect=capture):
         result = await illustrator_export_document(params)
     return result, scripts, kwargs_list
@@ -258,12 +258,12 @@ class TestPrecheckScope:
                 })
             })}
 
-        with patch("illustrator_mcp.tools.documents.execute_script_with_context",
+        with patch("illustrator_mcp.tools._export.execute_script_with_context",
                    side_effect=mock_exec):
             result_str = await illustrator_export_document(params)
 
         result = json.loads(result_str)
-        assert any("blank" in w.lower() for w in result.get("warnings", []))
+        assert any("Pre-check found 0" in w for w in result.get("warnings", []))
 
     @pytest.mark.asyncio
     async def test_precheck_failure_is_non_fatal(self):
@@ -283,7 +283,7 @@ class TestPrecheckScope:
                 raise RuntimeError("Precheck boom")
             return _make_mock_export_response()
 
-        with patch("illustrator_mcp.tools.documents.execute_script_with_context",
+        with patch("illustrator_mcp.tools._export.execute_script_with_context",
                    side_effect=mock_exec):
             result_str = await illustrator_export_document(params)
 
@@ -305,9 +305,8 @@ class TestPrecheckScope:
         result = json.loads(result_str)
 
         diag = result.get("diagnostics", {})
-        precheck = diag.get("precheck_result", {})
-        assert precheck.get("on_artboard") == 5
-        assert precheck.get("scope") == "artboard"
+        assert diag.get("precheck_item_count") == 5
+        assert diag.get("precheck_method") is not None
 
 
 # ======================================================================

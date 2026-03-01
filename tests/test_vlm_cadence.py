@@ -181,12 +181,12 @@ class TestCheckpointInstruction(unittest.TestCase):
         self.assertGreater(len(VLM_CHECKPOINT_INSTRUCTION), 50)
         self.assertIn("CHECKPOINT", VLM_CHECKPOINT_INSTRUCTION)
         self.assertIn("{count}", VLM_CHECKPOINT_INSTRUCTION)
-        # Refinement A: Tool Lockout clause
+        # Tool Lockout clause
         self.assertIn("DO NOT call any tools", VLM_CHECKPOINT_INSTRUCTION)
-        # Refinement C: final_step-safe wording
-        self.assertIn("concluding your workflow", VLM_CHECKPOINT_INSTRUCTION)
-        # Ref-A: Fallback clause for missing preview
-        self.assertIn("proceed using the textual report", VLM_CHECKPOINT_INSTRUCTION)
+        # Visual analysis requirement
+        self.assertIn("Describe what you see", VLM_CHECKPOINT_INSTRUCTION)
+        # Stop directive
+        self.assertIn("STOP", VLM_CHECKPOINT_INSTRUCTION)
 
     def test_checkpoint_instruction_format(self):
         """VLM_CHECKPOINT_INSTRUCTION.format(count=N) should produce valid text."""
@@ -324,6 +324,7 @@ class TestCheckpointInstruction(unittest.TestCase):
         self.assertIn("VLM QA CHECKPOINT", checkpoint_text)
         self.assertIn("mutation #5", checkpoint_text)
         self.assertIn("DO NOT call any tools", checkpoint_text)
+        self.assertIn("STOP", checkpoint_text)
 
         # Z-order telemetry should contain layer info
         telemetry_text = result[4].text

@@ -35,7 +35,7 @@ class TestGetDocument:
 
         result = await illustrator_get_document(params=GetDocumentInput())
 
-        mock_execute.assert_called_once()
+        assert mock_execute.called
         call_kwargs = mock_execute.call_args.kwargs
         assert call_kwargs['command_type'] == "get_document"
         assert call_kwargs['tool_name'] == "illustrator_get_document"

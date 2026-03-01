@@ -63,3 +63,49 @@ def unwrap_result(result: Any, _depth: int = 0) -> Any:
         return result["value"]
 
     return result
+
+
+def unwrap_jsx_result(raw: Any, *, context: str = "") -> dict:
+    """Unwrap an execute_script_with_context envelope to its payload dict.
+
+    Handles:
+    - Outer envelope ``{result: "<json>"}`` or ``{result: {...}}``
+    - Inner ``{ok: true, data: ...}`` / ``{success: true, result: ...}``
+    - Double-serialized strings (1-2 layers)
+    - Non-JSON or missing results
+
+    Returns:
+        Parsed dict payload.  Returns ``{}`` on failure and logs a warning
+        with *context* for diagnostics.
+    """
+    import logging as _log
+    _logger = _log.getLogger(__name__)
+
+    try:
+        # Extract inner result from response envelope
+        if isinstance(raw, dict):
+            raw = raw.get("result", raw)
+
+        parsed = try_parse_json(raw)
+        result = unwrap_result(parsed)
+
+        # Final pass: if still a string, try one more parse
+        if isinstance(result, str):
+            result = try_parse_json(result)
+
+        if isinstance(result, dict):
+            return result
+
+        _logger.warning(
+            "unwrap_jsx_result: non-dict result (type=%s)%s",
+            type(result).__name__,
+            f" context={context}" if context else "",
+        )
+        return {}
+    except Exception as exc:
+        _logger.warning(
+            "unwrap_jsx_result: parse failed: %s%s",
+            exc,
+            f" context={context}" if context else "",
+        )
+        return {}

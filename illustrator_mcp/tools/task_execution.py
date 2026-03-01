@@ -218,13 +218,13 @@ async def illustrator_execute_task(params: ExecuteTaskInput) -> Union[str, list]
       - Any operation that benefits from structured error reports and target selectors
 
     EXAMPLES:
-      Smooth curve: {task: "element_create", params: {
+      Smooth curve: illustrator_execute_task(payload={task: "element_create", params: {
         type: "path", points: [[0,50],[50,0],[100,50],[150,0]],
-        smooth: true, tension: 0.5, fill: {r: 0, g: 150, b: 136}}}
-      Batch shapes: {task: "element_create_batch", params: {
-        template: {type: "ellipse", rx: 4, ry: 3}, array: {count: 47, startX: 180, spacingX: 15}}}
-      Grid layout: {task: "element_create_batch", params: {
-        template: {type: "rect", w: 8, h: 8}, array: {count: 50, cols: 10, spacingX: 15, spacingY: 15}}}
+        smooth: true, tension: 0.5, fill: {r: 0, g: 150, b: 136}}})
+      Batch shapes: illustrator_execute_task(payload={task: "element_create_batch", params: {
+        template: {type: "ellipse", rx: 4, ry: 3}, array: {count: 47, startX: 180, spacingX: 15}}})
+      Grid layout: illustrator_execute_task(payload={task: "element_create_batch", params: {
+        template: {type: "rect", w: 8, h: 8}, array: {count: 50, cols: 10, spacingX: 15, spacingY: 15}}})
 
     TARGET SELECTORS:
       {type: "selection"} — current selection (default)
@@ -239,6 +239,7 @@ async def illustrator_execute_task(params: ExecuteTaskInput) -> Union[str, list]
       assignIds: true — write unique IDs to item.note (opt-in)
 
     NOTES:
+      - All task+params must be wrapped in a 'payload' field
       - For boolean ops use illustrator_path_boolean, not execute_task
       - For raw SVG path data use illustrator_path_import_svg
     """
@@ -308,6 +309,30 @@ var report = executeTask(
     apply
 );
 
+// ── Slim batchReport before serialization to prevent truncation ──
+// Replace the verbose batchReport with a compact summary.
+// ExtendScript's doScript return has a string length limit (~1KB for some
+// bridge modes) and the full batchReport easily exceeds it.
+if (report.batchReport) {{
+    var _br = report.batchReport;
+    var _slim = {{
+        ok: _br.ok,
+        createdIds: _br.createdIds || [],
+        stats: _br.stats || {{}},
+        warnings: _br.warnings || []
+    }};
+    // Preserve first op error if batch failed
+    if (!_br.ok && _br.ops) {{
+        for (var _ei = 0; _ei < _br.ops.length; _ei++) {{
+            __mcp_check();
+            if (!_br.ops[_ei].ok && _br.ops[_ei].error) {{
+                _slim.firstError = _br.ops[_ei].error;
+                break;
+            }}
+        }}
+    }}
+    report.batchReport = _slim;
+}}
 JSON.stringify(report);
 """
     
@@ -380,6 +405,9 @@ JSON.stringify(report);
         merged_warnings = _dedup_warnings(base.get("warnings", []), local_warnings)
         merged_diag = {**base.get("diagnostics", {}), **diagnostics}
 
+        _envelope_built = False  # Track if fallback already built the envelope
+        report_data = {}  # Initialize before try so except-handler can inspect it
+
         try:
             raw_result = base.get("result")
             if isinstance(raw_result, str):
@@ -392,43 +420,88 @@ JSON.stringify(report);
             formatted = format_task_report(report, params.payload.task)
         except Exception as exc:
             logger.warning(f"Failed to parse TaskReport: {exc}")
-            # Include bounded excerpt for debugging
             parse_diag = {**merged_diag, "taskreport_parse": {"type": type(raw_result).__name__}}
             if isinstance(raw_result, str):
                 parse_diag["taskreport_parse"]["excerpt"] = raw_result[:200]
-            return make_envelope(
-                ok=False,
-                error={"code": "R010",
-                       "message": f"Could not parse TaskReport: {exc}",
-                       "suggestions": ["Check JSX script output format"]},
-                warnings=merged_warnings,
-                diagnostics=parse_diag,
-            )
+
+            # ── Degraded fallback: JSON parsed but Pydantic validation failed ──
+            # Preserve top-level ok/errors/warnings from report_data instead of
+            # silently erasing them. Adds fallback_used diagnostic flag.
+            if isinstance(report_data, dict) and "ok" in report_data:
+                fallback_ok = report_data.get("ok", False)
+                fallback_warnings = []
+                # Preserve op-level errors/warnings even if types are imperfect
+                raw_errors = report_data.get("errors", [])
+                raw_warnings_list = report_data.get("warnings", [])
+                if isinstance(raw_errors, list):
+                    for e in raw_errors[:5]:
+                        fallback_warnings.append(f"[op-error] {e}")
+                if isinstance(raw_warnings_list, list):
+                    for w in raw_warnings_list[:5]:
+                        fallback_warnings.append(f"[op-warn] {w}")
+                fallback_warnings.append(
+                    "TaskReport validation failed; using degraded summary. "
+                    "Some op-level errors may be missing."
+                )
+                parse_diag["taskreport_parse"]["fallback_used"] = True
+                stats = report_data.get("stats", {})
+                formatted = (
+                    f"{'✓' if fallback_ok else '✗'} Task: {params.payload.task}\n"
+                    f"  Stats: {stats.get('itemsProcessed', '?')} ops, "
+                    f"{stats.get('itemsCreated', '?')} created, "
+                    f"{stats.get('itemsModified', '?')} modified"
+                )
+                # Create minimal report-like object for guard/preview
+                report = type('FallbackReport', (), {
+                    'ok': fallback_ok,
+                    'warnings': [],
+                    'errors': [],
+                })()
+                merged_warnings = _dedup_warnings(merged_warnings, fallback_warnings)
+                merged_diag = parse_diag
+                envelope = make_envelope(
+                    ok=fallback_ok,
+                    result={"formatted": formatted, "report": report_data},
+                    warnings=merged_warnings,
+                    diagnostics=merged_diag,
+                )
+                _envelope_built = True
+            else:
+                # Raw string truncated / unparseable — hard fail with R010
+                return make_envelope(
+                    ok=False,
+                    error={"code": "R010",
+                           "message": f"Could not parse TaskReport: {exc}",
+                           "suggestions": ["Check JSX script output format"]},
+                    warnings=merged_warnings,
+                    diagnostics=parse_diag,
+                )
 
         # ── Phase 3: Final envelope via make_envelope ──
         if not is_dry_run:
             merged_diag["preview_state"] = "post_execution" if report.ok else "error"
 
-        if report.ok:
-            envelope = make_envelope(
-                ok=True,
-                result={"formatted": formatted, "report": report_data},
-                warnings=merged_warnings,
-                diagnostics=merged_diag,
-            )
-        else:
-            err = _taskreport_first_error(report_data, params.payload.task)
-            stats = report_data.get("stats", {})
-            merged_diag["stats"] = {
-                k: stats.get(k, 0)
-                for k in ("itemsProcessed", "itemsModified", "itemsSkipped")
-            }
-            envelope = make_envelope(
-                ok=False,
-                error=err,
-                warnings=merged_warnings,
-                diagnostics=merged_diag,
-            )
+        if not _envelope_built:
+            if report.ok:
+                envelope = make_envelope(
+                    ok=True,
+                    result={"formatted": formatted, "report": report_data},
+                    warnings=merged_warnings,
+                    diagnostics=merged_diag,
+                )
+            else:
+                err = _taskreport_first_error(report_data, params.payload.task)
+                stats = report_data.get("stats", {})
+                merged_diag["stats"] = {
+                    k: stats.get(k, 0)
+                    for k in ("itemsProcessed", "itemsCreated", "itemsModified", "itemsSkipped")
+                }
+                envelope = make_envelope(
+                    ok=False,
+                    error=err,
+                    warnings=merged_warnings,
+                    diagnostics=merged_diag,
+                )
 
         # ── Occlusion guard: run AFTER task execution, BEFORE preview ──
         guard_telemetry = {}

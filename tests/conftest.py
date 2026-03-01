@@ -51,6 +51,9 @@ def pytest_sessionfinish(session, exitstatus):
 # Modules that use execute_jsx_tool (from base.py)
 JSX_TOOL_MODULES = [
     'illustrator_mcp.tools.documents',
+    'illustrator_mcp.tools._export',
+    'illustrator_mcp.tools._place',
+    'illustrator_mcp.tools._history',
     'illustrator_mcp.tools.context',
     'illustrator_mcp.tools.query',
 ]
@@ -72,16 +75,21 @@ def mock_execute_script():
                 stack.enter_context(patch(f'{module}.execute_jsx_tool', mock))
             except AttributeError:
                 pass
-        # Also patch execute_script_with_context for tools that call it directly
-        # (e.g., export_document). Use a separate mock that returns dict format.
+        # Patch execute_script_with_context in both documents.py and _export.py
         esc_mock = AsyncMock(return_value={"result": '{"success": true}'})
         stack.enter_context(patch(
             'illustrator_mcp.tools.documents.execute_script_with_context', esc_mock
         ))
-        from unittest.mock import MagicMock
         stack.enter_context(patch(
-            'illustrator_mcp.tools.documents.format_envelope',
-            MagicMock(return_value='{"success": true}')
+            'illustrator_mcp.tools._export.execute_script_with_context', esc_mock
+        ))
+        from unittest.mock import MagicMock
+        fmt_mock = MagicMock(return_value='{"success": true}')
+        stack.enter_context(patch(
+            'illustrator_mcp.tools.documents.format_envelope', fmt_mock
+        ))
+        stack.enter_context(patch(
+            'illustrator_mcp.tools._export.format_envelope', fmt_mock
         ))
         yield mock
 
