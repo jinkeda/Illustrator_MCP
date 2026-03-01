@@ -29,6 +29,15 @@ if (!$.global.mcpHeap) {
 // Current transaction (null when no batch is active)
 var _heapTxn = null;
 
+// Module-level warning accumulator (cleared on each heapBeginTxn)
+var _heapWarnings = [];
+
+// Rebuild cap: maximum items scanned during heapRebuildIndex
+var _HEAP_REBUILD_CAP = 5000;
+
+// Set to false when rebuild is capped (callers should not trust partial index)
+var _heapRebuildComplete = true;
+
 
 // ==================== Transaction Lifecycle ====================
 
@@ -42,6 +51,8 @@ function heapBeginTxn(batchId) {
         // Discard silently - we can't trust the state
         _heapTxn = null;
     }
+    // Reset warnings for new batch
+    _heapWarnings = [];
     _heapTxn = {
         batchId: batchId || "unknown",
         added: {},       // uuid -> ref (items registered this txn)
@@ -177,7 +188,8 @@ function heapDelete(uuid, ref) {
 
 /**
  * Resolve a UUID to a PageItem with identity verification.
- * Falls back to one-time resync if the cached ref is stale.
+ * Uses suspect-before-evict policy: COM errors mark entries suspect
+ * (kept in index), only evict on second failure or identity mismatch.
  *
  * @param {string} uuid - MCP ID to resolve
  * @param {Object} doc - Active Illustrator document
@@ -197,14 +209,29 @@ function heapResolve(uuid, doc) {
         try {
             if (ref.note) {
                 var foundId = extractMcpId(ref.note);
-                if (foundId === uuid) return ref;
+                if (foundId === uuid) {
+                    // Successful access — clear suspect flag if present
+                    if (ref.__mcpSuspect) delete ref.__mcpSuspect;
+                    return ref;
+                }
             }
+            // Identity mismatch (note exists but ID differs) — evict immediately
+            _heapWarnings.push("heapResolve: evicted " + uuid + " (identity mismatch)");
+            delete heap.index[uuid];
         } catch (e) {
-            // Item may have been removed — ref is stale
+            // COM error — could be transient or stale
+            if (ref.__mcpSuspect) {
+                // Second failure on a suspect entry — confirmed stale, evict
+                _heapWarnings.push("heapResolve: evicted " + uuid + " (confirmed stale: " + e.message + ")");
+                delete heap.index[uuid];
+            } else {
+                // First failure — mark suspect, do NOT evict
+                ref.__mcpSuspect = true;
+                _heapWarnings.push("heapResolve: marked " + uuid + " suspect (COM: " + e.message + ")");
+                // Fall through to resync — resync rebuild will either
+                // confirm or remove the entry
+            }
         }
-
-        // Ref is stale, remove it
-        delete heap.index[uuid];
     }
 
     // One-time resync per batch
@@ -259,6 +286,11 @@ function heapRebuildIndex(doc) {
         if (!container || !container.pageItems) return;
 
         for (var i = 0; i < container.pageItems.length; i++) {
+            if (count >= _HEAP_REBUILD_CAP) {
+                _heapRebuildComplete = false;
+                _heapWarnings.push("heapRebuildIndex: capped at " + _HEAP_REBUILD_CAP + " items — index incomplete");
+                return;
+            }
             var item = container.pageItems[i];
             try {
                 if (item.note) {
@@ -275,7 +307,10 @@ function heapRebuildIndex(doc) {
         }
     }
 
+    _heapRebuildComplete = true;  // reset before scan
+
     for (var i = 0; i < doc.layers.length; i++) {
+        if (!_heapRebuildComplete) break;  // cap hit during previous layer scan
         scan(doc.layers[i], 0);
     }
 
@@ -316,11 +351,13 @@ function heapDiagnostics() {
     return {
         indexSize: indexSize,
         docName: heap.docName || null,
+        rebuildComplete: _heapRebuildComplete,
         hasTxn: _heapTxn !== null,
         txnBatchId: _heapTxn ? _heapTxn.batchId : null,
         txnAdded: _heapTxn ? _countKeys(_heapTxn.added) : 0,
         txnDeleted: _heapTxn ? _countKeys(_heapTxn.deleted) : 0,
-        txnResyncUsed: _heapTxn ? _heapTxn.resyncUsed : false
+        txnResyncUsed: _heapTxn ? _heapTxn.resyncUsed : false,
+        warnings: _heapWarnings.slice()  // copy to prevent mutation
     };
 }
 

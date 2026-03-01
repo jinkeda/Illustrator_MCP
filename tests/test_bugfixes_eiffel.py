@@ -64,20 +64,24 @@ class TestGradientSchemaTypeOptional:
 
     def test_type_not_in_required(self):
         """'type' should be optional, not required for style_set_gradient."""
-        schema_path = (
-            "c:/Users/k.jin/OneDrive/PhD/claude/Illustrator_Agent/"
-            "Illustrator_MCP/illustrator_mcp/resources/scripts/op_schemas.jsx"
-        )
+        # Source of truth is now contracts.jsx (op_schemas.jsx is a compat forwarder)
         from pathlib import Path
-        content = Path(schema_path).read_text(encoding="utf-8")
+        contracts_path = (
+            Path(__file__).resolve().parent.parent
+            / "illustrator_mcp" / "resources" / "scripts" / "contracts.jsx"
+        )
+        content = contracts_path.read_text(encoding="utf-8")
 
         # Find the style_set_gradient block and verify 'required' only has 'stops'
         import re
+        idx = content.find('"style_set_gradient"')
+        assert idx != -1, "style_set_gradient schema not found in contracts.jsx"
+        schema_chunk = content[idx:idx + 300]
         match = re.search(
-            r'"style_set_gradient"\s*:\s*\{[^}]*"required"\s*:\s*\[(.*?)\]',
-            content, re.DOTALL,
+            r'"required"\s*:\s*\[(.*?)\]',
+            schema_chunk, re.DOTALL,
         )
-        assert match is not None, "style_set_gradient schema not found"
+        assert match is not None, "style_set_gradient required array not found"
         required_block = match.group(1)
         # 'type' should NOT be in the required list
         assert '"type"' not in required_block, (

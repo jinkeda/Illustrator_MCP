@@ -15,6 +15,14 @@
  *   {ok, stats: {total, passed, failed}, createdIds, ops}
  */
 function compute(items, params, report) {
+    // NOTE: The `items` parameter (pre-resolved from pipeline collect stage)
+    // is intentionally NOT used. Each op re-resolves its own targets via
+    // executeSubOps → resolveTargets for two reasons:
+    //  1. Ops in a batch may target different items (batch mode)
+    //  2. Per-op resolution goes through the heap for identity verification
+    // This is typically O(1) for ID targets (heap lookup, unless resync
+    // triggers an O(N) scan). Acceptable for other target types.
+
     // Determine ops array: explicit params.ops or auto-wrap single op
     var ops = null;
     if (params.ops && params.ops.length > 0) {

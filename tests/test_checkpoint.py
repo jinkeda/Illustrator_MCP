@@ -15,6 +15,7 @@ SCRIPTS_DIR = pathlib.Path(__file__).resolve().parent.parent / "illustrator_mcp"
 CHECKPOINT_JSX = (SCRIPTS_DIR / "checkpoint.jsx").read_text(encoding="utf-8")
 SNAPSHOT_JSX = (SCRIPTS_DIR / "snapshot.jsx").read_text(encoding="utf-8")
 DOCUMENTS_PY = (SCRIPTS_DIR.parent.parent / "tools" / "documents.py").read_text(encoding="utf-8")
+HISTORY_PY = (SCRIPTS_DIR.parent.parent / "tools" / "_history.py").read_text(encoding="utf-8")
 MANIFEST = json.loads((SCRIPTS_DIR / "manifest.json").read_text(encoding="utf-8"))
 
 
@@ -150,14 +151,14 @@ class TestDocumentsPyCheckpointActions:
     def test_checkpoint_actions_in_literal(self):
         for action in ["checkpoint_save", "checkpoint_restore",
                        "checkpoint_list", "checkpoint_delete"]:
-            assert f'"{action}"' in DOCUMENTS_PY
+            assert f'"{action}"' in HISTORY_PY
 
     def test_name_field_exists(self):
         assert "name:" in DOCUMENTS_PY or '"name"' in DOCUMENTS_PY
 
     def test_checkpoint_dispatch(self):
         """_handle_checkpoint function exists."""
-        assert "async def _handle_checkpoint(" in DOCUMENTS_PY or "_handle_checkpoint" in DOCUMENTS_PY
+        assert "async def _handle_checkpoint(" in HISTORY_PY or "_handle_checkpoint" in HISTORY_PY
 
 
 class TestCheckpointSaveCaps:
@@ -252,12 +253,12 @@ class TestHistoryInputValidation:
     """Test 16: Pydantic model_validate enforces name requirement."""
 
     def test_model_validate_override(self):
-        assert "model_validate" in DOCUMENTS_PY
+        assert "model_validate" in HISTORY_PY
 
     def test_requires_name_for_save(self):
         """Validation should require non-empty name for checkpoint_save."""
-        assert "requires a non-empty" in DOCUMENTS_PY or "requires" in DOCUMENTS_PY
+        assert "requires a non-empty" in HISTORY_PY or "requires" in HISTORY_PY
 
     def test_name_not_required_for_list(self):
         """checkpoint_list should not require name."""
-        assert "checkpoint_list" in DOCUMENTS_PY
+        assert "checkpoint_list" in HISTORY_PY

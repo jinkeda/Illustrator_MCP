@@ -14,12 +14,15 @@ import json
 import logging
 import os
 import re
+from dataclasses import dataclass, field as dc_field
 from typing import Any, Dict, List, Literal, Optional, Union
 from pydantic import Field, model_validator
 from illustrator_mcp.shared import mcp
 from illustrator_mcp.proxy_client import execute_script_with_context, format_envelope
 from illustrator_mcp.libraries import get_injection_metadata
-from illustrator_mcp.tools.base import ToolInputBase
+from illustrator_mcp.tools.base import (
+    ToolInputBase, TOOL_ANNOTATIONS, ABSTRACTION_LADDER, COORDINATE_SYSTEM_BLOCK,
+)
 from illustrator_mcp.utils.load_script import load_script
 from illustrator_mcp.utils.response import unwrap_jsx_result
 from mcp.types import ImageContent, TextContent
@@ -456,16 +459,14 @@ class ExecuteScriptInput(ToolInputBase):
     )
 
 
-from illustrator_mcp.tools.base import (
-    TOOL_ANNOTATIONS, ABSTRACTION_LADDER, COORDINATE_SYSTEM_BLOCK,
-)
+# TOOL_ANNOTATIONS, ABSTRACTION_LADDER, COORDINATE_SYSTEM_BLOCK imported at top of file
 
 _NAME = "illustrator_execute_script"
 
 
 # ── Phase decomposition types ─────────────────────────────────────
 
-from dataclasses import dataclass, field as dc_field
+# dataclass, dc_field imported at top of file
 
 
 @dataclass

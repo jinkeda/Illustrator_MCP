@@ -29,16 +29,16 @@ registerOpHandler("style_set_fill", function (params, targets, ctx) {
 
     // Parse color
     var color = null;
-    if (params.r !== undefined || params.g !== undefined || params.b !== undefined) {
+    if (params.r != null || params.g != null || params.b != null) {
         color = new RGBColor();
-        color.red = params.r || 0;
-        color.green = params.g || 0;
-        color.blue = params.b || 0;
+        color.red = (params.r != null) ? params.r : 0;
+        color.green = (params.g != null) ? params.g : 0;
+        color.blue = (params.b != null) ? params.b : 0;
     } else if (params.color) {
         color = new RGBColor();
-        color.red = params.color.r || 0;
-        color.green = params.color.g || 0;
-        color.blue = params.color.b || 0;
+        color.red = (params.color.r != null) ? params.color.r : 0;
+        color.green = (params.color.g != null) ? params.color.g : 0;
+        color.blue = (params.color.b != null) ? params.color.b : 0;
     }
 
     if (!color) {

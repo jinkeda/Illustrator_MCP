@@ -7,7 +7,6 @@ Python-Clipper-backed path boolean tool (path_boolean).
 
 import json
 import logging
-from functools import lru_cache
 from pathlib import Path
 from typing import Any, Dict, List, Literal, Optional, Union
 
@@ -29,6 +28,13 @@ from illustrator_mcp.tools.preview import (
 )
 
 logger = logging.getLogger("illustrator_mcp")
+
+# Ops that create new items and don't need target collection.
+# Must stay in sync with OP_CLASS "doc" entries in ops_core.jsx.
+_CREATION_OPS = frozenset({
+    "element_create", "element_create_batch", "element_create_multi",
+    "text_create", "layer_create",
+})
 
 _TEMPLATES_DIR = Path(__file__).parent.parent / "resources" / "templates"
 
@@ -80,13 +86,25 @@ def _dedup_warnings(*warning_lists: list) -> list:
     return result
 
 
-@lru_cache(maxsize=16)
+_jsx_template_cache: dict[str, tuple[int, str]] = {}  # name → (mtime_ns, content)
+
+
 def _load_jsx_template(name: str) -> str:
-    """Load a .jsx template from resources/templates/ (cached)."""
+    """Load a .jsx template from resources/templates/ (mtime-cached).
+
+    Uses st_mtime_ns for cache invalidation so template changes are
+    picked up without server restart. One stat() call per load (~0.1ms).
+    """
     path = _TEMPLATES_DIR / name
     if not path.exists():
         raise FileNotFoundError(f"JSX template not found: {path}")
-    return path.read_text(encoding="utf-8")
+    mtime_ns = path.stat().st_mtime_ns
+    cached = _jsx_template_cache.get(name)
+    if cached and cached[0] == mtime_ns:
+        return cached[1]
+    content = path.read_text(encoding="utf-8")
+    _jsx_template_cache[name] = (mtime_ns, content)
+    return content
 
 
 class ExecuteTaskInput(ToolInputBase):
@@ -266,10 +284,7 @@ async def illustrator_execute_task(params: ExecuteTaskInput) -> Union[str, list]
         _preprocess_element_create(payload_data)
 
     # Auto-detect creation ops that don't need target collection
-    _CREATION_OPS = {
-        "element_create", "element_create_batch", "element_create_multi",
-        "text_create", "layer_create",
-    }
+    # (must stay in sync with OP_CLASS "doc" entries in ops_core.jsx)
     is_creation_op = payload.task in _CREATION_OPS
     if params.compute_fn is None and (not payload.targets or is_creation_op):
         if "options" not in payload_data:
@@ -319,8 +334,29 @@ if (report.batchReport) {{
         ok: _br.ok,
         createdIds: _br.createdIds || [],
         stats: _br.stats || {{}},
-        warnings: _br.warnings || []
+        warnings: _br.warnings || [],
+        opSummary: [],
+        opSummaryTruncated: false
     }};
+    // Compact per-op summary (~50 bytes each, safe under truncation limit)
+    if (_br.ops) {{
+        var _maxSummary = 200;
+        var _len = _br.ops.length < _maxSummary ? _br.ops.length : _maxSummary;
+        for (var _oi = 0; _oi < _len; _oi++) {{
+            __mcp_check();
+            var _op = _br.ops[_oi];
+            _slim.opSummary.push({{
+                task: _op.task,
+                ok: _op.ok,
+                tr: _op.targets_resolved || 0,
+                mod: (_op.data && typeof _op.data.modified === "number") ? _op.data.modified : null,
+                err: (_op.error && _op.error.code) ? _op.error.code : null
+            }});
+        }}
+        if (_br.ops.length > _maxSummary) {{
+            _slim.opSummaryTruncated = true;
+        }}
+    }}
     // Preserve first op error if batch failed
     if (!_br.ok && _br.ops) {{
         for (var _ei = 0; _ei < _br.ops.length; _ei++) {{

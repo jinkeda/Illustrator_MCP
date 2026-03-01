@@ -1,0 +1,168 @@
+============================= test session starts =============================
+platform win32 -- Python 3.12.8, pytest-9.0.1, pluggy-1.6.0 -- C:\Users\k.jin\AppData\Local\Programs\Python\Python312\python.exe
+cachedir: .pytest_cache
+rootdir: C:\Users\k.jin\OneDrive\PhD\claude\Illustrator_Agent\Illustrator_MCP
+configfile: pyproject.toml
+plugins: anyio-4.12.0, asyncio-1.3.0, cov-7.0.0
+asyncio: mode=Mode.AUTO, debug=False, asyncio_default_fixture_loop_scope=None, asyncio_default_test_loop_scope=function
+collecting ... collected 40 items
+
+tests/test_checkpoint.py::TestGuardManifestCheckpoint::test_entry_exists PASSED [  2%]
+tests/test_checkpoint.py::TestGuardManifestCheckpoint::test_deps PASSED  [  5%]
+tests/test_checkpoint.py::TestGuardManifestCheckpoint::test_exports PASSED [  7%]
+tests/test_checkpoint.py::TestGuardCheckpointFunctions::test_function_exists[function checkpointSave(] PASSED [ 10%]
+tests/test_checkpoint.py::TestGuardCheckpointFunctions::test_function_exists[function checkpointRestore(] PASSED [ 12%]
+tests/test_checkpoint.py::TestGuardCheckpointFunctions::test_function_exists[function checkpointList(] PASSED [ 15%]
+tests/test_checkpoint.py::TestGuardCheckpointFunctions::test_function_exists[function checkpointDelete(] PASSED [ 17%]
+tests/test_checkpoint.py::TestGuardCheckpointCaps::test_max_items PASSED [ 20%]
+tests/test_checkpoint.py::TestGuardCheckpointCaps::test_max_bytes PASSED [ 22%]
+tests/test_checkpoint.py::TestGuardNameValidation::test_name_regex PASSED [ 25%]
+tests/test_checkpoint.py::TestGuardNameValidation::test_name_required_check PASSED [ 27%]
+tests/test_checkpoint.py::TestGuardDocKey::test_dockey_function_exists PASSED [ 30%]
+tests/test_checkpoint.py::TestGuardDocKey::test_fullname_for_saved PASSED [ 32%]
+tests/test_checkpoint.py::TestGuardDocKey::test_artboard_fallback_for_unsaved PASSED [ 35%]
+tests/test_checkpoint.py::TestGuardStorageMechanism::test_global_storage PASSED [ 37%]
+tests/test_checkpoint.py::TestGuardStorageMechanism::test_file_fallback PASSED [ 40%]
+tests/test_checkpoint.py::TestGuardStorageMechanism::test_save_fallback_called PASSED [ 42%]
+tests/test_checkpoint.py::TestGuardSnapshotWarnings::test_warnings_field_in_snapshot PASSED [ 45%]
+tests/test_checkpoint.py::TestGuardSnapshotWarnings::test_empty_capture_warning PASSED [ 47%]
+tests/test_checkpoint.py::TestGuardSnapshotDuplicateId::test_duplicate_detection PASSED [ 50%]
+tests/test_checkpoint.py::TestGuardSnapshotDuplicateId::test_duplicate_causes_failure PASSED [ 52%]
+tests/test_checkpoint.py::TestDocumentsPyCheckpointActions::test_checkpoint_actions_in_literal FAILED [ 55%]
+tests/test_checkpoint.py::TestDocumentsPyCheckpointActions::test_name_field_exists PASSED [ 57%]
+tests/test_checkpoint.py::TestDocumentsPyCheckpointActions::test_checkpoint_dispatch FAILED [ 60%]
+tests/test_checkpoint.py::TestCheckpointSaveCaps::test_item_count_check PASSED [ 62%]
+tests/test_checkpoint.py::TestCheckpointSaveCaps::test_byte_size_check PASSED [ 65%]
+tests/test_checkpoint.py::TestCheckpointRestoreIntegration::test_restore_calls_restore_snapshot PASSED [ 67%]
+tests/test_checkpoint.py::TestCheckpointRestoreIntegration::test_restore_handles_not_found PASSED [ 70%]
+tests/test_checkpoint.py::TestCheckpointListSort::test_list_sorts PASSED [ 72%]
+tests/test_checkpoint.py::TestCheckpointDelete::test_delete_removes PASSED [ 75%]
+tests/test_checkpoint.py::TestCheckpointDelete::test_delete_persists PASSED [ 77%]
+tests/test_checkpoint.py::TestSnapshotTypeMismatch::test_type_mismatch_warning PASSED [ 80%]
+tests/test_checkpoint.py::TestSnapshotTypeMismatch::test_shared_fields_restored PASSED [ 82%]
+tests/test_checkpoint.py::TestCheckpointExports::test_exported[checkpointSave] PASSED [ 85%]
+tests/test_checkpoint.py::TestCheckpointExports::test_exported[checkpointRestore] PASSED [ 87%]
+tests/test_checkpoint.py::TestCheckpointExports::test_exported[checkpointList] PASSED [ 90%]
+tests/test_checkpoint.py::TestCheckpointExports::test_exported[checkpointDelete] PASSED [ 92%]
+tests/test_checkpoint.py::TestHistoryInputValidation::test_model_validate_override FAILED [ 95%]
+tests/test_checkpoint.py::TestHistoryInputValidation::test_requires_name_for_save FAILED [ 97%]
+C:\Users\k.jin\AppData\Local\Programs\Python\Python312\Lib\site-packages\coverage\control.py:958: CoverageWarning: No data was collected. (no-data-collected); see https://coverage.readthedocs.io/en/7.13.1/messages.html#warning-no-data-collected
+  self._warn("No data was collected.", slug="no-data-collected")
+tests/test_checkpoint.py::TestHistoryInputValidation::test_name_not_required_for_list FAILED [100%]
+
+================================== FAILURES ===================================
+_____ TestDocumentsPyCheckpointActions.test_checkpoint_actions_in_literal _____
+
+self = <tests.test_checkpoint.TestDocumentsPyCheckpointActions object at 0x0000023ACBB06C90>
+
+    def test_checkpoint_actions_in_literal(self):
+        for action in ["checkpoint_save", "checkpoint_restore",
+                       "checkpoint_list", "checkpoint_delete"]:
+>           assert f'"{action}"' in DOCUMENTS_PY
+E           assert '"checkpoint_save"' in '"""\\nDocument operation tools for Adobe Illustrator.\\n\\nThis module is a thin facade that re-exports all document-related tools\\nfrom sub-modules. External code can continue to import from here.\\n\\nSub-modules:\\n  _models.py  \u2014 shared Pydantic models and enums\\n  _export.py  \u2014 illustrator_export_document\\n  _history.py \u2014 illustrator_history (undo/redo/checkpoints)\\n  _place.py   \u2014 illustrator_place_file, illustrator_set_reference\\n\\nThe document CRUD tool (illustrator_document) remains here since it is\\nsmall and has no shared dependencies.\\n"""\\n\\nimport json\\nimport logging\\n\\nfrom pydantic import Field\\n\\nfrom illustrator_mcp.shared import mcp\\nfrom illustrator_mcp import templates\\nfrom illustrator_mcp.tools.base import execute_jsx_tool, TOOL_ANNOTATIONS\\nfrom illustrator_mcp.utils import escape_path_for_jsx\\n# Re-export for backward-compat: tests patch these at\\n# "illustrator_mcp.tools.documents.execute_script_with_context"\\nfrom illustrator_mcp.proxy_client import (            # noqa: F401\\n    execute_script_with_context,\\n    format_envelope,\\n)\\n\\nlogger = logging.getLogger(__name__)\\n\\n\\n# \u2500\u2500 Re-exports from sub-modules \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\\n# Import...ute(path=path)\\n        return await execute_jsx_tool(\\n            script=script,\\n            command_type="open_document",\\n            tool_name="illustrator_document",\\n            params={"action": action, "file_path": params.file_path}\\n        )\\n    elif action == "save":\\n        if params.file_path:\\n            path = escape_path_for_jsx(params.file_path)\\n            script = templates.DOC_SAVE_AS.substitute(path=path)\\n        else:\\n            script = templates.DOC_SAVE\\n        return await execute_jsx_tool(\\n            script=script,\\n            command_type="save_document",\\n            tool_name="illustrator_document",\\n            params={"action": action, "file_path": params.file_path}\\n        )\\n    elif action == "close":\\n        save_opt = "SaveOptions.SAVECHANGES" if params.save_before_close else "SaveOptions.DONOTSAVECHANGES"\\n        script = templates.DOC_CLOSE.substitute(save_option=save_opt)\\n        return await execute_jsx_tool(\\n            script=script,\\n            command_type="close_document",\\n            tool_name="illustrator_document",\\n            params={"action": action, "save_before_close": params.save_before_close}\\n        )\\n'
+
+tests\test_checkpoint.py:153: AssertionError
+__________ TestDocumentsPyCheckpointActions.test_checkpoint_dispatch __________
+
+self = <tests.test_checkpoint.TestDocumentsPyCheckpointActions object at 0x0000023ACBB07290>
+
+    def test_checkpoint_dispatch(self):
+        """_handle_checkpoint function exists."""
+>       assert "async def _handle_checkpoint(" in DOCUMENTS_PY or "_handle_checkpoint" in DOCUMENTS_PY
+E       assert ('async def _handle_checkpoint(' in '"""\\nDocument operation tools for Adobe Illustrator.\\n\\nThis module is a thin facade that re-exports all document-related tools\\nfrom sub-modules. External code can continue to import from here.\\n\\nSub-modules:\\n  _models.py  \u2014 shared Pydantic models and enums\\n  _export.py  \u2014 illustrator_export_document\\n  _history.py \u2014 illustrator_history (undo/redo/checkpoints)\\n  _place.py   \u2014 illustrator_place_file, illustrator_set_reference\\n\\nThe document CRUD tool (illustrator_document) remains here since it is\\nsmall and has no shared dependencies.\\n"""\\n\\nimport json\\nimport logging\\n\\nfrom pydantic import Field\\n\\nfrom illustrator_mcp.shared import mcp\\nfrom illustrator_mcp import templates\\nfrom illustrator_mcp.tools.base import execute_jsx_tool, TOOL_ANNOTATIONS\\nfrom illustrator_mcp.utils import escape_path_for_jsx\\n# Re-export for backward-compat: tests patch these at\\n# "illustrator_mcp.tools.documents.execute_script_with_context"\\nfrom illustrator_mcp.proxy_client import (            # noqa: F401\\n    execute_script_with_context,\\n    format_envelope,\\n)\\n\\nlogger = logging.getLogger(__name__)\\n\\n\\n# \u2500\u2500 Re-exports from sub-modules \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\\n# Import...ute(path=path)\\n        return await execute_jsx_tool(\\n            script=script,\\n            command_type="open_document",\\n            tool_name="illustrator_document",\\n            params={"action": action, "file_path": params.file_path}\\n        )\\n    elif action == "save":\\n        if params.file_path:\\n            path = escape_path_for_jsx(params.file_path)\\n            script = templates.DOC_SAVE_AS.substitute(path=path)\\n        else:\\n            script = templates.DOC_SAVE\\n        return await execute_jsx_tool(\\n            script=script,\\n            command_type="save_document",\\n            tool_name="illustrator_document",\\n            params={"action": action, "file_path": params.file_path}\\n        )\\n    elif action == "close":\\n        save_opt = "SaveOptions.SAVECHANGES" if params.save_before_close else "SaveOptions.DONOTSAVECHANGES"\\n        script = templates.DOC_CLOSE.substitute(save_option=save_opt)\\n        return await execute_jsx_tool(\\n            script=script,\\n            command_type="close_document",\\n            tool_name="illustrator_document",\\n            params={"action": action, "save_before_close": params.save_before_close}\\n        )\\n' or '_handle_checkpoint' in '"""\\nDocument operation tools for Adobe Illustrator.\\n\\nThis module is a thin facade that re-exports all document-related tools\\nfrom sub-modules. External code can continue to import from here.\\n\\nSub-modules:\\n  _models.py  \u2014 shared Pydantic models and enums\\n  _export.py  \u2014 illustrator_export_document\\n  _history.py \u2014 illustrator_history (undo/redo/checkpoints)\\n  _place.py   \u2014 illustrator_place_file, illustrator_set_reference\\n\\nThe document CRUD tool (illustrator_document) remains here since it is\\nsmall and has no shared dependencies.\\n"""\\n\\nimport json\\nimport logging\\n\\nfrom pydantic import Field\\n\\nfrom illustrator_mcp.shared import mcp\\nfrom illustrator_mcp import templates\\nfrom illustrator_mcp.tools.base import execute_jsx_tool, TOOL_ANNOTATIONS\\nfrom illustrator_mcp.utils import escape_path_for_jsx\\n# Re-export for backward-compat: tests patch these at\\n# "illustrator_mcp.tools.documents.execute_script_with_context"\\nfrom illustrator_mcp.proxy_client import (            # noqa: F401\\n    execute_script_with_context,\\n    format_envelope,\\n)\\n\\nlogger = logging.getLogger(__name__)\\n\\n\\n# \u2500\u2500 Re-exports from sub-modules \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\\n# Import...ute(path=path)\\n        return await execute_jsx_tool(\\n            script=script,\\n            command_type="open_document",\\n            tool_name="illustrator_document",\\n            params={"action": action, "file_path": params.file_path}\\n        )\\n    elif action == "save":\\n        if params.file_path:\\n            path = escape_path_for_jsx(params.file_path)\\n            script = templates.DOC_SAVE_AS.substitute(path=path)\\n        else:\\n            script = templates.DOC_SAVE\\n        return await execute_jsx_tool(\\n            script=script,\\n            command_type="save_document",\\n            tool_name="illustrator_document",\\n            params={"action": action, "file_path": params.file_path}\\n        )\\n    elif action == "close":\\n        save_opt = "SaveOptions.SAVECHANGES" if params.save_before_close else "SaveOptions.DONOTSAVECHANGES"\\n        script = templates.DOC_CLOSE.substitute(save_option=save_opt)\\n        return await execute_jsx_tool(\\n            script=script,\\n            command_type="close_document",\\n            tool_name="illustrator_document",\\n            params={"action": action, "save_before_close": params.save_before_close}\\n        )\\n')
+
+tests\test_checkpoint.py:160: AssertionError
+___________ TestHistoryInputValidation.test_model_validate_override ___________
+
+self = <tests.test_checkpoint.TestHistoryInputValidation object at 0x0000023ACBB054F0>
+
+    def test_model_validate_override(self):
+>       assert "model_validate" in DOCUMENTS_PY
+E       assert 'model_validate' in '"""\\nDocument operation tools for Adobe Illustrator.\\n\\nThis module is a thin facade that re-exports all document-related tools\\nfrom sub-modules. External code can continue to import from here.\\n\\nSub-modules:\\n  _models.py  \u2014 shared Pydantic models and enums\\n  _export.py  \u2014 illustrator_export_document\\n  _history.py \u2014 illustrator_history (undo/redo/checkpoints)\\n  _place.py   \u2014 illustrator_place_file, illustrator_set_reference\\n\\nThe document CRUD tool (illustrator_document) remains here since it is\\nsmall and has no shared dependencies.\\n"""\\n\\nimport json\\nimport logging\\n\\nfrom pydantic import Field\\n\\nfrom illustrator_mcp.shared import mcp\\nfrom illustrator_mcp import templates\\nfrom illustrator_mcp.tools.base import execute_jsx_tool, TOOL_ANNOTATIONS\\nfrom illustrator_mcp.utils import escape_path_for_jsx\\n# Re-export for backward-compat: tests patch these at\\n# "illustrator_mcp.tools.documents.execute_script_with_context"\\nfrom illustrator_mcp.proxy_client import (            # noqa: F401\\n    execute_script_with_context,\\n    format_envelope,\\n)\\n\\nlogger = logging.getLogger(__name__)\\n\\n\\n# \u2500\u2500 Re-exports from sub-modules \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\\n# Import...ute(path=path)\\n        return await execute_jsx_tool(\\n            script=script,\\n            command_type="open_document",\\n            tool_name="illustrator_document",\\n            params={"action": action, "file_path": params.file_path}\\n        )\\n    elif action == "save":\\n        if params.file_path:\\n            path = escape_path_for_jsx(params.file_path)\\n            script = templates.DOC_SAVE_AS.substitute(path=path)\\n        else:\\n            script = templates.DOC_SAVE\\n        return await execute_jsx_tool(\\n            script=script,\\n            command_type="save_document",\\n            tool_name="illustrator_document",\\n            params={"action": action, "file_path": params.file_path}\\n        )\\n    elif action == "close":\\n        save_opt = "SaveOptions.SAVECHANGES" if params.save_before_close else "SaveOptions.DONOTSAVECHANGES"\\n        script = templates.DOC_CLOSE.substitute(save_option=save_opt)\\n        return await execute_jsx_tool(\\n            script=script,\\n            command_type="close_document",\\n            tool_name="illustrator_document",\\n            params={"action": action, "save_before_close": params.save_before_close}\\n        )\\n'
+
+tests\test_checkpoint.py:255: AssertionError
+___________ TestHistoryInputValidation.test_requires_name_for_save ____________
+
+self = <tests.test_checkpoint.TestHistoryInputValidation object at 0x0000023ACBB07DD0>
+
+    def test_requires_name_for_save(self):
+        """Validation should require non-empty name for checkpoint_save."""
+>       assert "requires a non-empty" in DOCUMENTS_PY or "requires" in DOCUMENTS_PY
+E       assert ('requires a non-empty' in '"""\\nDocument operation tools for Adobe Illustrator.\\n\\nThis module is a thin facade that re-exports all document-related tools\\nfrom sub-modules. External code can continue to import from here.\\n\\nSub-modules:\\n  _models.py  \u2014 shared Pydantic models and enums\\n  _export.py  \u2014 illustrator_export_document\\n  _history.py \u2014 illustrator_history (undo/redo/checkpoints)\\n  _place.py   \u2014 illustrator_place_file, illustrator_set_reference\\n\\nThe document CRUD tool (illustrator_document) remains here since it is\\nsmall and has no shared dependencies.\\n"""\\n\\nimport json\\nimport logging\\n\\nfrom pydantic import Field\\n\\nfrom illustrator_mcp.shared import mcp\\nfrom illustrator_mcp import templates\\nfrom illustrator_mcp.tools.base import execute_jsx_tool, TOOL_ANNOTATIONS\\nfrom illustrator_mcp.utils import escape_path_for_jsx\\n# Re-export for backward-compat: tests patch these at\\n# "illustrator_mcp.tools.documents.execute_script_with_context"\\nfrom illustrator_mcp.proxy_client import (            # noqa: F401\\n    execute_script_with_context,\\n    format_envelope,\\n)\\n\\nlogger = logging.getLogger(__name__)\\n\\n\\n# \u2500\u2500 Re-exports from sub-modules \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\\n# Import...ute(path=path)\\n        return await execute_jsx_tool(\\n            script=script,\\n            command_type="open_document",\\n            tool_name="illustrator_document",\\n            params={"action": action, "file_path": params.file_path}\\n        )\\n    elif action == "save":\\n        if params.file_path:\\n            path = escape_path_for_jsx(params.file_path)\\n            script = templates.DOC_SAVE_AS.substitute(path=path)\\n        else:\\n            script = templates.DOC_SAVE\\n        return await execute_jsx_tool(\\n            script=script,\\n            command_type="save_document",\\n            tool_name="illustrator_document",\\n            params={"action": action, "file_path": params.file_path}\\n        )\\n    elif action == "close":\\n        save_opt = "SaveOptions.SAVECHANGES" if params.save_before_close else "SaveOptions.DONOTSAVECHANGES"\\n        script = templates.DOC_CLOSE.substitute(save_option=save_opt)\\n        return await execute_jsx_tool(\\n            script=script,\\n            command_type="close_document",\\n            tool_name="illustrator_document",\\n            params={"action": action, "save_before_close": params.save_before_close}\\n        )\\n' or 'requires' in '"""\\nDocument operation tools for Adobe Illustrator.\\n\\nThis module is a thin facade that re-exports all document-related tools\\nfrom sub-modules. External code can continue to import from here.\\n\\nSub-modules:\\n  _models.py  \u2014 shared Pydantic models and enums\\n  _export.py  \u2014 illustrator_export_document\\n  _history.py \u2014 illustrator_history (undo/redo/checkpoints)\\n  _place.py   \u2014 illustrator_place_file, illustrator_set_reference\\n\\nThe document CRUD tool (illustrator_document) remains here since it is\\nsmall and has no shared dependencies.\\n"""\\n\\nimport json\\nimport logging\\n\\nfrom pydantic import Field\\n\\nfrom illustrator_mcp.shared import mcp\\nfrom illustrator_mcp import templates\\nfrom illustrator_mcp.tools.base import execute_jsx_tool, TOOL_ANNOTATIONS\\nfrom illustrator_mcp.utils import escape_path_for_jsx\\n# Re-export for backward-compat: tests patch these at\\n# "illustrator_mcp.tools.documents.execute_script_with_context"\\nfrom illustrator_mcp.proxy_client import (            # noqa: F401\\n    execute_script_with_context,\\n    format_envelope,\\n)\\n\\nlogger = logging.getLogger(__name__)\\n\\n\\n# \u2500\u2500 Re-exports from sub-modules \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\\n# Import...ute(path=path)\\n        return await execute_jsx_tool(\\n            script=script,\\n            command_type="open_document",\\n            tool_name="illustrator_document",\\n            params={"action": action, "file_path": params.file_path}\\n        )\\n    elif action == "save":\\n        if params.file_path:\\n            path = escape_path_for_jsx(params.file_path)\\n            script = templates.DOC_SAVE_AS.substitute(path=path)\\n        else:\\n            script = templates.DOC_SAVE\\n        return await execute_jsx_tool(\\n            script=script,\\n            command_type="save_document",\\n            tool_name="illustrator_document",\\n            params={"action": action, "file_path": params.file_path}\\n        )\\n    elif action == "close":\\n        save_opt = "SaveOptions.SAVECHANGES" if params.save_before_close else "SaveOptions.DONOTSAVECHANGES"\\n        script = templates.DOC_CLOSE.substitute(save_option=save_opt)\\n        return await execute_jsx_tool(\\n            script=script,\\n            command_type="close_document",\\n            tool_name="illustrator_document",\\n            params={"action": action, "save_before_close": params.save_before_close}\\n        )\\n')
+
+tests\test_checkpoint.py:259: AssertionError
+_________ TestHistoryInputValidation.test_name_not_required_for_list __________
+
+self = <tests.test_checkpoint.TestHistoryInputValidation object at 0x0000023ACBB2C110>
+
+    def test_name_not_required_for_list(self):
+        """checkpoint_list should not require name."""
+>       assert "checkpoint_list" in DOCUMENTS_PY
+E       assert 'checkpoint_list' in '"""\\nDocument operation tools for Adobe Illustrator.\\n\\nThis module is a thin facade that re-exports all document-related tools\\nfrom sub-modules. External code can continue to import from here.\\n\\nSub-modules:\\n  _models.py  \u2014 shared Pydantic models and enums\\n  _export.py  \u2014 illustrator_export_document\\n  _history.py \u2014 illustrator_history (undo/redo/checkpoints)\\n  _place.py   \u2014 illustrator_place_file, illustrator_set_reference\\n\\nThe document CRUD tool (illustrator_document) remains here since it is\\nsmall and has no shared dependencies.\\n"""\\n\\nimport json\\nimport logging\\n\\nfrom pydantic import Field\\n\\nfrom illustrator_mcp.shared import mcp\\nfrom illustrator_mcp import templates\\nfrom illustrator_mcp.tools.base import execute_jsx_tool, TOOL_ANNOTATIONS\\nfrom illustrator_mcp.utils import escape_path_for_jsx\\n# Re-export for backward-compat: tests patch these at\\n# "illustrator_mcp.tools.documents.execute_script_with_context"\\nfrom illustrator_mcp.proxy_client import (            # noqa: F401\\n    execute_script_with_context,\\n    format_envelope,\\n)\\n\\nlogger = logging.getLogger(__name__)\\n\\n\\n# \u2500\u2500 Re-exports from sub-modules \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\\n# Import...ute(path=path)\\n        return await execute_jsx_tool(\\n            script=script,\\n            command_type="open_document",\\n            tool_name="illustrator_document",\\n            params={"action": action, "file_path": params.file_path}\\n        )\\n    elif action == "save":\\n        if params.file_path:\\n            path = escape_path_for_jsx(params.file_path)\\n            script = templates.DOC_SAVE_AS.substitute(path=path)\\n        else:\\n            script = templates.DOC_SAVE\\n        return await execute_jsx_tool(\\n            script=script,\\n            command_type="save_document",\\n            tool_name="illustrator_document",\\n            params={"action": action, "file_path": params.file_path}\\n        )\\n    elif action == "close":\\n        save_opt = "SaveOptions.SAVECHANGES" if params.save_before_close else "SaveOptions.DONOTSAVECHANGES"\\n        script = templates.DOC_CLOSE.substitute(save_option=save_opt)\\n        return await execute_jsx_tool(\\n            script=script,\\n            command_type="close_document",\\n            tool_name="illustrator_document",\\n            params={"action": action, "save_before_close": params.save_before_close}\\n        )\\n'
+
+tests\test_checkpoint.py:263: AssertionError
+=============================== tests coverage ================================
+_______________ coverage: platform win32, python 3.12.8-final-0 _______________
+
+Name                                          Stmts   Miss  Cover
+-----------------------------------------------------------------
+illustrator_mcp\__init__.py                       2      2     0%
+illustrator_mcp\__version__.py                    1      1     0%
+illustrator_mcp\app.py                           44     44     0%
+illustrator_mcp\config.py                        22     22     0%
+illustrator_mcp\connection_helpers.py            19     19     0%
+illustrator_mcp\curves.py                       238    238     0%
+illustrator_mcp\errors.py                       146    146     0%
+illustrator_mcp\geometry.py                     125    125     0%
+illustrator_mcp\libraries.py                    217    217     0%
+illustrator_mcp\log_config.py                    30     30     0%
+illustrator_mcp\logging\__init__.py               2      2     0%
+illustrator_mcp\logging\request_log.py          116    116     0%
+illustrator_mcp\occlusion_guard.py              116    116     0%
+illustrator_mcp\overlay.py                      425    425     0%
+illustrator_mcp\protocol.py                     161    161     0%
+illustrator_mcp\proxy_client.py                 191    191     0%
+illustrator_mcp\response_classification.py       69     69     0%
+illustrator_mcp\runtime.py                       33     33     0%
+illustrator_mcp\schemas\__init__.py              42     42     0%
+illustrator_mcp\schemas\contracts.py             53     53     0%
+illustrator_mcp\schemas\schema_generator.py      22     22     0%
+illustrator_mcp\server.py                        14     14     0%
+illustrator_mcp\shared.py                         9      9     0%
+illustrator_mcp\svgd.py                         404    404     0%
+illustrator_mcp\templates.py                     75     75     0%
+illustrator_mcp\tools\__init__.py                10     10     0%
+illustrator_mcp\tools\_export.py                 77     77     0%
+illustrator_mcp\tools\_history.py                40     40     0%
+illustrator_mcp\tools\_models.py                 27     27     0%
+illustrator_mcp\tools\_place.py                 123    123     0%
+illustrator_mcp\tools\base.py                    15     15     0%
+illustrator_mcp\tools\cadence.py                 59     59     0%
+illustrator_mcp\tools\compile_contracts.py      133    133     0%
+illustrator_mcp\tools\context.py                120    120     0%
+illustrator_mcp\tools\documents.py               37     37     0%
+illustrator_mcp\tools\execute.py                331    331     0%
+illustrator_mcp\tools\import_svg.py              81     81     0%
+illustrator_mcp\tools\preview.py                261    261     0%
+illustrator_mcp\tools\query.py                   98     98     0%
+illustrator_mcp\tools\task_execution.py         377    377     0%
+illustrator_mcp\tools\templates.py               19     19     0%
+illustrator_mcp\types.py                         16     16     0%
+illustrator_mcp\utils\__init__.py                 3      3     0%
+illustrator_mcp\utils\bounds.py                  16     16     0%
+illustrator_mcp\utils\chunking.py                62     62     0%
+illustrator_mcp\utils\load_script.py             18     18     0%
+illustrator_mcp\utils\path.py                     3      3     0%
+illustrator_mcp\utils\response.py                48     48     0%
+illustrator_mcp\vlm_grounding.py                360    360     0%
+illustrator_mcp\websocket_bridge.py             230    230     0%
+-----------------------------------------------------------------
+TOTAL                                          5140   5140     0%
+Coverage HTML written to dir htmlcov
+=========================== short test summary info ===========================
+FAILED tests/test_checkpoint.py::TestDocumentsPyCheckpointActions::test_checkpoint_actions_in_literal
+FAILED tests/test_checkpoint.py::TestDocumentsPyCheckpointActions::test_checkpoint_dispatch
+FAILED tests/test_checkpoint.py::TestHistoryInputValidation::test_model_validate_override
+FAILED tests/test_checkpoint.py::TestHistoryInputValidation::test_requires_name_for_save
+FAILED tests/test_checkpoint.py::TestHistoryInputValidation::test_name_not_required_for_list
+======================== 5 failed, 35 passed in 4.27s =========================

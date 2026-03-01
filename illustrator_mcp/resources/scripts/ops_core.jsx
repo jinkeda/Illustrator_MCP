@@ -236,6 +236,61 @@ function resolveTargets(doc, targets, ctx) {
     return items;
 }
 
+// ==================== Handler Result Normalizer ====================
+
+/**
+ * Normalize handler return value to a consistent shape.
+ * Handlers return varying shapes; this centralizes normalization so
+ * counting, slimming, and opSummary all consume stable output.
+ *
+ * Input shapes handled:
+ *   - {ok, data: {modified: N}}           (style ops)
+ *   - {ok, data: {ids: [...]}}            (element create)
+ *   - {ok, data: {createdIds: [...]}}     (batch create)
+ *   - {ok, id: "..."}                     (single create)
+ *   - raw object / null / undefined       (legacy)
+ *
+ * Output shape:
+ *   {ok, data: {createdIds?, modified?, ...}, warnings, error, id}
+ *
+ * @param {string} task - Op task name (for diagnostics)
+ * @param {*} raw - Handler return value
+ * @returns {Object} Normalized result
+ */
+function normalizeHandlerResult(task, raw) {
+    // Null / undefined / non-object → treat as success with no data
+    if (!raw || typeof raw !== "object") {
+        return { ok: true, data: raw || null, warnings: [], error: null, id: null };
+    }
+
+    var norm = {
+        ok: raw.ok !== false,
+        data: {},
+        warnings: raw.warnings || [],
+        error: raw.error || null,
+        id: raw.id || null
+    };
+
+    // Normalize data shape — extract known fields
+    var d = raw.data || raw;
+    if (typeof d === "object" && d !== null) {
+        // Modified count (style, text ops)
+        if (typeof d.modified === "number") norm.data.modified = d.modified;
+        // Created IDs (element create ops)
+        if (d.ids) norm.data.createdIds = d.ids;
+        if (d.createdIds) norm.data.createdIds = d.createdIds;
+        // Preserve all other data fields as-is
+        for (var k in d) {
+            if (d.hasOwnProperty(k) && !norm.data.hasOwnProperty(k)
+                && k !== "ok" && k !== "warnings" && k !== "error" && k !== "id") {
+                norm.data[k] = d[k];
+            }
+        }
+    }
+
+    return norm;
+}
+
 // ==================== Rollback Helper (A2) ====================
 
 /**
@@ -467,6 +522,49 @@ function filterByGuard(targets, guard, isUnless) {
 
 // ==================== Sub-Op Execution (C1) ====================
 
+// ==================== Op Classification (3-tier) ====================
+// "doc"     = participates in Illustrator undo stack → counted for rollback
+// "session" = changes app state (not geometry) → logged, not undo-counted
+// default   = "readonly" (assert_*, measure_*, snapshot_*, hash_*)
+var OP_CLASS = {
+    "element_create": "doc", "element_create_multi": "doc",
+    "element_create_multi_by_ref": "doc", "element_create_batch": "doc",
+    "element_modify": "doc", "element_delete": "doc", "element_replace": "doc",
+    "style_set_fill": "doc", "style_set_stroke": "doc", "style_set_opacity": "doc",
+    "style_remove_fill": "doc", "style_remove_stroke": "doc",
+    "style_clone": "doc", "style_set_gradient": "doc",
+    "group_create": "doc", "group_ungroup": "doc", "clip_create": "doc",
+    "zorder_front": "doc", "zorder_back": "doc",
+    "zorder_forward": "doc", "zorder_backward": "doc",
+    "text_create": "doc", "text_set_content": "doc", "text_set_style": "doc",
+    "align_horizontal": "doc", "align_vertical": "doc",
+    "distribute_horizontal": "doc", "distribute_vertical": "doc",
+    "compound": "doc",
+    "layer_create": "doc", "layer_delete": "doc",
+    "layer_lock": "doc", "layer_visible": "doc",
+    "layer_activate": "session"
+};
+
+// Dedupe cache: warn once per unknown task name
+var _OP_CLASS_WARNED = {};
+
+/**
+ * Get classification for an op task.
+ * @param {string} task - Op task name
+ * @param {Object} [ctx] - Batch context (for warnings)
+ * @returns {string} "doc", "session", or "readonly"
+ */
+function getOpClass(task, ctx) {
+    var cls = OP_CLASS[task];
+    if (!cls && OP_HANDLERS[task] && !_OP_CLASS_WARNED[task]) {
+        _OP_CLASS_WARNED[task] = true;
+        if (ctx && ctx.warn) {
+            ctx.warn("OP_CLASS: '" + task + "' has handler but no classification → readonly");
+        }
+    }
+    return cls || "readonly";
+}
+
 /**
  * Execute sub-ops within an existing context. Does NOT start/commit heap txn.
  * Used by executeOpBatch for the main loop AND by compound handler for sub-ops.
@@ -500,33 +598,6 @@ function executeSubOps(ops, ctx, mode) {
     var undoCount = 0;
     var createdIds = [];
     var rolledBackCount = 0;
-
-    // === Op Classification (3-tier) ===
-    // "doc"     = participates in Illustrator undo stack → counted for rollback
-    // "session" = changes app state (not geometry) → logged, not undo-counted
-    // default   = "readonly" (assert_*, measure_*, snapshot_*, hash_*)
-    var OP_CLASS = {
-        "element_create": "doc", "element_create_multi": "doc",
-        "element_create_multi_by_ref": "doc", "element_create_batch": "doc",
-        "element_modify": "doc", "element_delete": "doc", "element_replace": "doc",
-        "style_set_fill": "doc", "style_set_stroke": "doc", "style_set_opacity": "doc",
-        "style_remove_fill": "doc", "style_remove_stroke": "doc",
-        "style_clone": "doc", "style_set_gradient": "doc",
-        "group_create": "doc", "group_ungroup": "doc", "clip_create": "doc",
-        "zorder_front": "doc", "zorder_back": "doc",
-        "zorder_forward": "doc", "zorder_backward": "doc",
-        "text_create": "doc", "text_set_content": "doc", "text_set_style": "doc",
-        "align_horizontal": "doc", "align_vertical": "doc",
-        "distribute_horizontal": "doc", "distribute_vertical": "doc",
-        "compound": "doc",
-        "layer_create": "doc", "layer_delete": "doc",
-        "layer_lock": "doc", "layer_visible": "doc",
-        "layer_activate": "session"
-    };
-
-    function getOpClass(task) {
-        return OP_CLASS[task] || "readonly";
-    }
 
 
     var chunkIndex = 0;
@@ -643,17 +714,15 @@ function executeSubOps(ops, ctx, mode) {
                 for (var t = 0; t < targets.length; t++) {
                     var perTargetParams = resolveFields(resolvedParams, targets[t], t, targets.length, ctx);
                     var singleResult = handler(perTargetParams, [targets[t]], ctx);
-                    if (singleResult && typeof singleResult === "object") {
-                        if (singleResult.ok === false) {
-                            fanOk = false;
-                            if (!fanError && singleResult.error) fanError = singleResult.error;
-                        }
-                        fanData.push(singleResult.data || singleResult);
-                        if (singleResult.warnings) fanWarnings = fanWarnings.concat(singleResult.warnings);
-                        if (singleResult.id && !fanId) fanId = singleResult.id;
-                    } else {
-                        fanData.push(singleResult);
+                    // Normalize unconditionally — guaranteed shape: {ok, data, warnings, error, id}
+                    singleResult = normalizeHandlerResult(op.task, singleResult);
+                    if (singleResult.ok === false) {
+                        fanOk = false;
+                        if (!fanError) fanError = singleResult.error;
                     }
+                    fanData.push(singleResult.data);
+                    fanWarnings = fanWarnings.concat(singleResult.warnings);
+                    if (singleResult.id && !fanId) fanId = singleResult.id;
                 }
                 handlerResult = { ok: fanOk, data: { perTarget: fanData, count: targets.length }, warnings: fanWarnings, id: fanId, error: fanError };
             } else {
@@ -663,26 +732,19 @@ function executeSubOps(ops, ctx, mode) {
                 handlerResult = handler(resolvedParams, targets, ctx);
             }
 
-            // Normalize handler result
-            if (handlerResult && typeof handlerResult === "object") {
-                opResult.ok = handlerResult.ok !== false;
-                if (!opResult.ok) {
-                    opResult.error = handlerResult.error || handlerResult;
-                    if (opResult.error && opResult.error.ok === false && opResult.error.error) {
-                        opResult.error = opResult.error.error;
-                    }
-                    if (!opResult.error && handlerResult.message) {
-                        opResult.error = { code: "R_UNSTRUCTURED", message: handlerResult.message, stage: "apply" };
-                    }
-                    opResult.data = null;
-                } else {
-                    opResult.data = handlerResult.data || handlerResult;
-                    opResult.warnings = handlerResult.warnings || [];
-                    opResult.id = handlerResult.id || opResult.id;
+            // Normalize handler result via centralised normalizer
+            handlerResult = normalizeHandlerResult(op.task, handlerResult);
+            opResult.ok = handlerResult.ok;
+            if (!opResult.ok) {
+                opResult.error = handlerResult.error;
+                if (!opResult.error && handlerResult.data && handlerResult.data.message) {
+                    opResult.error = { code: "R_UNSTRUCTURED", message: handlerResult.data.message, stage: "apply" };
                 }
+                opResult.data = null;
             } else {
-                opResult.ok = true;
-                opResult.data = handlerResult;
+                opResult.data = handlerResult.data;
+                opResult.warnings = handlerResult.warnings;
+                opResult.id = handlerResult.id || opResult.id;
             }
 
             if (opResult.ok) {
@@ -693,7 +755,7 @@ function executeSubOps(ops, ctx, mode) {
                 } else if (opResult.id) {
                     createdIds.push(opResult.id);
                 }
-                if (getOpClass(op.task) === "doc") {
+                if (getOpClass(op.task, ctx) === "doc") {
                     undoCount++;
                 }
             } else {
@@ -762,6 +824,12 @@ function executeSubOps(ops, ctx, mode) {
         rolledBackCount: rolledBackCount
     };
 }
+
+// ── Field naming glossary ──────────────────────────────────────────
+// Internal (executeSubOps return): "results"  — per-op result objects
+// External (batch report):         "ops"      — same data, renamed for API consumers
+// Reason: "results" is an implementation name; "ops" matches the input array name
+//         and is the documented API surface (see Batch Report Contract above).
 
 // ==================== Batch Execution ====================
 
