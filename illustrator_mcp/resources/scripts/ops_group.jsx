@@ -164,8 +164,8 @@ registerOpHandler("clip_create", function (params, targets, ctx) {
         }
     }
 
-    // ── Resolve mask by MCP ID (H2: use heap) ────────────────────
-    var maskItem = heapResolve(maskId, doc);
+    // ── Resolve mask by MCP ID (compat: heap-first + scan-fallback) ──
+    var maskItem = resolveIdCompat(maskId, doc);
 
     if (!maskItem) {
         return makeError(
@@ -185,11 +185,11 @@ registerOpHandler("clip_create", function (params, targets, ctx) {
         );
     }
 
-    // ── Resolve content items (H2: use heap) ──────────────────────
+    // ── Resolve content items (compat: heap-first + scan-fallback) ─
     var contents = [];
     var missingIds = [];
     for (var cj = 0; cj < contentIds.length; cj++) {
-        var found = heapResolve(contentIds[cj], doc);
+        var found = resolveIdCompat(contentIds[cj], doc);
         if (found) {
             contents.push(found);
         } else {
