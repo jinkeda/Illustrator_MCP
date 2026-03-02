@@ -151,10 +151,10 @@ class TestDuplicateMaskStaticGuards:
         """dupMask moves into group at PLACEATBEGINNING (topmost)."""
         assert "dupMask.move(group, ElementPlacement.PLACEATBEGINNING)" in self.source
 
-    def test_original_moved_above_group(self):
-        """Original mask moves above group (PLACEBEFORE the group)."""
+    def test_original_moved_below_group(self):
+        """Original mask moves below group (PLACEAFTER) so clipped content is visible on top."""
         # In the duplicate_mask=true branch:
-        # maskItem.move(group, ElementPlacement.PLACEBEFORE)
+        # maskItem.move(group, ElementPlacement.PLACEAFTER)
         # This appears AFTER dupMask.move, so it's the z-positioning step
         lines = self.source.split('\n')
         dup_move_idx = None
@@ -162,11 +162,11 @@ class TestDuplicateMaskStaticGuards:
         for i, line in enumerate(lines):
             if 'dupMask.move(group' in line:
                 dup_move_idx = i
-            if dup_move_idx is not None and 'maskItem.move(group, ElementPlacement.PLACEBEFORE)' in line:
+            if dup_move_idx is not None and 'maskItem.move(group, ElementPlacement.PLACEAFTER)' in line:
                 original_move_idx = i
                 break
         assert dup_move_idx is not None, "dupMask.move not found"
-        assert original_move_idx is not None, "maskItem move above group not found"
+        assert original_move_idx is not None, "maskItem move below group not found"
         assert original_move_idx > dup_move_idx, \
             "Original mask z-reposition must happen AFTER duplicate move"
 

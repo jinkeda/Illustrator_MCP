@@ -230,7 +230,7 @@ registerOpHandler("clip_create", function (params, targets, ctx) {
                 parentName: parentName,
                 duplicate_mask_applied: duplicateMask,
                 wouldPlaceAt: duplicateMask
-                    ? "group at mask z-position; original above group"
+                    ? "group at mask z-position; original below group"
                     : "before mask (z-preserving)"
             }
         };
@@ -277,8 +277,9 @@ registerOpHandler("clip_create", function (params, targets, ctx) {
             group.clipped = true;
             dupMask.clipping = true;
 
-            // 6. Move original mask immediately above the clip group
-            maskItem.move(group, ElementPlacement.PLACEBEFORE);
+            // 6. Move original mask immediately below the clip group
+            //    (so clipped content is visible on top of the fill)
+            maskItem.move(group, ElementPlacement.PLACEAFTER);
 
         } else {
             // ── duplicate_mask=false path (original behavior) ─────
