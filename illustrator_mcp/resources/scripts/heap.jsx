@@ -145,6 +145,18 @@ function heapRegister(uuid, ref) {
 }
 
 /**
+ * Stamp MCP ID on item.note and register in heap atomically.
+ * All SOC creators MUST use this instead of raw note assignment.
+ * Invariant H1: any op that stamps @mcp:id= MUST heapRegister before returning ok.
+ * @param {Object} item - PageItem to stamp
+ * @param {string} id - MCP ID to assign
+ */
+function stampMcpId(item, id) {
+    item.note = "@mcp:id=" + id;
+    heapRegister(id, item);
+}
+
+/**
  * Mark an item for deletion (tombstone).
  * The item stays in the index until commit finalizes the removal.
  * @param {string} uuid - Item's MCP ID

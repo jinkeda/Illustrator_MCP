@@ -161,6 +161,7 @@ OP_SCHEMAS: List[OpSchema] = [
         "text":         _p(S),
         "fontSize":     _p(N),
         "fontName":     _p(S),
+        "clipTo":       _p(S, desc="MCP ID of mask to clip this element to (delegates to clip_create)"),
     }),
     OpSchema(name="element_modify", description="Modify element properties", params={
         "x":        _p(N),
@@ -298,11 +299,12 @@ OP_SCHEMAS: List[OpSchema] = [
     }),
     OpSchema(name="group_ungroup", description="Ungroup targeted groups"),
     OpSchema(name="clip_create", description="Create clipping mask group", params={
-        "mask":     _p(S, required=True, desc="MCP ID of the clipping path"),
-        "contents": _p(A, required=True, desc="Array of MCP IDs to clip"),
-        "id":       _p(S, desc="ID for the clipping group"),
-        "name":     _p(S, desc="Name for the clipping group"),
-        "dryRun":   _p(B, desc="Preview without mutation"),
+        "mask":           _p(S, required=True, desc="MCP ID of the clipping path"),
+        "contents":       _p(A, required=True, desc="Array of MCP IDs to clip"),
+        "id":             _p(S, desc="ID for the clipping group"),
+        "name":           _p(S, desc="Name for the clipping group"),
+        "dryRun":         _p(B, desc="Preview without mutation"),
+        "duplicate_mask": _p(B, desc="Duplicate mask as invisible clip; keep original visible (default true)"),
     }),
 
     # --- Z-order ops ---

@@ -56,8 +56,8 @@ registerOpHandler("text_create", function (params, targets, ctx) {
     textFrame.position = [abLeft + x, abTop - y];
     textFrame.contents = contents;
 
-    // Assign ID
-    textFrame.note = "@mcp:id=" + id;
+    // Assign ID + register in heap (H1 invariant)
+    stampMcpId(textFrame, id);
     if (name) textFrame.name = name;
 
     // Apply styling

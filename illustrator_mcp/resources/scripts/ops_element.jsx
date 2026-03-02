@@ -426,8 +426,8 @@ registerOpHandler("element_create", function (params, targets, ctx) {
             );
     }
 
-    // Assign ID via note
-    item.note = "@mcp:id=" + id;
+    // Assign ID via note + register in heap (H1 invariant)
+    stampMcpId(item, id);
 
     // Set name if provided
     if (name) {
@@ -479,12 +479,31 @@ registerOpHandler("element_create", function (params, targets, ctx) {
         item.opacity = params.opacity;
     }
 
+    // clipTo: delegate to clip_create handler (v1: always new clip group)
+    if (params.clipTo) {
+        var clipHandler = OP_HANDLERS["clip_create"];
+        if (!clipHandler) {
+            return makeError(ErrorCodes.E_EXECUTION || "E001",
+                "clip_create handler not registered (required for clipTo)", "apply");
+        }
+        var clipResult = clipHandler({
+            mask: params.clipTo,
+            contents: [id]
+        }, [], ctx);
+        // Normalize to ensure .ok exists
+        if (typeof normalizeHandlerResult === "function") {
+            clipResult = normalizeHandlerResult("clip_create", clipResult);
+        }
+        if (!clipResult.ok) return clipResult;
+    }
+
     return {
         ok: true,
         id: id,
         data: {
             typename: item.typename,
-            bounds: [item.left, item.top, item.width, item.height]
+            bounds: [item.left, item.top, item.width, item.height],
+            clippedTo: params.clipTo || null
         }
     };
 });
@@ -627,7 +646,7 @@ registerOpHandler("element_create_multi", function (params, targets, ctx) {
 
         // Assign MCP ID inline (confirmed: IDs in creation order)
         var subId = generateUUID();
-        item.note = "@mcp:id=" + subId;
+        stampMcpId(item, subId);
         if (params.name) {
             item.name = params.name + "_" + i;
         }
@@ -976,9 +995,9 @@ function _createFromTemplate(params, doc, abTop, abLeft, ctx) {
                     clone.opacity = Math.max(0, Math.min(100, inst.opacity));
                 }
 
-                // Assign MCP ID
+                // Assign MCP ID + register in heap (H1 invariant)
                 var id = generateUUID();
-                clone.note = "@mcp:id=" + id;
+                stampMcpId(clone, id);
 
                 // Name
                 if (params.name) {
@@ -1259,9 +1278,9 @@ registerOpHandler("element_create_batch", function (params, targets, ctx) {
                     continue;
             }
 
-            // Assign ID
+            // Assign ID + register in heap (H1 invariant)
             var id = generateUUID();
-            item.note = "@mcp:id=" + id;
+            stampMcpId(item, id);
             ids.push(id);
 
             // Name
@@ -1617,8 +1636,8 @@ registerOpHandler("element_replace", function (params, targets, ctx) {
                     "Unknown element type for replace: " + type, "apply");
         }
 
-        // Assign MCP ID
-        newItem.note = "@mcp:id=" + newId;
+        // Assign MCP ID + register in heap (H1 invariant)
+        stampMcpId(newItem, newId);
 
         // Set name if provided
         if (params.name) {

@@ -38,8 +38,8 @@ registerOpHandler("group_create", function (params, targets, ctx) {
         }
     }
 
-    // Assign ID and name
-    group.note = "@mcp:id=" + id;
+    // Assign ID and name (H1 invariant: stamp + register)
+    stampMcpId(group, id);
     if (name) group.name = name;
 
     return {
@@ -136,6 +136,7 @@ registerOpHandler("clip_create", function (params, targets, ctx) {
     var maskId = params.mask;
     var contentIds = params.contents;
     var dryRun = params.dryRun === true;
+    var duplicateMask = params.duplicate_mask !== false;  // default true
 
     if (!maskId) {
         return makeError(
@@ -163,17 +164,8 @@ registerOpHandler("clip_create", function (params, targets, ctx) {
         }
     }
 
-    // ── Resolve mask by MCP ID ────────────────────────────────────
-    var maskItem = null;
-    var allItems = doc.pageItems;
-    for (var mi = 0; mi < allItems.length; mi++) {
-        try {
-            if (allItems[mi].note && allItems[mi].note.indexOf("@mcp:id=" + maskId) >= 0) {
-                maskItem = allItems[mi];
-                break;
-            }
-        } catch (e) { /* some items may not support .note */ }
-    }
+    // ── Resolve mask by MCP ID (H2: use heap) ────────────────────
+    var maskItem = heapResolve(maskId, doc);
 
     if (!maskItem) {
         return makeError(
@@ -193,19 +185,11 @@ registerOpHandler("clip_create", function (params, targets, ctx) {
         );
     }
 
-    // ── Resolve content items ─────────────────────────────────────
+    // ── Resolve content items (H2: use heap) ──────────────────────
     var contents = [];
     var missingIds = [];
     for (var cj = 0; cj < contentIds.length; cj++) {
-        var found = null;
-        for (var pj = 0; pj < allItems.length; pj++) {
-            try {
-                if (allItems[pj].note && allItems[pj].note.indexOf("@mcp:id=" + contentIds[cj]) >= 0) {
-                    found = allItems[pj];
-                    break;
-                }
-            } catch (e) { }
-        }
+        var found = heapResolve(contentIds[cj], doc);
         if (found) {
             contents.push(found);
         } else {
@@ -236,6 +220,7 @@ registerOpHandler("clip_create", function (params, targets, ctx) {
             ok: true,
             dryRun: true,
             data: {
+                action: duplicateMask ? "duplicate_mask" : "move_mask",
                 maskType: maskType,
                 maskId: maskId,
                 contentCount: contents.length,
@@ -243,34 +228,78 @@ registerOpHandler("clip_create", function (params, targets, ctx) {
                 contentTypes: contentTypes,
                 parentType: parentType,
                 parentName: parentName,
-                wouldPlaceAt: "before mask (z-preserving)"
+                duplicate_mask_applied: duplicateMask,
+                wouldPlaceAt: duplicateMask
+                    ? "group at mask z-position; original above group"
+                    : "before mask (z-preserving)"
             }
         };
     }
 
+    // ── Helper: strip fill/stroke from a path (handles CompoundPathItem) ──
+    function stripAppearance(item) {
+        if (item.typename === "CompoundPathItem") {
+            for (var si = 0; si < item.pathItems.length; si++) {
+                item.pathItems[si].filled = false;
+                item.pathItems[si].stroked = false;
+            }
+        } else {
+            item.filled = false;
+            item.stroked = false;
+        }
+    }
+
     // ── Create clipping group ─────────────────────────────────────
     try {
-        // Create group in mask's parent (preserves context)
         var group = parent.groupItems.add();
+        var groupId = params.id || generateUUID();
 
-        // Position group at mask's z-location (before mask)
-        group.move(maskItem, ElementPlacement.PLACEBEFORE);
+        if (duplicateMask) {
+            // ── duplicate_mask=true path ───────────────────────────
+            // 1. Place group at mask's z-position
+            group.move(maskItem, ElementPlacement.PLACEBEFORE);
 
-        // Move mask into group first (topmost = clipping path)
-        maskItem.move(group, ElementPlacement.PLACEATBEGINNING);
+            // 2. Duplicate mask → invisible clip path
+            var dupMask = maskItem.duplicate();
+            stripAppearance(dupMask);
+            // No MCP ID on duplicate — anonymous clip path
+            try { dupMask.note = ""; } catch (e) { }
 
-        // Move content items into group (reverse order preserves stacking)
-        for (var k = contents.length - 1; k >= 0; k--) {
-            contents[k].move(group, ElementPlacement.PLACEATEND);
+            // 3. Move duplicate into group as topmost (clip path)
+            dupMask.move(group, ElementPlacement.PLACEATBEGINNING);
+
+            // 4. Move content items into group below dupMask
+            for (var k = contents.length - 1; k >= 0; k--) {
+                contents[k].move(group, ElementPlacement.PLACEATEND);
+            }
+
+            // 5. Set clipping properties on duplicate
+            group.clipped = true;
+            dupMask.clipping = true;
+
+            // 6. Move original mask immediately above the clip group
+            maskItem.move(group, ElementPlacement.PLACEBEFORE);
+
+        } else {
+            // ── duplicate_mask=false path (original behavior) ─────
+            // Position group at mask's z-location (before mask)
+            group.move(maskItem, ElementPlacement.PLACEBEFORE);
+
+            // Move mask into group first (topmost = clipping path)
+            maskItem.move(group, ElementPlacement.PLACEATBEGINNING);
+
+            // Move content items into group (reverse order preserves stacking)
+            for (var k2 = contents.length - 1; k2 >= 0; k2--) {
+                contents[k2].move(group, ElementPlacement.PLACEATEND);
+            }
+
+            // Set clipping properties
+            group.clipped = true;
+            maskItem.clipping = true;
         }
 
-        // Set clipping properties
-        group.clipped = true;
-        maskItem.clipping = true;
-
-        // Assign ID and name
-        var groupId = params.id || generateUUID();
-        group.note = "@mcp:id=" + groupId;
+        // Assign ID and name (H1 invariant: stamp + register)
+        stampMcpId(group, groupId);
         if (params.name) group.name = params.name;
 
         return {
@@ -279,7 +308,8 @@ registerOpHandler("clip_create", function (params, targets, ctx) {
             data: {
                 itemCount: group.pageItems.length,
                 maskType: maskType,
-                parentType: parentType
+                parentType: parentType,
+                duplicate_mask_applied: duplicateMask
             }
         };
     } catch (e) {

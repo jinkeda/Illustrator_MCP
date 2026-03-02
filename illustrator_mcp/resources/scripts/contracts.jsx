@@ -3,13 +3,13 @@
  * Part of Illustrator MCP SOC Framework
  * 
  * AUTO-GENERATED - DO NOT EDIT MANUALLY
- * Generated: 2026-02-27T15:31:37Z
+ * Generated: 2026-03-02T08:28:10Z
  * Source: illustrator_mcp/schemas/contracts.py
  * 
  * To regenerate: python -m illustrator_mcp.tools.compile_contracts
  */
 
-var CONTRACTS_CHECKSUM = "85bb1b243d2ec4a5";
+var CONTRACTS_CHECKSUM = "f7e3daec7fe6096f";
 
 // ==================== Protocol Version ====================
 var TASK_PROTOCOL_VERSION = "3.0.0";
@@ -120,7 +120,8 @@ var OP_PARAM_SCHEMAS = {
             "contents",
             "text",
             "fontSize",
-            "fontName"
+            "fontName",
+            "clipTo"
         ],
         "types": {
             "type": "string",
@@ -152,7 +153,8 @@ var OP_PARAM_SCHEMAS = {
             "contents": "string",
             "text": "string",
             "fontSize": "number",
-            "fontName": "string"
+            "fontName": "string",
+            "clipTo": "string"
         },
         "enumValues": {
             "type": [
@@ -445,8 +447,8 @@ var OP_PARAM_SCHEMAS = {
         }
     },
     "style_set_gradient": {
-        "required": ["stops"],
-        "optional": ["type", "angle", "origin", "length", "name"],
+        "required": ["type", "stops"],
+        "optional": ["angle", "origin", "length", "name"],
         "types": {
             "type": "string",
             "stops": "array",
@@ -470,13 +472,14 @@ var OP_PARAM_SCHEMAS = {
     },
     "clip_create": {
         "required": ["mask", "contents"],
-        "optional": ["id", "name", "dryRun"],
+        "optional": ["id", "name", "dryRun", "duplicate_mask"],
         "types": {
             "mask": "string",
             "contents": "array",
             "id": "string",
             "name": "string",
-            "dryRun": "boolean"
+            "dryRun": "boolean",
+            "duplicate_mask": "boolean"
         }
     },
     "zorder_front": {
