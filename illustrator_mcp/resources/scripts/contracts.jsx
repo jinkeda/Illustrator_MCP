@@ -3,13 +3,13 @@
  * Part of Illustrator MCP SOC Framework
  * 
  * AUTO-GENERATED - DO NOT EDIT MANUALLY
- * Generated: 2026-03-02T08:28:10Z
+ * Generated: 2026-03-03T16:07:50Z
  * Source: illustrator_mcp/schemas/contracts.py
  * 
  * To regenerate: python -m illustrator_mcp.tools.compile_contracts
  */
 
-var CONTRACTS_CHECKSUM = "f7e3daec7fe6096f";
+var CONTRACTS_CHECKSUM = "97bedb603b18094e";
 
 // ==================== Protocol Version ====================
 var TASK_PROTOCOL_VERSION = "3.0.0";
@@ -398,9 +398,10 @@ var OP_PARAM_SCHEMAS = {
         "types": {}
     },
     "style_set_fill": {
-        "required": ["r", "g", "b"],
-        "optional": [],
+        "required": [],
+        "optional": ["fill", "r", "g", "b"],
         "types": {
+            "fill": "object",
             "r": "number",
             "g": "number",
             "b": "number"
@@ -408,8 +409,9 @@ var OP_PARAM_SCHEMAS = {
     },
     "style_set_stroke": {
         "required": [],
-        "optional": ["r", "g", "b", "width"],
+        "optional": ["stroke", "r", "g", "b", "width"],
         "types": {
+            "stroke": "object",
             "r": "number",
             "g": "number",
             "b": "number",
@@ -447,8 +449,8 @@ var OP_PARAM_SCHEMAS = {
         }
     },
     "style_set_gradient": {
-        "required": ["type", "stops"],
-        "optional": ["angle", "origin", "length", "name"],
+        "required": ["stops"],
+        "optional": ["type", "angle", "origin", "length", "name"],
         "types": {
             "type": "string",
             "stops": "array",
@@ -512,6 +514,7 @@ var OP_PARAM_SCHEMAS = {
             "name",
             "fontSize",
             "fontName",
+            "fill",
             "r",
             "g",
             "b"
@@ -525,6 +528,7 @@ var OP_PARAM_SCHEMAS = {
             "name": "string",
             "fontSize": "number",
             "fontName": "string",
+            "fill": "object",
             "r": "number",
             "g": "number",
             "b": "number"
@@ -539,10 +543,11 @@ var OP_PARAM_SCHEMAS = {
     },
     "text_set_style": {
         "required": [],
-        "optional": ["fontSize", "fontName", "r", "g", "b"],
+        "optional": ["fontSize", "fontName", "fill", "r", "g", "b"],
         "types": {
             "fontSize": "number",
             "fontName": "string",
+            "fill": "object",
             "r": "number",
             "g": "number",
             "b": "number"
@@ -785,6 +790,8 @@ function validateOpParams(task, params) {
                 var expected = schema.types[key];
                 var actual = getValueType(params[key]);
                 if (actual !== "null" && actual !== expected) {
+                    // Allow false sentinel for object-typed params (disable pattern)
+                    if (expected === "object" && params[key] === false) continue;
                     errors.push({
                         code: ErrorCodes.V_INVALID_PARAM_TYPE || "V007",
                         message: "Parameter '" + key + "' expected " + expected + ", got " + actual,

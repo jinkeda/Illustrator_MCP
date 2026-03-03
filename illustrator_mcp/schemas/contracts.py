@@ -7,6 +7,11 @@ contracts.jsx for the JSX runtime.
 
 DO NOT define schemas in JSX files directly. This is the SSOT.
 
+IMPORTANT: After editing this file, run:
+  python -m illustrator_mcp.tools.compile_contracts
+to regenerate contracts.jsx. Changes take effect only after MCP server restart
+(JSX libraries are loaded at startup and cached in memory).
+
 Schema version: 1.7 — added handles (polar/relative), mirror, mirrorOrigin for Level 3/4
 """
 
@@ -161,7 +166,7 @@ OP_SCHEMAS: List[OpSchema] = [
         "text":         _p(S),
         "fontSize":     _p(N),
         "fontName":     _p(S),
-        "clipTo":       _p(S, desc="MCP ID of mask to clip this element to (delegates to clip_create)"),
+        "clipTo":       _p(S, desc="MCP ID of clip target: PathItem/CompoundPathItem consumed into new clip group; existing clipping GroupItem appends to it"),
     }),
     OpSchema(name="element_modify", description="Modify element properties", params={
         "x":        _p(N),
@@ -264,15 +269,17 @@ OP_SCHEMAS: List[OpSchema] = [
 
     # --- Style ops ---
     OpSchema(name="style_set_fill", description="Set fill color", params={
-        "r": _p(N, required=True),
-        "g": _p(N, required=True),
-        "b": _p(N, required=True),
+        "fill": _p(O, desc='Color {r,g,b} e.g. {"r":255,"g":0,"b":0}, or false to disable'),
+        "r": _p(N, desc="Red 0-255 (compat — prefer fill.r)"),
+        "g": _p(N, desc="Green 0-255 (compat — prefer fill.g)"),
+        "b": _p(N, desc="Blue 0-255 (compat — prefer fill.b)"),
     }),
     OpSchema(name="style_set_stroke", description="Set stroke properties", params={
-        "r":     _p(N),
-        "g":     _p(N),
-        "b":     _p(N),
-        "width": _p(N),
+        "stroke": _p(O, desc='Stroke {r,g,b,width?} e.g. {"r":0,"g":0,"b":0,"width":2}, or false to disable'),
+        "r":     _p(N, desc="Red 0-255 (compat — prefer stroke.r)"),
+        "g":     _p(N, desc="Green 0-255 (compat — prefer stroke.g)"),
+        "b":     _p(N, desc="Blue 0-255 (compat — prefer stroke.b)"),
+        "width": _p(N, desc="Width in pt (compat — prefer stroke.width)"),
     }),
     OpSchema(name="style_set_opacity", description="Set opacity", params={
         "opacity": _p(N, required=True),
@@ -285,7 +292,7 @@ OP_SCHEMAS: List[OpSchema] = [
         "properties": _p(A),
     }),
     OpSchema(name="style_set_gradient", description="Apply gradient fill", params={
-        "type":   _p(S, required=True),
+        "type":   _p(S),
         "stops":  _p(A, required=True),
         "angle":  _p(N),
         "origin": _p(O),
@@ -323,9 +330,10 @@ OP_SCHEMAS: List[OpSchema] = [
         "name":     _p(S),
         "fontSize": _p(N),
         "fontName": _p(S),
-        "r":        _p(N),
-        "g":        _p(N),
-        "b":        _p(N),
+        "fill":     _p(O, desc='Text fill color {r,g,b}'),
+        "r":        _p(N, desc="Red 0-255 (compat — prefer fill.r)"),
+        "g":        _p(N, desc="Green 0-255 (compat — prefer fill.g)"),
+        "b":        _p(N, desc="Blue 0-255 (compat — prefer fill.b)"),
     }),
     OpSchema(name="text_set_content", description="Set text content", params={
         "contents": _p(S, required=True),
@@ -333,9 +341,10 @@ OP_SCHEMAS: List[OpSchema] = [
     OpSchema(name="text_set_style", description="Set text style", params={
         "fontSize": _p(N),
         "fontName": _p(S),
-        "r":        _p(N),
-        "g":        _p(N),
-        "b":        _p(N),
+        "fill":     _p(O, desc='Text fill color {r,g,b}'),
+        "r":        _p(N, desc="Red 0-255 (compat — prefer fill.r)"),
+        "g":        _p(N, desc="Green 0-255 (compat — prefer fill.g)"),
+        "b":        _p(N, desc="Blue 0-255 (compat — prefer fill.b)"),
     }),
 
     # --- Alignment ops ---

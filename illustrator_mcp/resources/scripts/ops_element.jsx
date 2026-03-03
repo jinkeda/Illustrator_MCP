@@ -207,6 +207,28 @@ registerOpHandler("element_create", function (params, targets, ctx) {
     var targetLayer = layerResult.layer;
 
     var item = null;
+    var clipGroupId = null;
+
+    // ── Early validation: clipTo target must exist and be valid type ──
+    var clipTarget = null;  // declared once, reused in post-creation block
+    if (params.clipTo) {
+        clipTarget = resolveIdCompat(params.clipTo, doc, { freshScan: true });
+        if (!clipTarget) {
+            return makeError(ErrorCodes.V_INVALID_PARAM_VALUE || "V009",
+                "clipTo target not found: '" + params.clipTo + "'", "validate");
+        }
+        var ctType = clipTarget.typename;
+        // Valid targets: free path, clipping group, or consumed mask (clipping item inside clip group)
+        var isPath = (ctType === "PathItem" || ctType === "CompoundPathItem");
+        var isClipGroup = (ctType === "GroupItem" && clipTarget.clipped);
+        var isConsumedMask = (clipTarget.clipping && clipTarget.parent &&
+            clipTarget.parent.typename === "GroupItem" && clipTarget.parent.clipped);
+        if (!isPath && !isClipGroup && !isConsumedMask) {
+            return makeError(ErrorCodes.V_INVALID_PARAM_TYPE || "V010",
+                "clipTo must be PathItem, CompoundPathItem, or clipping GroupItem, got " + ctType,
+                "validate");
+        }
+    }
 
     // Convert to Illustrator coordinates:
     // User coords: (0,0) = artboard top-left, Y increases downward
@@ -479,22 +501,81 @@ registerOpHandler("element_create", function (params, targets, ctx) {
         item.opacity = params.opacity;
     }
 
-    // clipTo: delegate to clip_create handler (v1: always new clip group)
+    // Capture bounds BEFORE clipTo (clip may change item's coordinate context)
+    var preBounds = [item.left, item.top, item.width, item.height];
+
+    // clipTo: clip element to target (v2: append to existing, create new, rollback)
     if (params.clipTo) {
-        var clipHandler = OP_HANDLERS["clip_create"];
-        if (!clipHandler) {
-            return makeError(ErrorCodes.E_EXECUTION || "E001",
-                "clip_create handler not registered (required for clipTo)", "apply");
+        // Reuse early-validated clipTarget (already freshScan'd in this eval context).
+        // Only re-resolve if clipTarget was somehow invalidated (e.g., removed by another op).
+        if (!clipTarget) {
+            clipTarget = resolveIdCompat(params.clipTo, ctx.doc, { freshScan: true });
         }
-        var clipResult = clipHandler({
-            mask: params.clipTo,
-            contents: [id]
-        }, [], ctx);
-        // Normalize to ensure .ok exists
-        if (typeof normalizeHandlerResult === "function") {
-            clipResult = normalizeHandlerResult("clip_create", clipResult);
+        if (!clipTarget) {
+            try { item.remove(); } catch (e) { }
+            heapTombstone(id);
+            return makeError(ErrorCodes.V_INVALID_PARAM_VALUE || "V009",
+                "clipTo target not found: '" + params.clipTo + "'", "resolve");
         }
-        if (!clipResult.ok) return clipResult;
+
+        // Determine clip mode:
+        // (a) Target is already a clipping group → append
+        // (b) Target is a consumed mask (clipping:true inside a clipped group) → append to parent group
+        // (c) Target is a free PathItem/CompoundPathItem → create new clip group
+        var appendGroup = null;
+        if (clipTarget.typename === "GroupItem" && clipTarget.clipped) {
+            // (a) Direct clip group reference
+            appendGroup = clipTarget;
+        } else if (clipTarget.clipping && clipTarget.parent &&
+            clipTarget.parent.typename === "GroupItem" && clipTarget.parent.clipped) {
+            // (b) Consumed mask — append to its parent clip group
+            appendGroup = clipTarget.parent;
+        }
+
+        if (appendGroup) {
+            // Append to existing clip group
+            var preMoveParent = item.parent;
+            item.move(appendGroup, ElementPlacement.PLACEATEND);
+            // Verify move succeeded (parent should now be the clip group)
+            if (item.parent === preMoveParent) {
+                try { item.remove(); } catch (e) { }
+                heapTombstone(id);
+                return makeError(ErrorCodes.E_EXECUTION || "E001",
+                    "Failed to move item into clip group (target may be locked)", "apply");
+            }
+            // Return the clip group's MCP ID if it has one
+            try {
+                var gpNote = appendGroup.note || "";
+                var gpMatch = gpNote.match(/@mcp:id=([^\s]+)/);
+                clipGroupId = gpMatch ? gpMatch[1] : params.clipTo;
+            } catch (e) { clipGroupId = params.clipTo; }
+        } else {
+            // Delegate to clip_create for PathItem/CompoundPathItem
+            // duplicate_mask=false: mask consumed into group (clean for inline clipTo)
+            var clipHandler = OP_HANDLERS["clip_create"];
+            if (!clipHandler) {
+                try { item.remove(); } catch (e) { }
+                heapTombstone(id);
+                return makeError(ErrorCodes.E_EXECUTION || "E001",
+                    "clip_create handler not registered (required for clipTo)", "apply");
+            }
+            var clipResult = clipHandler({
+                mask: params.clipTo,
+                contents: [id],
+                duplicate_mask: false
+            }, [], ctx);
+            // Normalize to ensure .ok exists
+            if (typeof normalizeHandlerResult === "function") {
+                clipResult = normalizeHandlerResult("clip_create", clipResult);
+            }
+            if (!clipResult.ok) {
+                // Rollback: remove created element on clip failure
+                try { item.remove(); } catch (e) { }
+                heapTombstone(id);
+                return clipResult;
+            }
+            clipGroupId = clipResult.id || null;
+        }
     }
 
     return {
@@ -502,8 +583,9 @@ registerOpHandler("element_create", function (params, targets, ctx) {
         id: id,
         data: {
             typename: item.typename,
-            bounds: [item.left, item.top, item.width, item.height],
-            clippedTo: params.clipTo || null
+            bounds: preBounds,
+            clippedTo: params.clipTo || null,
+            clipGroupId: clipGroupId
         }
     };
 });

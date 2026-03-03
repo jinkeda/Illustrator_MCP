@@ -916,9 +916,9 @@ function executeOpBatch(ops, options) {
     };
     ctx.warn = function (msg) { ctx.warnings.push(msg); };
 
-    // Begin heap transaction for this batch
+    // Begin heap transaction for this batch (pass doc to avoid redundant lookup)
     var heapBatchId = generateUUID();
-    heapBeginTxn(heapBatchId);
+    heapBeginTxn(heapBatchId, doc);
 
     // === RECOMPUTE GATE (P6) ===
     // Requires explicit confirmation + takes snapshot before clearing
@@ -1046,6 +1046,14 @@ function executeOpBatch(ops, options) {
 
     // P1: Surface handler warnings + deprecation warnings in report
     var reportWarnings = ctx.warnings ? ctx.warnings.slice() : [];
+    // Aggregate per-op handler warnings into report-level warnings
+    for (var rwi = 0; rwi < results.length; rwi++) {
+        if (results[rwi].warnings && results[rwi].warnings.length > 0) {
+            for (var rwj = 0; rwj < results[rwi].warnings.length; rwj++) {
+                reportWarnings.push(results[rwi].warnings[rwj]);
+            }
+        }
+    }
     if (ctx.diagnostics.selectionWarnings > 0) {
         reportWarnings.push("DEPRECATED: 'selection' targeting used " + ctx.diagnostics.selectionWarnings + "x. Use 'id' targeting. Removal at v2.0.");
     }

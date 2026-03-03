@@ -281,7 +281,7 @@ illustrator_execute_script(
 | `ops_element` | Create / modify / delete shapes (rect, ellipse, line, polygon, star, text) |
 | `ops_group` | Group / ungroup, z-order, clipping masks |
 | `ops_layer` | Layer CRUD, fail-loud reference checks, `placement` pinning, `layer_list` |
-| `ops_style` | Fill, stroke, opacity |
+| `ops_style` | Fill, stroke, opacity — canonical nested color params with compat flat aliases |
 | `ops_text` | Text frame creation and styling |
 | `ops_align` | Alignment and distribution |
 | `ops_measure` | Assertions (count, bounds, exists, style, alignment, layer order), snapshots, repair mode |
@@ -325,13 +325,36 @@ For high-complexity layouts (50+ elements, multi-step operations), the SOC frame
 ```javascript
 var ops = [
     {task: 'element_create', params: {id: 'A1', type: 'rect', x: 100, y: 100, width: 50, height: 50}},
-    {task: 'style_set_fill', targets: {type: 'id', ids: ['A1']}, params: {r: 255, g: 0, b: 0}},
+    {task: 'style_set_fill', targets: {type: 'id', ids: ['A1']}, params: {fill: {r: 255, g: 0, b: 0}}},
+    {task: 'style_set_stroke', targets: {type: 'id', ids: ['A1']}, params: {stroke: {r: 0, g: 0, b: 0, width: 2}}},
     {task: 'assert_exists', params: {ids: ['A1']}}
 ];
 var report = executeOpBatch(ops, {strict: true, trace: true});
 ```
 
 Key capabilities: stable ID targeting (`@mcp:id=` in item.note), strict/continue error modes, `summaryOnly` for large batches, snapshot rollback, Python-side chunking for WebSocket limits, field evaluators for dynamic params, and op journaling for replay.
+
+### Canonical Color Parameters
+
+All style and text operations use a **canonical nested pattern** for color parameters:
+
+| Pattern | Example | Use |
+|---|---|---|
+| **Canonical nested** | `{fill: {r: 255, g: 0, b: 0}}` | Preferred — composable, future-proof |
+| **Flat compat** | `{r: 255, g: 0, b: 0}` | Backward-compatible alias |
+| **Disable sentinel** | `{fill: false}` | Remove fill/stroke entirely |
+
+Nested always wins over flat when both are present. The `false` sentinel is a hard-off — it bypasses any compat fallback.
+
+Applies to: `style_set_fill`, `style_set_stroke`, `element_create`, `text_create`, `text_set_style`.
+
+Stroke also accepts `width` inside the nested object:
+
+```json
+{"stroke": {"r": 0, "g": 0, "b": 255, "width": 3}}
+```
+
+Channel values are clamped to 0–255 via `_clampChannel`. Width of `0` is valid (hairline stroke).
 
 ### Abstraction Ladder
 

@@ -72,13 +72,10 @@ registerOpHandler("text_create", function (params, targets, ctx) {
             }
         }
 
-        if (params.fill || params.color) {
-            var c = params.fill || params.color;
-            var color = new RGBColor();
-            color.red = c.r || 0;
-            color.green = c.g || 0;
-            color.blue = c.b || 0;
-            textFrame.textRange.characterAttributes.fillColor = color;
+        // Color via canonical _parseColorParam (fill:{r,g,b} or flat r,g,b)
+        var parsedFill = _parseColorParam(params, "fill");
+        if (parsedFill.color) {
+            textFrame.textRange.characterAttributes.fillColor = parsedFill.color;
         }
     } catch (e) {
         // Styling may fail on empty text
@@ -154,13 +151,10 @@ registerOpHandler("text_set_style", function (params, targets, ctx) {
                 } catch (e) { }
             }
 
-            if (params.fill || params.color) {
-                var c = params.fill || params.color;
-                var color = new RGBColor();
-                color.red = c.r || 0;
-                color.green = c.g || 0;
-                color.blue = c.b || 0;
-                item.textRange.characterAttributes.fillColor = color;
+            // Color via canonical _parseColorParam (fill:{r,g,b} or flat r,g,b)
+            var parsedFill = _parseColorParam(params, "fill");
+            if (parsedFill.color) {
+                item.textRange.characterAttributes.fillColor = parsedFill.color;
             }
 
             if (params.tracking !== undefined) {

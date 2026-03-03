@@ -43,9 +43,13 @@ var _heapRebuildComplete = true;
 
 /**
  * Begin a transaction for a new batch.
+ * Eagerly rebuilds the heap index from the live DOM so that every batch
+ * starts with fresh COM refs (immune to cross-eval proxy staleness).
+ *
  * @param {string} batchId - Unique batch identifier
+ * @param {Object} [doc] - Optional document ref (avoids redundant app.activeDocument lookup)
  */
-function heapBeginTxn(batchId) {
+function heapBeginTxn(batchId, doc) {
     if (_heapTxn) {
         // Previous txn was not closed (crash recovery)
         // Discard silently - we can't trust the state
@@ -53,12 +57,34 @@ function heapBeginTxn(batchId) {
     }
     // Reset warnings for new batch
     _heapWarnings = [];
+
+    // REBUILD: eagerly refresh all COM refs from the live DOM.
+    // $.global persists COM proxy objects across ExtendScript eval boundaries.
+    // These proxies support property reads (.note, .typename) but throw PARM
+    // on DOM mutations (.move(), .duplicate()). Rebuilding ensures every ref
+    // is freshly obtained in the current eval context, safe for both reads
+    // and mutations. This replaces the previous clear-and-lazy-resync approach.
+    var rebuiltOk = false;
+    try {
+        var activeDoc = doc || app.activeDocument;
+        if (activeDoc) {
+            heapRebuildIndex(activeDoc);
+            rebuiltOk = true;
+        } else {
+            $.global.mcpHeap.index = {};
+        }
+    } catch (e) {
+        // No document open — start with empty index
+        $.global.mcpHeap.index = {};
+    }
+
     _heapTxn = {
         batchId: batchId || "unknown",
         added: {},       // uuid -> ref (items registered this txn)
         deleted: {},     // uuid -> ref (items tombstoned this txn)
         tomb: {},        // uuid -> true (fast tombstone lookup)
-        resyncUsed: false
+        // Skip redundant mid-batch resync if we already rebuilt at batch start
+        resyncUsed: rebuiltOk
     };
 }
 
@@ -154,6 +180,40 @@ function heapRegister(uuid, ref) {
 function stampMcpId(item, id) {
     item.note = "@mcp:id=" + id;
     heapRegister(id, item);
+}
+
+/**
+ * Compatibility resolver: heap-first, scan-fallback with self-heal.
+ * Tries heap resolution first (O(1)), falls back to linear scan if
+ * the item was stamped without heapRegister (e.g. geo_boolean.jsx).
+ * On fallback hit, self-heals by registering the item in the heap.
+ * @param {string} id - MCP ID to resolve
+ * @param {Object} doc - Document reference
+ * @returns {Object|null} PageItem or null
+ */
+function resolveIdCompat(id, doc, opts) {
+    opts = opts || {};
+
+    // freshScan: bypass heap entirely — needed for mutation-critical handlers
+    // (heap refs from $.global persist across eval contexts and can't be used
+    //  for DOM mutations like .move() even though property reads still work)
+    if (!opts.freshScan) {
+        // 1. Try heap (fast path)
+        var item = heapResolve(id, doc);
+        if (item) return item;
+    }
+
+    // 2. Fallback (or fresh): linear scan + self-heal
+    var allItems = doc.pageItems;
+    for (var ri = 0; ri < allItems.length; ri++) {
+        try {
+            if (allItems[ri].note && allItems[ri].note.indexOf("@mcp:id=" + id) >= 0) {
+                heapRegister(id, allItems[ri]);
+                return allItems[ri];
+            }
+        } catch (e) { /* some items may not support .note */ }
+    }
+    return null;
 }
 
 /**

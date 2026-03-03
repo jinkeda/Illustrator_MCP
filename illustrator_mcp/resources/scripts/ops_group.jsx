@@ -137,6 +137,7 @@ registerOpHandler("clip_create", function (params, targets, ctx) {
     var contentIds = params.contents;
     var dryRun = params.dryRun === true;
     var duplicateMask = params.duplicate_mask !== false;  // default true
+    var warnings = [];
 
     if (!maskId) {
         return makeError(
@@ -209,6 +210,23 @@ registerOpHandler("clip_create", function (params, targets, ctx) {
     var parent = maskItem.parent;
     var parentType = parent.typename || "unknown";
     var parentName = parent.name || "";
+
+    // ── Validate: warn if content items are on different parents ──
+    for (var pi = 0; pi < contents.length; pi++) {
+        try {
+            var cParent = contents[pi].parent;
+            if (cParent !== parent) {
+                warnings.push(
+                    "Content item '" + contentIds[pi] + "' is on " +
+                    (cParent.typename || "unknown") + " '" +
+                    (cParent.name || "<unnamed>") +
+                    "' but mask is on " + parentType + " '" +
+                    (parentName || "<unnamed>") +
+                    "'. Cross-parent clipping may produce unexpected results."
+                );
+            }
+        } catch (pe) { /* parent access may fail for some item types */ }
+    }
 
     // ── dryRun: return plan without mutation ───────────────────────
     if (dryRun) {
@@ -283,11 +301,41 @@ registerOpHandler("clip_create", function (params, targets, ctx) {
 
         } else {
             // ── duplicate_mask=false path (original behavior) ─────
+            // Warn if mask has visible styling that will be lost
+            var hasFill = false;
+            var hasStroke = false;
+            try { hasFill = maskItem.filled; } catch (e2) { }
+            try { hasStroke = maskItem.stroked; } catch (e3) { }
+            if (hasFill || hasStroke) {
+                warnings.push(
+                    "duplicate_mask=false: mask '" + maskId +
+                    "' has visible " +
+                    (hasFill && hasStroke ? "fill and stroke" :
+                        hasFill ? "fill" : "stroke") +
+                    " that will become invisible as clip path. " +
+                    "Use duplicate_mask=true to preserve visible boundary."
+                );
+            }
+
             // Position group at mask's z-location (before mask)
             group.move(maskItem, ElementPlacement.PLACEBEFORE);
 
             // Move mask into group first (topmost = clipping path)
             maskItem.move(group, ElementPlacement.PLACEATBEGINNING);
+
+            // Strip @mcp:id from consumed mask — it's now a structural
+            // clip path, not a user-visible element. Prevents phantom
+            // references in query_items and VLM annotations.
+            // NOTE: the mask's original MCP ID is no longer valid after
+            // this point. Callers should reference the clip group ID instead.
+            try {
+                maskItem.note = "";
+                heapTombstone(maskId);  // Remove stale heap reference
+                warnings.push(
+                    "Mask '" + maskId + "' consumed into clip group (ID no longer valid). " +
+                    "Use clip group ID '" + groupId + "' to reference this clip."
+                );
+            } catch (e4) { }
 
             // Move content items into group (reverse order preserves stacking)
             for (var k2 = contents.length - 1; k2 >= 0; k2--) {
@@ -306,6 +354,7 @@ registerOpHandler("clip_create", function (params, targets, ctx) {
         return {
             ok: true,
             id: groupId,
+            warnings: warnings,
             data: {
                 itemCount: group.pageItems.length,
                 maskType: maskType,

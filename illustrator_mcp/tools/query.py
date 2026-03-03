@@ -35,10 +35,15 @@ class QueryItemsInput(ToolInputBase):
     - {"type": "intersection", "selectors": [...]} - Intersection of selectors
     
     Example payloads from living_test.md can be used directly.
+    
+    NOTE: Both 'target' and 'targets' are accepted as parameter names.
     """
+
+    model_config = {"populate_by_name": True}
 
     targets: Dict[str, Any] = Field(
         default={"type": "selection"},
+        alias="target",
         description=(
             "Task Protocol target selector. Examples: "
             "{'type': 'selection'}, "

@@ -17,6 +17,67 @@
  * @version 1.1.0
  */
 
+// ==================== Shared Color Helpers ====================
+
+/**
+ * Clamp an RGB channel value to 0-255 (integer).
+ * @param {number} v
+ * @returns {number}
+ */
+function _clampChannel(v) {
+    if (v < 0) return 0;
+    if (v > 255) return 255;
+    return Math.round(v);
+}
+
+/**
+ * Parse color from canonical nested or compat flat params.
+ *
+ * Priority:  params[key] → flat r/g/b → null
+ * Sentinels: false/null = "disable" (hard off, beats compat fallback)
+ * Validation: strict for nested (empty object = error), lenient for flat (default 0)
+ *
+ * Available to ops_text.jsx via include load order.
+ *
+ * @param {Object} params - handler params
+ * @param {string} key - "fill" or "stroke"
+ * @returns {{ color: RGBColor|null, disable: boolean, error: string|null }}
+ */
+function _parseColorParam(params, key) {
+    var src = params[key];
+
+    // ── Sentinel: explicit disable ──
+    if (src === false || src === null) {
+        return { color: null, disable: true, error: null };
+    }
+
+    // ── Canonical nested: strict validation ──
+    if (src && typeof src === "object") {
+        if (src.r == null && src.g == null && src.b == null) {
+            return {
+                color: null, disable: false,
+                error: key + " object provided but missing r/g/b channels"
+            };
+        }
+        var c = new RGBColor();
+        c.red = _clampChannel(src.r != null ? src.r : 0);
+        c.green = _clampChannel(src.g != null ? src.g : 0);
+        c.blue = _clampChannel(src.b != null ? src.b : 0);
+        return { color: c, disable: false, error: null };
+    }
+
+    // ── Compat flat: lenient (default 0) ──
+    if (params.r != null || params.g != null || params.b != null) {
+        var c2 = new RGBColor();
+        c2.red = _clampChannel(params.r != null ? params.r : 0);
+        c2.green = _clampChannel(params.g != null ? params.g : 0);
+        c2.blue = _clampChannel(params.b != null ? params.b : 0);
+        return { color: c2, disable: false, error: null };
+    }
+
+    return { color: null, disable: false, error: null };
+}
+
 // ==================== Style Set Fill ====================
 
 registerOpHandler("style_set_fill", function (params, targets, ctx) {
@@ -24,30 +85,34 @@ registerOpHandler("style_set_fill", function (params, targets, ctx) {
         return { ok: true, data: { modified: 0 }, warnings: ["No targets to style"] };
     }
 
+    var parsed = _parseColorParam(params, "fill");
+
+    // Disable sentinel: remove fill
+    if (parsed.disable) {
+        var removed = 0;
+        for (var d = 0; d < targets.length; d++) {
+            try { targets[d].filled = false; removed++; } catch (e) { }
+        }
+        return { ok: true, data: { modified: removed } };
+    }
+
+    // Validation error (e.g., empty object)
+    if (parsed.error) {
+        return makeError(ErrorCodes.V_INVALID_PARAM_VALUE || "V009", parsed.error, "validate");
+    }
+
+    // No color provided
+    if (!parsed.color) {
+        return makeError(ErrorCodes.V_MISSING_REQUIRED_PARAM,
+            "Missing color: use fill:{r,g,b} or flat r,g,b", "validate");
+    }
+
     var modified = 0;
     var warnings = [];
 
-    // Parse color
-    var color = null;
-    if (params.r != null || params.g != null || params.b != null) {
-        color = new RGBColor();
-        color.red = (params.r != null) ? params.r : 0;
-        color.green = (params.g != null) ? params.g : 0;
-        color.blue = (params.b != null) ? params.b : 0;
-    } else if (params.color) {
-        color = new RGBColor();
-        color.red = (params.color.r != null) ? params.color.r : 0;
-        color.green = (params.color.g != null) ? params.color.g : 0;
-        color.blue = (params.color.b != null) ? params.color.b : 0;
-    }
-
-    if (!color) {
-        return makeError(ErrorCodes.V_MISSING_REQUIRED_PARAM, "Missing color params (r, g, b)", "apply");
-    }
-
     for (var i = 0; i < targets.length; i++) {
         try {
-            targets[i].fillColor = color;
+            targets[i].fillColor = parsed.color;
             targets[i].filled = true;
             modified++;
         } catch (e) {
@@ -65,29 +130,37 @@ registerOpHandler("style_set_stroke", function (params, targets, ctx) {
         return { ok: true, data: { modified: 0 }, warnings: ["No targets to style"] };
     }
 
+    var parsed = _parseColorParam(params, "stroke");
+
+    // Disable sentinel: remove stroke
+    if (parsed.disable) {
+        var removed = 0;
+        for (var d = 0; d < targets.length; d++) {
+            try { targets[d].stroked = false; removed++; } catch (e) { }
+        }
+        return { ok: true, data: { modified: removed } };
+    }
+
+    // Validation error
+    if (parsed.error) {
+        return makeError(ErrorCodes.V_INVALID_PARAM_VALUE || "V009", parsed.error, "validate");
+    }
+
+    // Stroke width: nested > flat > default  (use != null so 0 is valid)
+    var strokeWidth = 1; // default
+    if (params.stroke && typeof params.stroke === "object" && params.stroke.width != null) {
+        strokeWidth = params.stroke.width;
+    } else if (params.width != null) {
+        strokeWidth = params.width;
+    }
+
     var modified = 0;
     var warnings = [];
 
-    // Parse color
-    var color = null;
-    if (params.r !== undefined || params.g !== undefined || params.b !== undefined) {
-        color = new RGBColor();
-        color.red = params.r || 0;
-        color.green = params.g || 0;
-        color.blue = params.b || 0;
-    } else if (params.color) {
-        color = new RGBColor();
-        color.red = params.color.r || 0;
-        color.green = params.color.g || 0;
-        color.blue = params.color.b || 0;
-    }
-
-    var strokeWidth = params.width || 1;
-
     for (var i = 0; i < targets.length; i++) {
         try {
-            if (color) {
-                targets[i].strokeColor = color;
+            if (parsed.color) {
+                targets[i].strokeColor = parsed.color;
             }
             targets[i].stroked = true;
             targets[i].strokeWidth = strokeWidth;

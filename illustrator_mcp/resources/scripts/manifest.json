@@ -261,6 +261,7 @@
                 "heapRollbackTxn",
                 "heapRegister",
                 "stampMcpId",
+                "resolveIdCompat",
                 "heapTombstone",
                 "heapDelete",
                 "heapResolve",

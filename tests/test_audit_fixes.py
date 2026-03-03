@@ -128,25 +128,31 @@ class TestOpClassModuleScope:
 
 
 class TestColorChannelGuard:
-    """Color channels use != null, not ||."""
+    """Canonical color param parsing uses != null, not ||."""
 
-    def test_no_or_for_color_channels(self):
-        """ops_style.jsx uses != null for RGB, not ||."""
+    def test_parse_helper_exists(self):
+        """_parseColorParam helper is defined in ops_style.jsx."""
         content = OPS_STYLE.read_text(encoding="utf-8")
-        # Find the style_set_fill handler
-        fill_start = content.find('registerOpHandler("style_set_fill"')
-        assert fill_start != -1
-        fill_block = content[fill_start:fill_start + 600]
+        assert "function _parseColorParam(" in content
 
+    def test_clamp_helper_exists(self):
+        """_clampChannel helper is defined in ops_style.jsx."""
+        content = OPS_STYLE.read_text(encoding="utf-8")
+        assert "function _clampChannel(" in content
+
+    def test_helper_uses_null_safe_checks(self):
+        """_parseColorParam uses != null for channel extraction, not ||."""
+        content = OPS_STYLE.read_text(encoding="utf-8")
+        helper_start = content.find("function _parseColorParam(")
+        assert helper_start != -1
+        helper_end = content.find("\nfunction ", helper_start + 1)
+        helper_block = content[helper_start:helper_end] if helper_end > 0 else content[helper_start:]
+
+        # Should use != null pattern
+        assert "!= null" in helper_block, "Must use != null for channel checks"
         # Should NOT have params.r || 0 pattern
-        assert "params.r || 0" not in fill_block, "Use != null, not ||"
-        assert "params.g || 0" not in fill_block
-        assert "params.b || 0" not in fill_block
-
-        # Should have != null pattern
-        assert "params.r != null" in fill_block
-        assert "params.g != null" in fill_block
-        assert "params.b != null" in fill_block
+        assert "params.r || 0" not in helper_block
+        assert "src.r || 0" not in helper_block
 
 
 # ==================== PR-E Tests ====================

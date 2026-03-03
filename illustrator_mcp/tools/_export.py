@@ -95,17 +95,9 @@ async def illustrator_export_document(params: ExportDocumentInput) -> Union[str,
             if check_response.get("error"):
                 warnings.append(f"Pre-export check failed: {check_response['error']}")
             else:
-                # CEP returns {"success": bool, "result": "JSON string"}
-                cep_result = check_response.get("result", {})
-                if isinstance(cep_result, str):
-                    cep_result = json.loads(cep_result)
-
-                # Extract inner result (the actual validation data)
-                inner_result = cep_result.get("result", "{}")
-                if isinstance(inner_result, str):
-                    count = json.loads(inner_result)
-                else:
-                    count = inner_result
+                # Use shared unwrapper to handle all bridge response formats
+                from illustrator_mcp.utils.response import unwrap_jsx_result
+                count = unwrap_jsx_result(check_response, context="export_precheck")
 
                 if count.get('on_artboard', 0) == 0:
                     bt = count.get('bounds_type', 'visible')

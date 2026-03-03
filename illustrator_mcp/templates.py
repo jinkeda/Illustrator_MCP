@@ -36,6 +36,9 @@ class _CompatTemplate:
 
 def _build_create_document(width, height, color_space, title_line=""):
     body = f"""
+        // Invalidate heap — previous document's DOM references are stale
+        if ($.global.mcpHeap) $.global.mcpHeap = {{index: {{}}, docName: null}};
+
         var preset = new DocumentPreset();
         preset.width = {width};
         preset.height = {height};

@@ -230,6 +230,8 @@ function validateOpParams(task, params) {
                 var expected = schema.types[key];
                 var actual = getValueType(params[key]);
                 if (actual !== "null" && actual !== expected) {
+                    // Allow false sentinel for object-typed params (disable pattern)
+                    if (expected === "object" && params[key] === false) continue;
                     errors.push({
                         code: ErrorCodes.V_INVALID_PARAM_TYPE || "V007",
                         message: "Parameter '" + key + "' expected " + expected + ", got " + actual,
