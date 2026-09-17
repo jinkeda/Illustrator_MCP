@@ -1,7 +1,7 @@
 /**
  * targets.jsx - Declarative Target Selection & Filtering
  * Part of Illustrator MCP Standard Library
- * @version 1.0.0
+ * @version 1.1.0
  *
  * Provides:
  * - sortItems (deterministic ordering)
@@ -183,16 +183,20 @@ function findLayer(doc, layerName) {
  * @param {boolean} recursive
  * @returns {Array<PageItem>}
  */
-function collectContainerItems(container, recursive) {
+function collectContainerItems(container, recursive, scan) {
     var items = [];
     if (!container || !container.pageItems) return items;
 
     for (var i = 0; i < container.pageItems.length; i++) {
+        if (scan && scan.limit && ++scan.visited > scan.limit) {
+            throwStructured(makeError(ErrorCodes.V_INCOMPLETE_SCAN, "Target scan budget exhausted", "resolve", null,
+                {scanned:scan.limit, complete:false, nextStep:"Narrow layer/scope or raise maxScan"}));
+        }
         var item = container.pageItems[i];
         items.push(item);
 
         if (recursive && item.typename === "GroupItem") {
-            items = items.concat(collectContainerItems(item, true));
+            items = items.concat(collectContainerItems(item, true, scan));
         }
     }
     return items;
@@ -204,8 +208,8 @@ function collectContainerItems(container, recursive) {
  * @param {boolean} [recursive] - Include nested group items
  * @returns {Array<PageItem>}
  */
-function collectLayerItems(layer, recursive) {
-    return collectContainerItems(layer, recursive);
+function collectLayerItems(layer, recursive, scan) {
+    return collectContainerItems(layer, recursive, scan);
 }
 
 /**
@@ -214,7 +218,7 @@ function collectLayerItems(layer, recursive) {
  * @param {Object} query - {layer, itemType, pattern, recursive}
  * @returns {Array<PageItem>}
  */
-function queryItems(doc, query) {
+function queryItems(doc, query, scan) {
     var items = [];
     var layerFilter = query.layer;
     var typeFilter = query.itemType;
@@ -240,7 +244,7 @@ function queryItems(doc, query) {
 
     for (var i = 0; i < layers.length; i++) {
         if (!layers[i]) continue;
-        var layerItems = collectLayerItems(layers[i], query.recursive || false);
+        var layerItems = collectLayerItems(layers[i], query.recursive || false, scan);
 
         for (var j = 0; j < layerItems.length; j++) {
             var item = layerItems[j];
@@ -251,6 +255,10 @@ function queryItems(doc, query) {
             // Name filter
             if (regex && !regex.test(item.name || "")) continue;
 
+            if (query.contents !== undefined && query.contents !== null) {
+                if (item.typename !== "TextFrame") continue;
+                if (String(item.contents).replace(/\r\n|\n/g, "\r") !== query.contents.replace(/\r\n|\n/g, "\r")) continue;
+            }
             items.push(item);
         }
     }
@@ -341,14 +349,15 @@ function spatialScanFilter(item) {
  *
  * @param {Document} doc
  * @param {string|null} layerFilter - Optional layer name to restrict scan
+ * @param {Object} scan - Optional shared {limit, visited} traversal budget
  * @returns {Array<{item: PageItem, cx: number, cy: number, L: number, T: number, R: number, B: number}>}
  */
-function collectSpatialCandidatesWithBounds(doc, layerFilter) {
+function collectSpatialCandidatesWithBounds(doc, layerFilter, scan) {
     var result = [];
     for (var i = 0; i < doc.layers.length; i++) {
         if (!doc.layers[i].visible) continue;
         if (layerFilter && doc.layers[i].name !== layerFilter) continue;  // P0: early layer filter
-        var layerItems = collectLayerItems(doc.layers[i], true);
+        var layerItems = collectLayerItems(doc.layers[i], true, scan);
         for (var j = 0; j < layerItems.length; j++) {
             if (!spatialScanFilter(layerItems[j])) continue;
             try {
@@ -461,6 +470,163 @@ function throwStructured(envelope) {
 }
 
 /**
+ * Normalize both the public TargetSelector wrapper and the legacy unwrapped
+ * selector.  Every caller uses this one path for defaults, exclusions,
+ * ordering and scan bounds.
+ *
+ * @param {Object|null} selector
+ * @returns {Object} {target, orderBy, exclude, maxScan}
+ */
+function _selectorKeys(value, keys, label) {
+    if (!value || typeof value !== "object" || value instanceof Array) {
+        throwStructured(makeError(ErrorCodes.V_INVALID_TARGETS, label + " must be an object", "resolve"));
+    }
+    for (var key in value) {
+        if (Object.prototype.hasOwnProperty.call(value, key) && keys.indexOf(key) < 0) {
+            if (key === "expect") throwStructured(makeError(ErrorCodes.V_INVALID_TARGETS,
+                "Move expect to the outer TargetSelector", "resolve", null,
+                {nextStep:"Move expect outside target and anyOf children"}));
+            throwStructured(makeError(ErrorCodes.V_INVALID_TARGETS,
+                "Unknown " + label + " field '" + key + "'. Allowed: " + keys.join(", "), "resolve"));
+        }
+    }
+}
+
+function normalizeTargetSelector(selector) {
+    var depth = arguments.length > 1 ? arguments[1] : 0;
+    if (depth > 16) throwStructured(makeError(ErrorCodes.V_INVALID_TARGETS, "Selector exceeds 16 compound levels", "resolve"));
+    selector = selector || { type: "selection" };
+    if (typeof selector !== "object" || selector instanceof Array) {
+        throwStructured(makeError(ErrorCodes.V_INVALID_TARGETS,
+            "Target selector must be an object", "resolve"));
+    }
+
+    var wrapped = selector.target !== undefined;
+    if (wrapped) _selectorKeys(selector, ["target", "orderBy", "exclude", "maxScan", "expect"], "selector");
+    var target = wrapped ? selector.target : selector;
+    if (!target || typeof target !== "object" || target instanceof Array) {
+        throwStructured(makeError(ErrorCodes.V_INVALID_TARGETS,
+            "Target selector.target must be an object", "resolve"));
+    }
+
+    var type = target.type || "selection";
+    var allowed = {
+        selection: true, all: true, layer: true, query: true, id: true,
+        spatial: true, grid: true, compound: true, handle: true
+    };
+    if (!allowed[type]) {
+        throwStructured(makeError(ErrorCodes.V_UNKNOWN_TARGET_TYPE,
+            "Unknown target type: " + type, "resolve"));
+    }
+    var fields = {
+        selection: [], all: ["recursive"], layer: ["layer", "recursive"],
+        query: ["layer", "itemType", "pattern", "contents", "recursive"], id: ["ids"],
+        handle: ["handles"], spatial: ["within", "outside", "nearTo", "coord", "layer"],
+        grid: ["cell", "cols", "rows", "layer"], compound: ["anyOf", "exclude"]
+    };
+    _selectorKeys(target, ["type"].concat(fields[type]).concat(wrapped ? [] : ["orderBy", "exclude", "maxScan", "expect"]), "target");
+    if (target.recursive !== undefined && typeof target.recursive !== "boolean") {
+        throwStructured(makeError(ErrorCodes.V_INVALID_TARGETS, "target.recursive must be boolean", "resolve"));
+    }
+    var filters = [target.exclude, wrapped ? selector.exclude : null];
+    for (var fi = 0; fi < filters.length; fi++) {
+        if (filters[fi] != null) {
+            _selectorKeys(filters[fi], ["locked", "hidden", "guides", "clipped"], "exclude");
+            for (var fk in filters[fi]) {
+                if (typeof filters[fi][fk] !== "boolean") {
+                    throwStructured(makeError(ErrorCodes.V_INVALID_TARGETS, "exclude." + fk + " must be boolean", "resolve"));
+                }
+            }
+        }
+    }
+    if (type === "spatial") {
+        if (target.within != null) _selectorKeys(target.within, ["x", "y", "width", "height"], "within");
+        if (target.outside != null) _selectorKeys(target.outside, ["x", "y", "width", "height"], "outside");
+        if (target.nearTo != null) _selectorKeys(target.nearTo, ["id", "radius"], "nearTo");
+    }
+    target.type = type;
+
+    if (type === "layer" && (typeof target.layer !== "string" || !target.layer)) {
+        throwStructured(makeError(ErrorCodes.V_MISSING_REQUIRED_PARAM,
+            "Layer target requires a non-empty layer name", "resolve"));
+    }
+    if (type === "query" && !target.layer && !target.itemType && !target.pattern && target.contents == null) {
+        throwStructured(makeError(ErrorCodes.V_INVALID_TARGETS,
+            "Query target requires layer, itemType, pattern, or contents", "resolve"));
+    }
+    if (type === "id" && (!(target.ids instanceof Array) || target.ids.length === 0)) {
+        throwStructured(makeError(ErrorCodes.V_MISSING_REQUIRED_PARAM,
+            "ID target requires a non-empty ids array", "resolve"));
+    }
+    if (type === "handle" && (!(target.handles instanceof Array) || target.handles.length === 0)) {
+        throwStructured(makeError(ErrorCodes.V_MISSING_REQUIRED_PARAM,
+            "Handle target requires a non-empty handles array", "resolve"));
+    }
+    if (type === "compound" && (!(target.anyOf instanceof Array) || target.anyOf.length === 0)) {
+        throwStructured(makeError(ErrorCodes.V_MISSING_REQUIRED_PARAM,
+            "Compound target requires a non-empty anyOf array", "resolve"));
+    }
+    if (type === "compound") {
+        for (var ci = 0; ci < target.anyOf.length; ci++) {
+            var child = target.anyOf[ci];
+            if (!child || child.target !== undefined) {
+                throwStructured(makeError(ErrorCodes.V_INVALID_TARGETS, "compound.anyOf requires target objects", "resolve"));
+            }
+            normalizeTargetSelector(child, depth + 1);
+        }
+    }
+
+    var expect = wrapped ? selector.expect : target.expect;
+    if ((depth > 0 && expect !== undefined) || (wrapped && target.expect !== undefined)) {
+        throwStructured(makeError(ErrorCodes.V_INVALID_TARGETS, "Move expect to the outer TargetSelector", "resolve", null,
+            {nextStep: "Move expect outside target and anyOf children"}));
+    }
+    if (expect !== undefined && expect !== null) {
+        _selectorKeys(expect, ["count"], "expect");
+        if (typeof expect.count !== "number" || !isFinite(expect.count) || expect.count < 0 || expect.count !== Math.floor(expect.count))
+            throwStructured(makeError(ErrorCodes.V_INVALID_TARGETS, "expect.count must be a nonnegative integer", "resolve"));
+    }
+    if (target.contents !== undefined && target.contents !== null && typeof target.contents !== "string")
+        throwStructured(makeError(ErrorCodes.V_INVALID_TARGETS, "contents must be a string", "resolve"));
+    var orderBy = wrapped ? (selector.orderBy || "zOrder") : (target.orderBy || "zOrder");
+    var orders = {
+        zOrder: true, zOrderReverse: true, reading: true, column: true,
+        name: true, positionX: true, positionY: true, area: true
+    };
+    if (!orders[orderBy]) {
+        throwStructured(makeError(ErrorCodes.V_INVALID_PARAM_VALUE,
+            "Unknown target orderBy: " + orderBy, "resolve"));
+    }
+
+    var maxScan = wrapped ? selector.maxScan : target.maxScan;
+    if (maxScan !== undefined &&
+        (typeof maxScan !== "number" || maxScan <= 0 || maxScan !== Math.floor(maxScan))) {
+        throwStructured(makeError(ErrorCodes.V_INVALID_PARAM_VALUE,
+            "Target maxScan must be a positive integer", "resolve"));
+    }
+
+    return {
+        target: target,
+        orderBy: orderBy,
+        exclude: wrapped ? (selector.exclude || null) : (target.exclude || null),
+        maxScan: maxScan || 0, expect: expect
+    };
+}
+
+/** Remove duplicate object references while retaining first-seen order. */
+function dedupeTargetItems(items) {
+    var out = [];
+    for (var i = 0; i < items.length; i++) {
+        var duplicate = false;
+        for (var j = 0; j < out.length; j++) {
+            if (out[j] === items[i]) { duplicate = true; break; }
+        }
+        if (!duplicate) out.push(items[i]);
+    }
+    return out;
+}
+
+/**
  * Declarative target selection (v2.3)
  * Recursively collects items from targets.
  * NOTE: Global filtering and ordering are handled in executeTask.
@@ -469,59 +635,112 @@ function throwStructured(envelope) {
  * @param {Object} target - Target definition (unwrapped)
  * @returns {Array<PageItem>}
  */
-function collectTargets(doc, target) {
-    if (!target) target = { type: "selection" };
-    var type = target.type || "selection";
+function collectTargets(doc, target, opts) {
+    // `opts.report` collects facts the caller must be told about but that do
+    // not justify aborting — currently the requested IDs that matched nothing.
+    if (opts && opts.report && !(opts.report.unresolvedIds instanceof Array)) {
+        opts.report.unresolvedIds = [];
+    }
+    var normalized = normalizeTargetSelector(target);
+    opts = opts || {};
+    if (normalized.expect) opts.requireIdentities = true;
+    var scan = opts.scan || {limit:normalized.maxScan, visited:0};
+    opts.scan = scan;
+    target = normalized.target;
+    var type = target.type;
     var items = [];
 
     // Collection
     if (type === "selection") {
-        items = selectionToArray(doc.selection);
+        // A managed batch captures selection once. Later operations use that
+        // same object set even if Illustrator changes its live selection.
+        items = (opts && opts.startingSelection)
+            ? opts.startingSelection.slice()
+            : selectionToArray(doc.selection);
+        scan.visited += items.length;
+        if (scan.limit && scan.visited > scan.limit) {
+            throwStructured(makeError(ErrorCodes.V_INCOMPLETE_SCAN, "Target scan budget exhausted", "resolve", null,
+                {scanned:scan.limit, complete:false, nextStep:"Narrow scope or raise maxScan"}));
+        }
     }
     else if (type === "all") {
         for (var i = 0; i < doc.layers.length; i++) {
-            items = items.concat(collectLayerItems(doc.layers[i], target.recursive));
+            items = items.concat(collectLayerItems(doc.layers[i], target.recursive, scan));
         }
     }
     else if (type === "layer") {
         var layerName = target.layer;
         var layer = findLayer(doc, layerName);
         if (!layer) throw new Error("Layer not found: " + layerName);
-        items = collectLayerItems(layer, target.recursive);
+        items = collectLayerItems(layer, target.recursive, scan);
     }
     else if (type === "query") {
-        items = queryItems(doc, target);
+        items = queryItems(doc, target, scan);
     }
     else if (type === "id") {
-        // ID-based targeting: stable O(1) resolution
+        // Exact, duplicate-aware lookup. A heap hit alone cannot prove that a
+        // second item with the same stamped ID does not exist.
         var ids = target.ids || [];
-        if (ids.length === 0) return items;
-
-        // Prefer heap (Phase 2+) for identity-verified resolution
-        if (typeof heapResolveMany === "function") {
-            items = heapResolveMany(doc, ids);
-            // If no txn active and nothing found, try one explicit rebuild
-            if (items.length === 0 && ids.length > 0 && typeof heapRebuildIndex === "function") {
-                heapRebuildIndex(doc);
-                items = heapResolveMany(doc, ids);
+        for (var idi = 0; idi < ids.length; idi++) {
+            if (typeof ids[idi] !== "string" || !ids[idi]) {
+                throwStructured(makeError(ErrorCodes.V_INVALID_PARAM_TYPE,
+                    "Target IDs must be non-empty strings", "resolve"));
+            }
+            if (scan.limit && scan.visited >= scan.limit) {
+                throwStructured(makeError(ErrorCodes.V_INCOMPLETE_SCAN, "Target scan budget exhausted", "resolve", null,
+                    {scanned:scan.visited, complete:false, nextStep:"Narrow scope or raise maxScan"}));
+            }
+            var found = findItemsByMcpId(doc, ids[idi], { limit: scan.limit ? scan.limit - scan.visited : 0 });
+            scan.visited += found.scanned;
+            if (found.truncated) {
+                throwStructured(makeError(ErrorCodes.V_INCOMPLETE_SCAN || "V013",
+                    "ID scan was capped before identity could be proven: " + ids[idi],
+                    "resolve", null,
+                    { id: ids[idi], scanned: scan.visited, complete: false, nextStep: "Narrow scope or raise maxScan" }));
+            }
+            if (found.duplicate) {
+                throwStructured(makeError(ErrorCodes.V_AMBIGUOUS_ID || "V012",
+                    "Ambiguous MCP ID matched " + found.items.length + " items: " + ids[idi],
+                    "resolve", null, { id: ids[idi], matches: found.items.length }));
+            }
+            if (found.items.length === 1) {
+                items.push(found.items[0]);
+            } else {
+                // A requested ID that matched nothing. Duplicates and capped
+                // scans throw above; a MISSING id used to be dropped in
+                // silence, so styling ["S0","GHOST"] reported ok/complete with
+                // no mention of GHOST anywhere — the caller could not tell
+                // that one of its targets never existed.
+                //
+                // It is not thrown, because asking to act on whichever of a
+                // set still exists is legitimate. It is REPORTED instead, and
+                // the caller decides.
+                if (opts.requireIdentities) throwStructured(makeError(ErrorCodes.R_ELEMENT_NOT_FOUND,
+                    "Requested ID does not exist: " + ids[idi], "resolve", null,
+                    {nextStep: "Query again for a current identity"}));
+                if (opts && opts.report) opts.report.unresolvedIds.push(ids[idi]);
             }
         }
-        // Last resort: full document scan
-        else {
-            var allItems = [];
-            for (var k = 0; k < doc.layers.length; k++) {
-                allItems = allItems.concat(collectLayerItems(doc.layers[k], true));
+    }
+    else if (type === "handle") {
+        if (typeof mcpResolveHandle !== "function") {
+            throwStructured(makeError(ErrorCodes.R_COLLECT_FAILED,
+                "Artwork handle resolver is unavailable", "resolve"));
+        }
+        var handles = target.handles || [];
+        for (var hdi = 0; hdi < handles.length; hdi++) {
+            var handleResult = mcpResolveHandle(handles[hdi], doc, {scan:scan});
+            if (handleResult.status === "incomplete") {
+                throwStructured(makeError(ErrorCodes.V_INCOMPLETE_SCAN, "Handle scan budget exhausted", "resolve", null,
+                    {scanned:scan.visited, complete:false, nextStep:"Narrow scope or raise maxScan"}));
             }
-            for (var m = 0; m < allItems.length; m++) {
-                try {
-                    if (allItems[m].note) {
-                        var match = allItems[m].note.match(/@mcp:id=([^\s@]+)/);
-                        if (match && ids.indexOf(match[1]) >= 0) {
-                            items.push(allItems[m]);
-                        }
-                    }
-                } catch (e) { /* some items may not support .note */ }
+            if (!handleResult.ok) {
+                throwStructured(makeError(ErrorCodes.V_INVALID_TARGETS,
+                    "Artwork handle could not be resolved: " + handles[hdi] +
+                    " (" + handleResult.status + ")", "resolve", null,
+                    { handle: handles[hdi], status: handleResult.status }));
             }
+            items.push(handleResult.item);
         }
     }
     else if (type === "spatial") {
@@ -552,7 +771,7 @@ function collectTargets(doc, target) {
         }
 
         // One-pass scan with snapshotted bounds + early layer filter
-        var candidatesWB = collectSpatialCandidatesWithBounds(doc, target.layer || null);
+        var candidatesWB = collectSpatialCandidatesWithBounds(doc, target.layer || null, scan);
 
         // Spatial predicates are combined as OR (union):
         // - within + nearTo → items inside rect OR near reference
@@ -625,10 +844,10 @@ function collectTargets(doc, target) {
             }
             // Resolve reference item
             var refItems;
-            if (typeof heapResolveMany === "function") {
+            if (!scan.limit && typeof heapResolveMany === "function") {
                 refItems = heapResolveMany(doc, [hasNearTo.id]);
             } else {
-                refItems = collectTargets(doc, { type: "id", ids: [hasNearTo.id] });
+                refItems = collectTargets(doc, { type: "id", ids: [hasNearTo.id], maxScan: normalized.maxScan }, opts);
             }
             if (!refItems || refItems.length === 0) {
                 throwStructured(makeError(ErrorCodes.SP_REF_NOT_FOUND,
@@ -693,16 +912,16 @@ function collectTargets(doc, target) {
                 String.fromCharCode(64 + (target.rows || 4)) + (target.cols || 4),
                 "collect"));
         }
-        return collectTargets(doc, {
+        items = collectTargets(doc, {
             type: "spatial", within: cell, coord: "user",
             layer: target.layer  // optional layer filter passthrough
-        });
+        }, opts);
     }
     else if (type === "compound") {
         if (target.anyOf) {
             for (var j = 0; j < target.anyOf.length; j++) {
                 // Recursively collect sub-targets and concatenate
-                items = items.concat(collectTargets(doc, target.anyOf[j]));
+                items = items.concat(collectTargets(doc, target.anyOf[j], opts));
             }
         }
         // Apply exclusion filter specific to this compound target
@@ -714,6 +933,28 @@ function collectTargets(doc, target) {
         throw new Error("Unknown target type: " + type);
     }
 
+    items = dedupeTargetItems(items);
+    if (normalized.exclude) items = filterItems(items, normalized.exclude);
+    items = sortItems(items, normalized.orderBy);
+
+    if (normalized.expect && items.length !== normalized.expect.count) {
+        var candidates = [];
+        for (var ei = 0; ei < items.length && ei < 20; ei++) {
+            var candidate = {type: items[ei].typename, name: String(items[ei].name || "").substr(0, 200)};
+            try {
+                if (typeof mcpIssueHandle === "function" && typeof mcpDocBind === "function") {
+                    var binding = mcpDocBind({label:"target_candidates"});
+                    var issued = mcpIssueHandle(items[ei], _mcpBindingToken(binding));
+                    if (issued.ok) candidate.handle = issued.record.handle;
+                }
+            } catch (handleError) { }
+            if (items[ei].typename === "TextFrame") candidate.contents = String(items[ei].contents).substr(0, 500);
+            candidates.push(candidate);
+        }
+        throwStructured(makeError(ErrorCodes.V_TARGET_COUNT_MISMATCH, "Target count mismatch", "resolve", null,
+            {expected: normalized.expect.count, actual: items.length, candidates: candidates,
+             nextStep: "Inspect candidates and refine the selector"}));
+    }
     return items;
 }
 

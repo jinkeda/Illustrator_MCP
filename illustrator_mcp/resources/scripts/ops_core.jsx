@@ -5,7 +5,7 @@
  * Provides batch operation execution with:
  * - Stable ID-based targeting
  * - Op validation before execution
- * - Target resolution caching
+ * - Fresh target resolution for every operation
  * - Strict/continue error modes
  * - Context injection for pure ops
  * 
@@ -116,8 +116,9 @@ function validateOp(op, strict) {
 
     // Targets validation
     if (op.targets) {
-        var targetType = op.targets.type;
-        var allowedTypes = ["id", "query", "selection", "layer", "all", "spatial", "compound"];
+        var validationTarget = op.targets.target || op.targets;
+        var targetType = validationTarget.type;
+        var allowedTypes = ["id", "query", "selection", "layer", "all", "spatial", "grid", "compound", "handle"];
         var found = false;
         for (var i = 0; i < allowedTypes.length; i++) {
             if (allowedTypes[i] === targetType) { found = true; break; }
@@ -154,36 +155,6 @@ function validateOp(op, strict) {
     return { ok: errors.length === 0, errors: errors };
 }
 
-/**
- * Generate a cache key for validation deduplication (P3).
- * Two ops with the same task, param keys, param types, and enum values
- * are validation-equivalent — no need to re-run validateOp.
- * @param {Object} op - Operation: {task, params?}
- * @returns {string} Shape key
- */
-function validationShapeKey(op) {
-    var key = op.task;
-    if (!op.params) return key + "::";
-    var keys = [];
-    for (var k in op.params) {
-        if (op.params.hasOwnProperty(k)) keys.push(k);
-    }
-    keys.sort();
-    for (var i = 0; i < keys.length; i++) {
-        key += "|" + keys[i] + ":" + getValueType(op.params[keys[i]]);
-    }
-    // Include enum field values (these affect validation outcome)
-    var schema = (typeof getOpSchema === "function") ? getOpSchema(op.task) : null;
-    if (schema && schema.enumValues) {
-        for (var ek in schema.enumValues) {
-            if (schema.enumValues.hasOwnProperty(ek) && op.params[ek] !== undefined) {
-                key += "=" + ek + ":" + op.params[ek];
-            }
-        }
-    }
-    return key;
-}
-
 // ==================== ID-Based Target Resolution ====================
 // Delegates to heap.jsx for transactional, identity-verified resolution.
 // The heap index ($.global.mcpHeap) persists across batches/chunks.
@@ -193,7 +164,7 @@ function validationShapeKey(op) {
  * Extended target resolution with ID support
  * @param {Document} doc - Active document
  * @param {Object} targets - Target selector
- * @param {Object} ctx - Batch context (for caching)
+ * @param {Object} ctx - Batch context
  * @returns {Array<PageItem>} Resolved items
  */
 function resolveTargets(doc, targets, ctx) {
@@ -209,31 +180,18 @@ function resolveTargets(doc, targets, ctx) {
         }
     }
 
-    // ID-based targeting (stable) - uses heap for identity-verified O(1) resolution
-    if (targets.type === "id") {
-        var ids = targets.ids || [];
-        var cacheKey = "id:" + ids.join(",");
-        if (ctx.cache[cacheKey]) {
-            ctx.diagnostics.cacheHits++;
-            return ctx.cache[cacheKey];
-        }
-        ctx.diagnostics.cacheMisses++;
-        var items = heapResolveMany(doc, ids);
-        ctx.cache[cacheKey] = items;
-        return items;
-    }
-
-    // Use existing collectTargets for other types
-    var cacheKey = JSON.stringify(targets);
-    if (ctx.cache[cacheKey]) {
-        ctx.diagnostics.cacheHits++;
-        return ctx.cache[cacheKey];
-    }
-    ctx.diagnostics.cacheMisses++;
-
-    var items = collectTargets(doc, targets);
-    ctx.cache[cacheKey] = items;
-    return items;
+    // Never cache PageItem references or selector outcomes. Every operation
+    // sees the document produced by all preceding operations in this batch.
+    ctx.diagnostics.resolutions++;
+    // Carry resolution facts back to the executor so an op can report the
+    // targets it was asked for but did not find.
+    var report = { unresolvedIds: [] };
+    var resolved = collectTargets(doc, targets, {
+        startingSelection: ctx.startingSelection,
+        report: report
+    });
+    ctx._lastResolution = report;
+    return resolved;
 }
 
 // ==================== Handler Result Normalizer ====================
@@ -251,7 +209,7 @@ function resolveTargets(doc, targets, ctx) {
  *   - raw object / null / undefined       (legacy)
  *
  * Output shape:
- *   {ok, data: {createdIds?, modified?, ...}, warnings, error, id}
+ *   {ok, data: {createdIds?, modified?, ...}, warnings, error, id, recovery?}
  *
  * @param {string} task - Op task name (for diagnostics)
  * @param {*} raw - Handler return value
@@ -268,7 +226,18 @@ function normalizeHandlerResult(task, raw) {
         data: {},
         warnings: raw.warnings || [],
         error: raw.error || null,
-        id: raw.id || null
+        id: raw.id || null,
+        // Recovery is an outcome in its own right. Keeping it only inside a
+        // handler-specific data object made the canonical boundary report
+        // `not_requested` while withTransaction had already disclosed
+        // restored/partial/failed/not_needed.
+        // Top-level is authoritative. The data location predates the
+        // canonical field, but remains supported and must be promoted before
+        // response budgeting can omit bulk operation data.
+        recovery: raw.recovery ||
+            (raw.data && raw.data.recovery ? raw.data.recovery : null) ||
+            (raw.error && raw.error.details && raw.error.details.recovery ?
+                raw.error.details.recovery : null)
     };
 
     // Normalize data shape — extract known fields
@@ -295,7 +264,16 @@ function normalizeHandlerResult(task, raw) {
 
 /**
  * Perform batch rollback: delete created items, restore snapshot or undo.
- * Extracted from executeOpBatch to eliminate duplicated rollback blocks.
+ *
+ * UNREACHABLE SINCE T04 — retained only until the recovery model is rebuilt.
+ * `executeOpBatch` rejects options.rollback/snapshot/recompute and the
+ * compound handler rejects params.atomic, so nothing reaches this function.
+ * Do not re-enable it as-is: the snapshot branch cannot restore deleted
+ * objects, path geometry, text, grouping or z-order (see snapshot.jsx), and
+ * the `undoCount` branch fires one app-level undo per *successful op*, which
+ * is wrong whenever a handler performs several DOM mutations or the failing
+ * handler already mutated. Slated for removal in T30; a verifiable inverse
+ * for an allowlisted subset is T28.
  *
  * @param {Document} doc - Active document
  * @param {Object|null} preSnapshot - Pre-execution snapshot (or null)
@@ -319,8 +297,10 @@ function rollbackBatch(doc, preSnapshot, createdIds, undoCount, useSnapshot, tra
             for (var lx = 0; lx < doc.layers.length; lx++) {
                 for (var px = doc.layers[lx].pageItems.length - 1; px >= 0; px--) {
                     var pi = doc.layers[lx].pageItems[px];
-                    var pm = (pi.note || "").match(/@mcp:id=([^\s]+)/);
-                    if (pm && cidSet[pm[1]]) {
+                    // T02: canonical exact parser — /[^\s]+/ ran past the tag
+                    // boundary when two tags were written without a separator.
+                    var pmId = extractMcpId(pi.note || "");
+                    if (pmId && cidSet[pmId]) {
                         try { pi.remove(); createdDeleted++; } catch (e) {
                             if (trace) trace.push("[ROLLBACK] Delete failed: " + e.message);
                         }
@@ -352,33 +332,76 @@ function rollbackBatch(doc, preSnapshot, createdIds, undoCount, useSnapshot, tra
 // ==================== Transaction Helper ====================
 
 /**
- * Execute a function within a snapshot-based transaction.
- * On success: returns {ok: true, result: fn(doc), rolledBack: false}.
- * On failure: restores snapshot, returns {ok: false, error: ..., rolledBack: true}.
+ * Run a function, attempting a best-effort property restore on failure.
  *
- * Usage from execute_script:
- *   var txResult = withTransaction(doc, function(doc) {
- *       // ... multi-step mutations ...
- *       return someValue;
- *   });
+ * NOT A TRANSACTION (T04).  This previously returned `rolledBack: true` on
+ * any exception, without inspecting the restore result — so a caller was told
+ * the document had been rolled back when restoreSnapshot had partially or
+ * wholly failed.  captureSnapshot records position, size, opacity, visibility,
+ * lock and fill/stroke for @mcp:id-tagged items only; it cannot recreate
+ * deleted objects or restore path geometry, text, grouping, or z-order.
+ *
+ * The failure result now reports what recovery actually achieved:
+ *   recovery.status  "restored"  — every captured item was restored
+ *                    "partial"   — some items could not be restored
+ *                    "failed"    — restore threw
+ *                    "none"      — nothing was captured to restore
+ *   recovery.scope   always "captured properties of MCP-tagged items"
+ *
+ * `rolledBack` is retained for compatibility and is true ONLY for
+ * status === "restored".  It still does not mean the document is back to its
+ * prior state — only that the captured subset was reapplied.  Prefer an
+ * explicit checkpoint for anything you actually need to undo.
  *
  * @param {Document} doc - Explicit document reference (multi-doc safe)
  * @param {Function} fn - Mutation function: (doc) => result
  * @param {Object} [opts] - Options: {mcpOnly: boolean} — default true (fast)
- * @returns {Object} {ok, result?, error?, rolledBack}
+ * @returns {Object} {ok, result?, error?, rolledBack, recovery}
  */
 function withTransaction(doc, fn, opts) {
     opts = opts || {};
     var snap = captureSnapshot(doc, { mcpOnly: opts.mcpOnly !== false });
     try {
         var result = fn(doc);
-        return { ok: true, result: result, rolledBack: false };
+        return {
+            ok: true,
+            result: result,
+            rolledBack: false,
+            recovery: { status: "not_needed", scope: SNAPSHOT_RECOVERY_SCOPE }
+        };
     } catch (e) {
-        restoreSnapshot(doc, snap, { geometry: true, style: true });
+        var captured = (snap && snap.items) ? snap.items.length : 0;
+        var recovery = {
+            status: "none",
+            scope: SNAPSHOT_RECOVERY_SCOPE,
+            captured: captured,
+            restored: 0,
+            failed: 0
+        };
+
+        if (captured > 0) {
+            try {
+                var rr = restoreSnapshot(doc, snap, { geometry: true, style: true });
+                recovery.restored = rr.restored || 0;
+                recovery.failed = rr.failed || 0;
+                if (recovery.failed > 0) {
+                    recovery.status = "partial";
+                } else if (recovery.restored === captured) {
+                    recovery.status = "restored";
+                } else {
+                    recovery.status = "partial";
+                }
+            } catch (restoreErr) {
+                recovery.status = "failed";
+                recovery.error = restoreErr.message;
+            }
+        }
+
         return {
             ok: false,
             error: makeError(ErrorCodes.R_APPLY_FAILED, e.message, "apply").error,
-            rolledBack: true
+            rolledBack: recovery.status === "restored",
+            recovery: recovery
         };
     }
 }
@@ -540,10 +563,527 @@ var OP_CLASS = {
     "align_horizontal": "doc", "align_vertical": "doc",
     "distribute_horizontal": "doc", "distribute_vertical": "doc",
     "compound": "doc",
-    "layer_create": "doc", "layer_delete": "doc",
+    "layer_create": "doc", "layer_delete": "doc", "layer_reorder": "doc",
     "layer_lock": "doc", "layer_visible": "doc",
     "layer_activate": "session"
 };
+
+// Mutations whose meaning requires at least one current target. Creation and
+// layer/session operations intentionally stay outside this map.
+// Operations whose subjects come from a TARGET SELECTOR. For these, resolving
+// nothing means the request cannot be carried out, so an empty match is an
+// error rather than a zero-change success.
+//
+// An operation must only be listed here if its handler actually reads the
+// `targets` argument. clip_create does NOT: its schema and handler take
+// `mask` and `contents` as params (both MCP IDs) and ignore `targets`
+// entirely. Listing it made the executor reject every call with
+// V014 "resolved no targets" before the handler ever ran, so clip_create was
+// unreachable through execute_task as documented. Its own handler already
+// validates and resolves its inputs, and fails loudly when they are missing.
+// TARGET_REQUIRED_OP is compiled from contracts.py into contracts.jsx.
+
+function opRequiresTargets(task) {
+    return TARGET_REQUIRED_OP[task] === true;
+}
+
+/**
+ * The stable identity of one item: its MCP id, or a handle issued for it.
+ *
+ * Untagged artwork is an ordinary production input — selection and handle
+ * targeting neither require nor add an `@mcp:id` note — so "has no note" is
+ * not the same as "cannot be named". A handler that reads only the note
+ * throws away an identity this mechanism would have supplied, which is what
+ * `group_create` did: the snapshot issued a handle and the handler lost it.
+ *
+ * One implementation, so a handler and the snapshot cannot disagree about
+ * what an item is called.
+ *
+ * @returns {string|null}
+ */
+function mcpTargetIdentity(item) {
+    if (!item) return null;
+    var id = null;
+    try { id = extractMcpId(item.note || ""); } catch (e) { }
+    if (!id && typeof mcpIssueHandle === "function") {
+        try {
+            var issued = mcpIssueHandle(item);
+            if (issued.ok) id = issued.record.handle;
+        } catch (e) { }
+    }
+    return id || null;
+}
+
+/** Return stable IDs known before a handler mutates or deletes its targets. */
+function targetIdentitySnapshot(targets) {
+    var ids = [];
+    var unidentified = 0;
+    for (var i = 0; i < targets.length; i++) {
+        var id = mcpTargetIdentity(targets[i]);
+        if (id) ids.push(id); else unidentified++;
+    }
+    return { ids: ids, unidentified: unidentified };
+}
+
+// ==================== Recovery outcome stream ====================
+
+// Ownership cleanup happens below handler return values, while transaction
+// recovery is returned by the handler itself. Both must reach the same
+// operation result or the canonical boundary cannot distinguish "nothing was
+// requested" from "cleanup ran and removed an unfinished object".
+var _mcpRecoveryEvents = [];
+var _mcpRecoverySequence = 0;
+var _mcpRecoveryIdentitySequence = 0;
+
+function mcpRecoveryReset() {
+    _mcpRecoveryEvents = [];
+    _mcpRecoverySequence = 0;
+    _mcpRecoveryIdentitySequence = 0;
+}
+
+/** Give every recovery record a transport identity and explicit chronology. */
+function mcpRecoveryIdentify(recovery) {
+    if (!recovery || typeof recovery !== "object") return recovery;
+    if (recovery instanceof Array) {
+        for (var i = 0; i < recovery.length; i++) {
+            mcpRecoveryIdentify(recovery[i]);
+        }
+        return recovery;
+    }
+    if (typeof recovery.eventSequence !== "number") {
+        recovery.eventSequence = ++_mcpRecoverySequence;
+    } else if (recovery.eventSequence > _mcpRecoverySequence) {
+        _mcpRecoverySequence = recovery.eventSequence;
+    }
+    if (!recovery.recoveryId) {
+        recovery.recoveryId = "recovery_" + (++_mcpRecoveryIdentitySequence);
+    }
+    return recovery;
+}
+
+/** Record one automatic recovery outcome after identifying the event. */
+function mcpRecoveryRecord(recovery) {
+    if (!recovery || typeof recovery !== "object") return recovery;
+    mcpRecoveryIdentify(recovery);
+    _mcpRecoveryEvents.push(recovery);
+    return recovery;
+}
+
+function mcpRecoveryMark() {
+    return _mcpRecoveryEvents.length;
+}
+
+function mcpRecoveriesSince(mark) {
+    var out = [];
+    var start = (typeof mark === "number" && mark >= 0) ? mark : 0;
+    for (var i = start; i < _mcpRecoveryEvents.length; i++) {
+        out.push(_mcpRecoveryEvents[i]);
+    }
+    return out;
+}
+
+function _mcpRecoveryArray(value) {
+    if (!value) return [];
+    return value instanceof Array ? value.slice(0) : [value];
+}
+
+/** Merge explicit and automatic outcomes without duplicating promoted records. */
+function mcpMergeRecovery(first, second) {
+    var candidates = _mcpRecoveryArray(first).concat(_mcpRecoveryArray(second));
+    var out = [];
+    for (var i = 0; i < candidates.length; i++) {
+        var candidate = candidates[i];
+        if (!candidate || typeof candidate !== "object") continue;
+        mcpRecoveryIdentify(candidate);
+        var duplicate = false;
+        for (var j = 0; j < out.length; j++) {
+            if (candidate === out[j] ||
+                    (candidate.recoveryId &&
+                     candidate.recoveryId === out[j].recoveryId) ||
+                    (candidate.scopeKey && out[j].scopeKey &&
+                     candidate.scopeKey === out[j].scopeKey &&
+                     typeof candidate.eventSequence === "number" &&
+                     candidate.eventSequence === out[j].eventSequence)) {
+                duplicate = true;
+                break;
+            }
+        }
+        if (!duplicate) out.push(candidate);
+    }
+    if (!out.length) return null;
+    return out.length === 1 ? out[0] : out;
+}
+
+/**
+ * Record what a handler could not remove, on whichever result shape it has.
+ *
+ * OR15. A success result carries `data`; `makeError` builds `{ok, error}` with
+ * no `data` at all. Each shape had its own convention for where the cleanup
+ * record went, and the reducer read one of them — so a batch that died
+ * leaving an untagged master behind reported no stranded artwork, and the
+ * canonical boundary called it a clean failure. Writer and reader now agree
+ * because there is one writer and one reader.
+ */
+function mcpSetCleanupFailures(result, failures) {
+    if (!result) return result;
+    var list = failures instanceof Array ? failures : [];
+    if (result.data) {
+        // Always present on a success shape, so a caller can distinguish
+        // "nothing was stranded" from "this handler does not report it".
+        result.data.cleanupFailures = list;
+    } else if (list.length) {
+        result.error = result.error || {};
+        result.error.details = result.error.details || {};
+        result.error.details.cleanupFailures = list;
+    }
+    return result;
+}
+
+/** Read that record back, whatever shape the result has. */
+function mcpCleanupFailures(result) {
+    if (!result) return [];
+    if (result.data && result.data.cleanupFailures instanceof Array) {
+        return result.data.cleanupFailures;
+    }
+    if (result.error && result.error.details &&
+            result.error.details.cleanupFailures instanceof Array) {
+        return result.error.details.cleanupFailures;
+    }
+    return [];
+}
+
+/**
+ * Build a bounded, honest effect record from handler output and the identities
+ * captured before mutation. `complete` is false whenever affected artwork had
+ * no stable identity or the handler reports a per-target failure.
+ */
+function recordOperationEffects(task, before, handlerResult, targetCount) {
+    var effects = {
+        created: [], modified: [], deleted: [],
+        unidentified: before.unidentified || 0,
+        complete: false
+    };
+    var data = handlerResult.data || {};
+    var ids = data.ids || data.createdIds || [];
+    if (!(ids instanceof Array)) ids = [];
+
+    // A batch keeps positional alignment by pushing null where an instance
+    // failed, so `ids` is not a list of identities — it is a list of slots.
+    // Copying it straight into effects.created put null into a field the
+    // canonical boundary types as a list of strings, which failed validation
+    // and took the whole tool call down with it. Worse, `complete` was still
+    // true, so the report claimed to be an exhaustive account of a run that
+    // had just lost an instance.
+    var identified = [];
+    var unnamed = 0;
+    for (var idIndex = 0; idIndex < ids.length; idIndex++) {
+        var candidate = ids[idIndex];
+        if (typeof candidate === "string" && candidate.length) {
+            identified.push(candidate);
+        } else {
+            unnamed++;
+        }
+    }
+    // Anything the handler itself counted as skipped or failed also makes the
+    // account partial, even when every id that came back was usable.
+    var declinedCount = 0;
+    if (typeof data.skipped === "number" && data.skipped > 0) {
+        declinedCount = data.skipped;
+    } else if (typeof data.failed === "number" && data.failed > 0) {
+        declinedCount = data.failed;
+    }
+
+    // Artwork a rollback could not remove is on the page and carries no id,
+    // so the lists below cannot be an exhaustive account of what changed.
+    // This was read from nowhere: a batch whose master would not come away
+    // reported every clone with complete true, while an untagged shape sat
+    // beside them.
+    // One accessor, so this cannot fall out of step with whatever shape the
+    // handler returned. Reading `data.cleanupFailures` directly is what made
+    // a fatal exit's stranded artwork invisible here.
+    //
+    // A stranded object is split by whether its identity is known. Counting
+    // every cleanup record as unidentified was wrong in the case that
+    // matters most: a clone is stamped before the step that fails, so it
+    // survives on the page WITH an id, and reporting it as unidentified
+    // both understates what the caller can act on and leaves its id out of
+    // the effect account entirely. `unidentified` means artwork nothing can
+    // name; an object whose id is recorded is not that.
+    var strandedRecords = mcpCleanupFailures(handlerResult);
+    var strandedCount = 0;
+    var strandedIds = [];
+    for (var sri = 0; sri < strandedRecords.length; sri++) {
+        var strandedId = strandedRecords[sri].mcpId;
+        if (typeof strandedId === "string" && strandedId.length) {
+            strandedIds.push(strandedId);
+        } else {
+            strandedCount++;
+        }
+    }
+
+    // Any stranded object makes the account partial, named or not.
+    var reportedIncomplete = unnamed > 0 || declinedCount > 0 ||
+        strandedRecords.length > 0;
+    // `unidentified` means artwork that exists and has no id. A null slot is
+    // the opposite: a request that never became artwork at all. Counting
+    // slots here made an all-failed batch look like it had produced
+    // something, so the boundary classified it partial instead of failed —
+    // forwarding `unapplied` alone would not have fixed that. Only stranded
+    // artwork belongs in this number.
+    effects.unidentified = (effects.unidentified || 0) + strandedCount;
+
+    // Execution and completeness are separate questions, and only the second
+    // was being answered. An all-failed batch returned ok true with an empty
+    // but honest effect list, and the canonical boundary read that as
+    // `execution: succeeded` — a request that created nothing, reported as
+    // done. `unapplied` is the existing signal for "the handler declined
+    // work it was asked to do", and the boundary turns it into partial, or
+    // failed when nothing landed at all.
+    if (declinedCount > 0) {
+        effects.unapplied = [];
+        for (var slot = 0; slot < ids.length; slot++) {
+            if (typeof ids[slot] !== "string" || !ids[slot]) {
+                effects.unapplied.push({ index: slot, reason: "instance_failed" });
+            }
+        }
+        if (!effects.unapplied.length) {
+            // The handler counted failures without leaving empty slots.
+            effects.unapplied.push({ count: declinedCount, reason: "declined" });
+        }
+    }
+
+    if (task === "element_replace") {
+        effects.created = identified.slice();
+        if (handlerResult.id && effects.created.indexOf(handlerResult.id) < 0) {
+            effects.created.push(handlerResult.id);
+        }
+        effects.deleted = data.deletedIds instanceof Array ? data.deletedIds.slice() : [];
+        if (data.oldId && effects.deleted.indexOf(data.oldId) < 0) effects.deleted.push(data.oldId);
+        if (data.modifiedIds instanceof Array) {
+            for (var rmi = 0; rmi < data.modifiedIds.length; rmi++) {
+                var replaceModifiedId = data.modifiedIds[rmi];
+                if (typeof replaceModifiedId === "string" && replaceModifiedId.length &&
+                        effects.modified.indexOf(replaceModifiedId) < 0) {
+                    effects.modified.push(replaceModifiedId);
+                }
+            }
+        }
+        if (data.unnamedModification === true) reportedIncomplete = true;
+        effects.complete = handlerResult.ok && !reportedIncomplete &&
+            effects.created.length === 1 && effects.deleted.length === 1;
+    } else if (task.indexOf("element_create") === 0 || task === "text_create" ||
+               task === "layer_create" || task === "group_create" ||
+               task === "clip_create") {
+        // `group_create` and `clip_create` make a container and were absent
+        // from this list, so a clip group retained after a late failure was
+        // reported as nothing at all — the caller was told the operation
+        // failed and given no way to find what it had left behind.
+        effects.created = identified.slice();
+        // They also reparent artwork that already existed. Reporting the
+        // container alone described half of what changed while `complete`
+        // asserted the account was the whole of it.
+        //
+        // From what the handler actually moved, not from what was requested.
+        // `before.ids` named every member asked for, so a member that refused
+        // to move was reported as modified, and a failure before any move ran
+        // reported all of them. That is a false account, and `complete: false`
+        // beside it does not make the identities true.
+        // Creation handlers may delegate assembly to another creation handler.
+        // `element_create({clipTo: ...})`, for example, creates its own item and
+        // then asks `clip_create` to create a group and move the borrowed mask.
+        // Restricting move evidence to the top-level task name discarded that
+        // delegated modification and allowed the incomplete account to claim
+        // `complete: true`.
+        var movedIds = [];
+        if (data.movedIds instanceof Array) {
+            for (var mvi = 0; mvi < data.movedIds.length; mvi++) {
+                var movedId = data.movedIds[mvi];
+                if (typeof movedId === "string" && movedId.length &&
+                        movedIds.indexOf(movedId) < 0) {
+                    movedIds.push(movedId);
+                }
+            }
+        }
+        effects.modified = movedIds;
+        // A move nothing can name makes the account inexhaustive: something
+        // changed that no entry above lists. It is not added to
+        // `unidentified`, because `before.unidentified` already counted
+        // that same target — identity is captured with the same mechanism
+        // at both points, so an unnamed mover was an unnamed target, and
+        // adding it here counted one object twice.
+        if (typeof data.unnamedMoves === "number" && data.unnamedMoves > 0) {
+            reportedIncomplete = true;
+        }
+        if (handlerResult.id && effects.created.indexOf(handlerResult.id) < 0) {
+            effects.created.push(handlerResult.id);
+        }
+        effects.complete = handlerResult.ok && !reportedIncomplete &&
+            effects.created.length > 0;
+    } else if (task === "element_delete") {
+        effects.deleted = before.ids.slice();
+        effects.complete = handlerResult.ok && before.unidentified === 0 &&
+            typeof data.deleted === "number" && data.deleted === targetCount;
+    } else if (getOpClass(task) === "doc") {
+        // Only claim what the handler says it actually changed.
+        //
+        // Listing every *requested* target reported artwork as modified that
+        // the handler had skipped — styling a mixed selection of text frames
+        // and a rectangle claimed the rectangle was modified too. When a
+        // handler reports `modifiedIds`, narrow the record to the identified
+        // targets it names; a handler that succeeded without reporting them
+        // keeps the old whole-selection behaviour.
+        //
+        // A FAILED handler does not. The request is not evidence that
+        // anything happened: `style_set_gradient` rejecting a gradient it
+        // could not configure touches no target at all, and this branch
+        // nevertheless named every one of them as modified — which the
+        // canonical boundary reads as an effect and reports as `partial`
+        // rather than `failed`. This is the same rule already applied to
+        // `group_create` above ("from what the handler actually moved, not
+        // from what was requested"), which was corrected there and left
+        // standing here.
+        //
+        // Empty is not a claim that nothing changed; `complete` is false on
+        // every failure, and that is what says the account is not
+        // exhaustive. A handler that fails after modifying some of its
+        // targets says so by attaching `modifiedIds` to the error result,
+        // the way `clip_create` reports its retained group. An unrecoverable
+        // false identity is worse than a recorded unknown.
+        effects.modified = handlerResult.ok ? before.ids.slice() : [];
+        if (data.modifiedIds instanceof Array) {
+            var actuallyModified = [];
+            for (var mi = 0; mi < before.ids.length; mi++) {
+                for (var mj = 0; mj < data.modifiedIds.length; mj++) {
+                    if (before.ids[mi] === data.modifiedIds[mj]) {
+                        actuallyModified.push(before.ids[mi]);
+                        break;
+                    }
+                }
+            }
+            effects.modified = actuallyModified;
+        }
+        effects.complete = handlerResult.ok && before.unidentified === 0 &&
+            (typeof data.failed !== "number" || data.failed === 0) &&
+            (typeof data.modified !== "number" || data.modified === targetCount);
+    } else {
+        effects.complete = handlerResult.ok;
+    }
+
+    // An object the rollback could not remove is still on the page and was
+    // still created by this operation, whatever task made it. This folding
+    // lived inside the element-creation branch, so a stranded group or clip
+    // path — the cases most likely to strand anything — was counted as
+    // unidentified even when its id was known. It runs here, after every
+    // branch has finished assigning `created`, because an earlier placement
+    // was simply overwritten.
+    for (var si = 0; si < strandedIds.length; si++) {
+        if (effects.created.indexOf(strandedIds[si]) < 0) {
+            effects.created.push(strandedIds[si]);
+        }
+    }
+    return effects;
+}
+
+/** Verify the pilot operations from direct readback/handler evidence. */
+function verifyOperationPostcondition(task, params, targets, handlerResult, effects) {
+    var data = handlerResult.data || {};
+    if (!handlerResult.ok) {
+        return { status: "not_run", complete: false };
+    }
+    if (task.indexOf("element_create") === 0) {
+        return {
+            status: effects.created.length > 0 ? "passed" : "unavailable",
+            complete: effects.created.length > 0,
+            created: effects.created.slice()
+        };
+    }
+    if (task === "style_set_opacity") {
+        var expected = params.opacity !== undefined ? params.opacity : 100;
+        if (expected < 0) expected = 0;
+        if (expected > 100) expected = 100;
+        for (var i = 0; i < targets.length; i++) {
+            try {
+                if (targets[i].opacity !== expected) {
+                    return { status: "failed", complete: true, expected: expected, failedAt: i };
+                }
+            } catch (e) {
+                return { status: "unavailable", complete: false, message: e.message };
+            }
+        }
+        return { status: "passed", complete: true, expected: expected, checked: targets.length };
+    }
+    if (task === "measure_bounds") {
+        return {
+            status: (targets.length === 0 || data.bounds) ? "passed" : "failed",
+            complete: true,
+            checked: targets.length
+        };
+    }
+    if (task === "element_delete") {
+        return {
+            status: (typeof data.deleted === "number" && data.deleted === targets.length)
+                ? "passed" : "failed",
+            complete: true,
+            checked: targets.length
+        };
+    }
+    return { status: "not_requested", complete: false };
+}
+
+/** Contract/preflight pass that invokes no operation handler. */
+function validateOpBatch(ops, options) {
+    var results = [];
+    var failed = 0;
+    var priorMutation = false;
+    var strict = options.strict === true;
+    for (var i = 0; i < ops.length; i++) {
+        var op = ops[i];
+        var validation = validateOp(op, options.strictSchema);
+        var selectorError = null;
+        if (validation.ok && op.targets) {
+            try { normalizeTargetSelector(op.targets); }
+            catch (e) {
+                selectorError = {
+                    code: e.code || ErrorCodes.V_INVALID_TARGETS,
+                    message: e.message,
+                    stage: e.stage || "validate",
+                    details: e.meta || null
+                };
+            }
+        }
+        var ok = validation.ok && !selectorError;
+        var error = selectorError || (validation.ok ? null : validation.errors[0]);
+        if (error && error.error) error = error.error;
+        results.push({
+            index: i,
+            task: op.task,
+            ok: ok,
+            status: ok ? "validated" : "invalid",
+            targets_resolved: 0,
+            targetResolution: op.targets
+                ? (priorMutation ? "deferred" : "not_performed")
+                : "not_required",
+            effects: { created: [], modified: [], deleted: [], unidentified: 0, complete: true },
+            postcondition: { status: "not_run", complete: false },
+            error: error
+        });
+        if (!ok) {
+            failed++;
+            if (strict) break;
+        }
+        if (getOpClass(op.task) === "doc") priorMutation = true;
+    }
+    return {
+        ok: failed === 0,
+        mode: "validate",
+        schemaVersion: OP_SCHEMA_VERSION,
+        ops: results,
+        createdIds: [],
+        effects: { created: [], modified: [], deleted: [], unidentified: 0, complete: true },
+        stats: { total: ops.length, executed: 0, validated: results.length, passed: results.length - failed, failed: failed },
+        warnings: priorMutation ? ["Target resolution after a planned mutation is deferred until apply mode."] : []
+    };
+}
 
 // Dedupe cache: warn once per unknown task name
 var _OP_CLASS_WARNED = {};
@@ -563,6 +1103,22 @@ function getOpClass(task, ctx) {
         }
     }
     return cls || "readonly";
+}
+
+/**
+ * How many targets an operation asked for.
+ *
+ * For an `id` or `handle` selector this is the length of the requested list,
+ * which is what makes "asked for 2, found 1" visible. For selectors whose
+ * size is only known after resolution (query/all/layer/spatial) the resolved
+ * count is the honest answer — there was no fixed request size.
+ */
+function _opTargetsRequested(selector, resolvedCount) {
+    if (!selector) return 0;
+    var target = selector.target || selector;
+    if (target.ids instanceof Array) return target.ids.length;
+    if (target.handles instanceof Array) return target.handles.length;
+    return resolvedCount;
 }
 
 /**
@@ -608,16 +1164,11 @@ function executeSubOps(ops, ctx, mode) {
 
         if (trace) trace.push("[OP " + i + "] " + op.task);
 
-        // JIT validation (P3): validate just before execution, with shape dedup
-        var shapeKey = validationShapeKey(op);
-        if (!ctx.validationCache[shapeKey]) {
-            ctx.validationCache[shapeKey] = validateOp(op, mode.strictSchema);
-            ctx.diagnostics.validationsRun++;
-        } else {
-            ctx.diagnostics.validationsSkipped++;
-        }
-        var cachedValidation = ctx.validationCache[shapeKey];
-        if (!cachedValidation.ok) {
+        // Validate the actual operation immediately before it runs. Values and
+        // selectors can depend on earlier operations, so outcomes are not cached.
+        var validation = validateOp(op, mode.strictSchema);
+        ctx.diagnostics.validationsRun++;
+        if (!validation.ok) {
             results.push({
                 index: i,
                 task: op.task,
@@ -627,7 +1178,7 @@ function executeSubOps(ops, ctx, mode) {
                 id: op.params ? op.params.id : null,
                 data: null,
                 warnings: [],
-                error: cachedValidation.errors[0]
+                error: validation.errors[0]
             });
             failed++;
             if (strict) break;
@@ -635,7 +1186,56 @@ function executeSubOps(ops, ctx, mode) {
         }
 
         var handler = OP_HANDLERS[op.task];
-        var targets = op.targets ? resolveTargets(doc, op.targets, ctx) : [];
+        var targets = [];
+        var unresolvedIds = [];
+        try {
+            ctx._lastResolution = null;
+            targets = op.targets ? resolveTargets(doc, op.targets, ctx) : [];
+            if (ctx._lastResolution && ctx._lastResolution.unresolvedIds) {
+                unresolvedIds = ctx._lastResolution.unresolvedIds;
+            }
+        } catch (resolveErr) {
+            results.push({
+                index: i,
+                task: op.task,
+                ok: false,
+                duration_ms: ctx.clock() - t0,
+                targets_resolved: 0,
+                id: op.params ? op.params.id : null,
+                data: null,
+                warnings: [],
+                error: {
+                    code: resolveErr.code || ErrorCodes.R_COLLECT_FAILED,
+                    message: resolveErr.message,
+                    stage: resolveErr.stage || "resolve",
+                    details: resolveErr.meta || null
+                }
+            });
+            failed++;
+            if (strict) break;
+            continue;
+        }
+
+        if (opRequiresTargets(op.task) && targets.length === 0) {
+            results.push({
+                index: i,
+                task: op.task,
+                ok: false,
+                duration_ms: ctx.clock() - t0,
+                targets_resolved: 0,
+                id: op.params ? op.params.id : null,
+                data: null,
+                warnings: [],
+                error: makeError(
+                    ErrorCodes.V_EMPTY_TARGETS || "V014",
+                    "Mutating operation resolved no targets: " + op.task,
+                    "resolve"
+                ).error
+            });
+            failed++;
+            if (strict) break;
+            continue;
+        }
 
         // C2: Guard evaluation — filter targets by when/unless predicates
         var guardSkipped = false;
@@ -690,17 +1290,27 @@ function executeSubOps(ops, ctx, mode) {
             task: op.task,
             ok: false,
             duration_ms: 0,
+            // What the caller ASKED for, alongside what was found. Reporting
+            // only the resolved count made a partially-satisfied request look
+            // identical to a fully satisfied one.
+            targets_requested: _opTargetsRequested(op.targets, targets.length),
             targets_resolved: targets.length,
+            unresolvedIds: unresolvedIds,
             id: op.params ? op.params.id : null,
             data: null,
             warnings: [],
-            error: null
+            error: null,
+            recovery: null,
+            effects: { created: [], modified: [], deleted: [], unidentified: 0, complete: false },
+            postcondition: { status: "not_run", complete: false }
         };
 
+        var recoveryMark = mcpRecoveryMark();
         try {
             // P3: Resolve field descriptors in params before handler sees them
             var resolvedParams = op.params || {};
             var handlerResult;
+            var targetSnapshot = targetIdentitySnapshot(targets);
             var hasFieldDescs = typeof resolveFields === "function" &&
                 typeof containsFields === "function" && containsFields(resolvedParams);
 
@@ -709,6 +1319,7 @@ function executeSubOps(ops, ctx, mode) {
                 var fanOk = true;
                 var fanData = [];
                 var fanWarnings = [];
+                var fanRecovery = [];
                 var fanId = null;
                 var fanError = null;
                 for (var t = 0; t < targets.length; t++) {
@@ -722,9 +1333,17 @@ function executeSubOps(ops, ctx, mode) {
                     }
                     fanData.push(singleResult.data);
                     fanWarnings = fanWarnings.concat(singleResult.warnings);
+                    if (singleResult.recovery) fanRecovery.push(singleResult.recovery);
                     if (singleResult.id && !fanId) fanId = singleResult.id;
                 }
-                handlerResult = { ok: fanOk, data: { perTarget: fanData, count: targets.length }, warnings: fanWarnings, id: fanId, error: fanError };
+                handlerResult = {
+                    ok: fanOk,
+                    data: { perTarget: fanData, count: targets.length },
+                    warnings: fanWarnings,
+                    id: fanId,
+                    error: fanError,
+                    recovery: fanRecovery.length ? fanRecovery : null
+                };
             } else {
                 if (typeof resolveFields === "function") {
                     resolvedParams = resolveFields(resolvedParams, targets[0] || null, 0, targets.length || 1, ctx);
@@ -734,17 +1353,63 @@ function executeSubOps(ops, ctx, mode) {
 
             // Normalize handler result via centralised normalizer
             handlerResult = normalizeHandlerResult(op.task, handlerResult);
+            handlerResult.recovery = mcpMergeRecovery(
+                handlerResult.recovery, mcpRecoveriesSince(recoveryMark)
+            );
             opResult.ok = handlerResult.ok;
+            opResult.data = handlerResult.data;
+            opResult.warnings = handlerResult.warnings;
+            opResult.id = handlerResult.id || opResult.id;
+            opResult.recovery = handlerResult.recovery;
+            opResult.effects = recordOperationEffects(
+                op.task, targetSnapshot, handlerResult, targets.length
+            );
+            if (typeof mcpOwnNextEvent === "function") {
+                opResult.effects.eventSequence = mcpOwnNextEvent();
+            }
+            // `opResult.id` starts as the caller's requested id, but the batch
+            // contract exposes it as a created id. A failed replacement that
+            // never established or retained that identity must not echo the
+            // request as if it named surviving artwork.
+            if (op.task === "element_replace" && !handlerResult.id &&
+                    opResult.effects.created.length === 0) {
+                opResult.id = null;
+            }
+            opResult.postcondition = verifyOperationPostcondition(
+                op.task, resolvedParams, targets, handlerResult, opResult.effects
+            );
+
+            // A requested target that matched nothing is reported here, AFTER
+            // the handler's own warnings are assigned (they replace the array).
+            // The effect account is also no longer presented as complete: the
+            // operation did everything it could, but not everything it was
+            // asked to do, and "complete" must mean the latter.
+            if (unresolvedIds.length > 0) {
+                opResult.warnings = (opResult.warnings || []).concat([
+                    "Targets not found and therefore not modified: " +
+                    unresolvedIds.join(", ")
+                ]);
+                opResult.effects.complete = false;
+            }
+
+            // Record targets the operation was asked to act on but did not.
+            //
+            // This is deliberately NARROWER than `effects.complete`, which is
+            // also false when affected artwork simply had no stable identity —
+            // there the work happened, it just could not be named. `unapplied`
+            // means the requested work did NOT happen to those targets, and it
+            // is what degrades the batch's execution status below "succeeded".
+            // Without it, `text_set_content` aimed at a rectangle reported
+            // "succeeded" while changing nothing (the F19 failure mode).
+            var unapplied = unresolvedIds.slice();
+            var skipped = opResult.data && opResult.data.skippedIds;
+            if (skipped instanceof Array) unapplied = unapplied.concat(skipped);
+            if (unapplied.length > 0) opResult.unapplied = unapplied;
             if (!opResult.ok) {
                 opResult.error = handlerResult.error;
                 if (!opResult.error && handlerResult.data && handlerResult.data.message) {
                     opResult.error = { code: "R_UNSTRUCTURED", message: handlerResult.data.message, stage: "apply" };
                 }
-                opResult.data = null;
-            } else {
-                opResult.data = handlerResult.data;
-                opResult.warnings = handlerResult.warnings;
-                opResult.id = handlerResult.id || opResult.id;
             }
 
             if (opResult.ok) {
@@ -772,6 +1437,9 @@ function executeSubOps(ops, ctx, mode) {
 
         } catch (e) {
             opResult.ok = false;
+            opResult.recovery = mcpMergeRecovery(
+                opResult.recovery, mcpRecoveriesSince(recoveryMark)
+            );
             opResult.error = makeError(
                 ErrorCodes.R_APPLY_FAILED,
                 e.message,
@@ -869,6 +1537,9 @@ function executeSubOps(ops, ctx, mode) {
  */
 function executeOpBatch(ops, options) {
     options = options || {};
+    // Recovery events are host-call-local facts. Never let a prior batch's
+    // cleanup become evidence for this one, and bound the in-memory stream.
+    mcpRecoveryReset();
     var strict = options.strict || options.stopOnError || false;
     var rollback = options.rollback === true;
     var useSnapshot = options.snapshot === true;
@@ -898,120 +1569,120 @@ function executeOpBatch(ops, options) {
         doc: doc,
         app: app,
         clock: options.clock || function () { return new Date().getTime(); },
-        cache: {},
-        validationCache: {},
+        startingSelection: selectionToArray(doc.selection || []),
         options: options,
         space: options.space || { units: "pt", origin: "document", yAxis: "down" },
         defaultLayer: options.defaultLayer || null,
         warnings: [],
         // Diagnostics counters
         diagnostics: {
-            cacheHits: 0,
-            cacheMisses: 0,
+            resolutions: 0,
             validationsRun: 0,
-            validationsSkipped: 0,
             selectionWarnings: 0
         },
         compoundDepth: 0
     };
     ctx.warn = function (msg) { ctx.warnings.push(msg); };
 
-    // Begin heap transaction for this batch
-    var heapBatchId = generateUUID();
-    heapBeginTxn(heapBatchId);
-
-    // === RECOMPUTE GATE (P6) ===
-    // Requires explicit confirmation + takes snapshot before clearing
+    // === T04: UNSUPPORTED RECOVERY GATE ===
+    // Rejected here — before heapBeginTxn, before any snapshot, and before a
+    // single op runs — so an unsupported request performs no edits at all.
+    //
+    // Why these are refused rather than "best effort":
+    //
+    //   recompute  Deleted every @mcp:id-tagged item in the document and then
+    //              replayed the journal.  Its safety net was a property
+    //              snapshot that cannot recreate a deleted object: it stores
+    //              position, size, opacity, visibility, lock and fill/stroke
+    //              for tagged items only.  If the replay failed, the artwork
+    //              was gone and restoreSnapshot had nothing to restore it
+    //              onto.  This is destructive replay without recovery.
+    //
+    //   rollback / snapshot
+    //              captureSnapshot records the same shallow property set, and
+    //              only for tagged items.  It cannot restore path anchors and
+    //              handles, text content or runs, parents/groups, z-order, or
+    //              layer topology, and it cannot recreate deleted objects.  A
+    //              batch that failed mid-way therefore reported rolledBack
+    //              while leaving created artwork in place and unrelated edits
+    //              unreverted.
+    //
+    // A verifiable inverse for a documented subset of operations is T28; an
+    // explicit, live-tested document checkpoint is T29.  Until one of those
+    // lands, refusing is the only truthful answer.
+    var unsupportedRecovery = null;
     if (options.recompute) {
-        if (!options.recompute.confirm || options.recompute.snapshotFirst !== true) {
-            heapRollbackTxn();  // F1: close txn opened at L853
-            return {
-                ok: false,
-                errors: [makeError(ErrorCodes.V_INVALID_PARAMS,
-                    "recompute requires {confirm: true, snapshotFirst: true}", "validate")],
-                ops: [],
-                stats: { total: 0, passed: 0, failed: 0 }
-            };
-        }
-
-        var docName = doc.name;
-        var journal = (typeof journalGet === "function") ? journalGet(docName, doc) : [];
-        if (journal.length === 0) {
-            heapRollbackTxn();  // F1: close txn opened at L853
-            return {
-                ok: false,
-                errors: [makeError(ErrorCodes.V_INVALID_PARAMS,
-                    "recompute: no journal entries for '" + docName + "'", "validate")],
-                ops: [],
-                stats: { total: 0, passed: 0, failed: 0 }
-            };
-        }
-
-        // Snapshot before clearing
-        var recomputeSnapshot = null;
-        if (typeof captureSnapshot === "function") {
-            recomputeSnapshot = captureSnapshot(doc, { mcpOnly: true, clock: ctx.clock });
-        }
-
-        // Clear all MCP-created items
-        try {
-            for (var li = 0; li < doc.layers.length; li++) {
-                var layer = doc.layers[li];
-                for (var pi = layer.pageItems.length - 1; pi >= 0; pi--) {
-                    var item = layer.pageItems[pi];
-                    if (item.note && item.note.indexOf("@mcp:id=") >= 0) {
-                        item.remove();
-                    }
-                }
-            }
-        } catch (clearErr) {
-            // Restore on clear failure
-            if (recomputeSnapshot && typeof restoreSnapshot === "function") {
-                restoreSnapshot(doc, recomputeSnapshot, { geometry: true, style: true, restoreSize: true });
-            }
-            return {
-                ok: false,
-                errors: [makeError(ErrorCodes.E_EXECUTION, "recompute: clear failed: " + clearErr.message, "execute")],
-                ops: [],
-                stats: { total: 0, passed: 0, failed: 0, failedAtIndex: null }
-            };
-        }
-
-        // Replay journal
-        var replayResult = (typeof journalReplay === "function")
-            ? journalReplay(doc, journal, { onError: "strict", clock: (options.clock || function () { return new Date().getTime(); }) })
-            : makeError(ErrorCodes.E_EXECUTION, "journalReplay not available", "apply");
-
-        if (!replayResult.ok && recomputeSnapshot && typeof restoreSnapshot === "function") {
-            // Replay failed â€” restore from pre-recompute snapshot
-            restoreSnapshot(doc, recomputeSnapshot, { geometry: true, style: true, restoreSize: true });
-            replayResult.data.rolledBack = true;
-        }
-
-        return replayResult;
+        unsupportedRecovery = "recompute";
+    } else if (options.rollback === true) {
+        unsupportedRecovery = "rollback";
+    } else if (options.snapshot === true) {
+        unsupportedRecovery = "snapshot";
     }
 
-    // === EXECUTION PHASE (with JIT validation, P3) ===
-    if (trace) trace.push("[EXECUTE] Running " + ops.length + " ops (JIT validation)");
-
-    // Capture snapshot before execution if enabled (for snapshot-based rollback)
-    if (useSnapshot && rollback && typeof captureSnapshot === "function") {
-        try {
-            preSnapshot = captureSnapshot(doc, { mcpOnly: true, clock: ctx.clock });
-            if (trace) trace.push("[SNAPSHOT] Captured " + preSnapshot.items.length + " items");
-        } catch (snapErr) {
-            if (trace) trace.push("[SNAPSHOT ERROR] " + snapErr.message);
-        }
+    if (unsupportedRecovery) {
+        return {
+            ok: false,
+            errors: [makeError(
+                ErrorCodes.E_UNSUPPORTED_RECOVERY || "E002",
+                "options." + unsupportedRecovery + " is not supported: the " +
+                "property snapshot cannot restore the state it would need to " +
+                "(deleted objects, path geometry, text, grouping, z-order). " +
+                "Rejected before execution — no operations ran and nothing " +
+                "was changed. Re-run without it, or take an explicit " +
+                "checkpoint first.",
+                "validate",
+                null,
+                { option: unsupportedRecovery }
+            )],
+            ops: [],
+            stats: { total: ops.length, executed: 0, passed: 0, failed: 0 },
+            recovery: {
+                requested: unsupportedRecovery,
+                status: "unsupported",
+                scope: "entire structured batch"
+            }
+        };
     }
+
+    if (options.mode !== undefined && options.mode !== "apply" && options.mode !== "validate") {
+        return {
+            ok: false,
+            errors: [makeError(
+                ErrorCodes.V_INVALID_PARAM_VALUE,
+                "options.mode must be 'apply' or 'validate'",
+                "validate"
+            )],
+            ops: [],
+            stats: { total: ops.length, executed: 0, passed: 0, failed: 0 }
+        };
+    }
+
+    // Validation mode ends before heap transaction, handler dispatch and
+    // redraw. It is therefore read-only by construction.
+    if (options.mode === "validate") {
+        return validateOpBatch(ops, options);
+    }
+
+    // Begin heap transaction for this batch (pass doc to avoid redundant lookup)
+    var heapBatchId = generateUUID();
+    heapBeginTxn(heapBatchId, doc);
+
+    // === EXECUTION PHASE (fresh validation and target resolution) ===
+    if (trace) trace.push("[EXECUTE] Running " + ops.length + " ops (fresh resolution)");
+
+    // T04: no pre-execution snapshot is taken.  `rollback` and `snapshot` are
+    // rejected by the gate above, so this batch has no recovery path — which
+    // is now stated rather than implied by a snapshot that could not deliver
+    // it.  preSnapshot stays null and executeSubOps runs with rollback off.
 
     // C1: Delegate to executeSubOps — single source of truth for per-op execution
     var subResult = executeSubOps(ops, ctx, {
         strict: strict,
-        rollback: rollback,
-        snapshot: useSnapshot,
+        rollback: false,
+        snapshot: false,
         strictSchema: options.strictSchema,
         doc: doc,
-        preSnapshot: preSnapshot,
+        preSnapshot: null,
         trace: trace,
         chunkSize: chunkSize,
         onProgress: onProgress
@@ -1046,6 +1717,14 @@ function executeOpBatch(ops, options) {
 
     // P1: Surface handler warnings + deprecation warnings in report
     var reportWarnings = ctx.warnings ? ctx.warnings.slice() : [];
+    // Aggregate per-op handler warnings into report-level warnings
+    for (var rwi = 0; rwi < results.length; rwi++) {
+        if (results[rwi].warnings && results[rwi].warnings.length > 0) {
+            for (var rwj = 0; rwj < results[rwi].warnings.length; rwj++) {
+                reportWarnings.push(results[rwi].warnings[rwj]);
+            }
+        }
+    }
     if (ctx.diagnostics.selectionWarnings > 0) {
         reportWarnings.push("DEPRECATED: 'selection' targeting used " + ctx.diagnostics.selectionWarnings + "x. Use 'id' targeting. Removal at v2.0.");
     }
@@ -1054,6 +1733,60 @@ function executeOpBatch(ops, options) {
     var failedAtIndex = null;
     for (var fi = 0; fi < results.length; fi++) {
         if (!results[fi].ok) { failedAtIndex = results[fi].index; break; }
+    }
+
+    var batchEffects = {
+        created: [], modified: [], deleted: [], unidentified: 0, complete: true
+    };
+    // Outcome chronology must survive summaryOnly, which omits operation
+    // details. Aggregate ID arrays cannot distinguish delete/recreate order.
+    var effectSteps = [];
+    for (var efi = 0; efi < results.length; efi++) {
+        var oef = results[efi].effects;
+        if (!oef) { batchEffects.complete = false; continue; }
+        effectSteps.push(oef);
+        batchEffects.created = batchEffects.created.concat(oef.created || []);
+        batchEffects.modified = batchEffects.modified.concat(oef.modified || []);
+        batchEffects.deleted = batchEffects.deleted.concat(oef.deleted || []);
+        batchEffects.unidentified += oef.unidentified || 0;
+        if (!oef.complete) batchEffects.complete = false;
+        if (results[efi].unapplied instanceof Array && results[efi].unapplied.length) {
+            batchEffects.unapplied = (batchEffects.unapplied || [])
+                .concat(results[efi].unapplied);
+        }
+        // The reducer also records declined work on the effects object
+        // itself. This loop copied five fields from `oef` and read
+        // `unapplied` from the op result beside it, so a batch whose
+        // instances were declined arrived at the boundary with nothing
+        // saying so, and an operation that created nothing was reported as
+        // succeeded.
+        if (oef.unapplied instanceof Array && oef.unapplied.length) {
+            batchEffects.unapplied = (batchEffects.unapplied || [])
+                .concat(oef.unapplied);
+        }
+    }
+
+    // Recovery is bounded outcome metadata, not optional operation detail.
+    // Promote every record to the batch before summaryOnly can omit ops and
+    // before the Python wire budget can omit op.data. Keep the operation
+    // coordinates alongside nested compound provenance rather than
+    // overwriting it.
+    var batchRecovery = null;
+    for (var bri = 0; bri < results.length; bri++) {
+        var operationRecovery = _mcpRecoveryArray(results[bri].recovery);
+        for (var brj = 0; brj < operationRecovery.length; brj++) {
+            var sourceRecovery = operationRecovery[brj];
+            if (!sourceRecovery || typeof sourceRecovery !== "object") continue;
+            var batchRecord = {};
+            for (var brk in sourceRecovery) {
+                if (sourceRecovery.hasOwnProperty(brk)) {
+                    batchRecord[brk] = sourceRecovery[brk];
+                }
+            }
+            batchRecord.batchOperationIndex = results[bri].index;
+            batchRecord.batchOperationTask = results[bri].task;
+            batchRecovery = mcpMergeRecovery(batchRecovery, batchRecord);
+        }
     }
 
     // === JOURNAL RECORDING (P6) — runs for BOTH summary and full reports ===
@@ -1075,6 +1808,7 @@ function executeOpBatch(ops, options) {
             timestamp: ctx.clock(),
             ops: journalOps,
             createdIds: createdIds,
+            effects: batchEffects,
             generatorMeta: options.generatorMeta || undefined,
             options: { strict: strict, rollback: rollback, snapshot: useSnapshot },
             report: { ok: allOk, stats: { total: ops.length, passed: passed, failed: failed } }
@@ -1099,6 +1833,9 @@ function executeOpBatch(ops, options) {
             summaryOnly: true,
             rolledBack: rolledBackCount,
             createdIds: createdIds,
+            effects: batchEffects,
+            recovery: batchRecovery,
+            effectSteps: effectSteps,
             stats: {
                 total: ops.length,
                 executed: results.length,
@@ -1125,6 +1862,9 @@ function executeOpBatch(ops, options) {
         schemaVersion: OP_SCHEMA_VERSION,
         rolledBack: rolledBackCount,
         createdIds: createdIds,
+        effects: batchEffects,
+        recovery: batchRecovery,
+        effectSteps: effectSteps,
         ops: results,
         stats: {
             total: ops.length,

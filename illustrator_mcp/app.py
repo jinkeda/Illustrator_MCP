@@ -6,6 +6,7 @@ This is the only module that constructs the MCP application instance.
 """
 
 import logging
+import sys
 from contextlib import asynccontextmanager
 from typing import AsyncIterator, Dict, Any
 
@@ -38,10 +39,12 @@ async def server_lifespan(server: FastMCP) -> AsyncIterator[Dict[str, Any]]:
         # Verify bridge started successfully
         if bridge.is_running():
             logger.info(f"✓ WebSocket bridge started on port {config.ws_port}")
-            logger.info(f"  CEP panel should connect to: ws://localhost:{config.ws_port}")
+            logger.info(f"  CEP panel should connect to: ws://{config.ws_host}:{config.ws_port}")
         else:
-            logger.error("✗ WebSocket bridge failed to start!")
-            logger.error("  CEP panel will NOT be able to connect.")
+            error = RuntimeError("WebSocket bridge is not listening")
+            if bridge.server._start_error is not None:
+                raise error from bridge.server._start_error
+            raise error
         
         # Dynamic tool count
         try:
@@ -59,6 +62,7 @@ async def server_lifespan(server: FastMCP) -> AsyncIterator[Dict[str, Any]]:
         yield {}
         
     finally:
+        primary_error = sys.exc_info()[1]
         # Clean up on shutdown
         logger.info("=" * 60)
         logger.info("Adobe Illustrator MCP Server - LIFESPAN SHUTDOWN")
@@ -71,11 +75,12 @@ async def server_lifespan(server: FastMCP) -> AsyncIterator[Dict[str, Any]]:
             logger.info("Runtime shutdown complete (bridge + proxy)")
         except Exception as e:
             logger.error(f"Error during runtime shutdown: {e}")
-            # Fallback: at least try to stop the bridge directly
-            if bridge:
-                bridge.stop()
-        
-        logger.info("Server shutdown complete")
+            if primary_error is None:
+                raise
+            # Preserve the startup/request exception; runtime retains the bridge.
+            logger.exception("Cleanup also failed while handling %r", primary_error)
+        else:
+            logger.info("Server shutdown complete")
 
 
 # Create MCP server with lifespan management

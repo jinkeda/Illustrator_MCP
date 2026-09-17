@@ -1,8 +1,9 @@
 """
 VLM QA Cadence — mutation counter and checkpoint constants.
 
-Tracks the number of mutating tool calls so the VLM QA pipeline can
-auto-inject annotated previews at regular intervals.
+Tracks the number of mutating tool calls. The count is one input to the
+evidence policy in ``tools/evidence.py``, which decides what verification an
+edit requires; it is no longer a trigger in its own right.
 
 This module is the SINGLE SOURCE OF TRUTH for cadence state.
 Other tool modules import from here (never the reverse).
@@ -10,67 +11,127 @@ Other tool modules import from here (never the reverse).
 
 import threading
 
+from illustrator_mcp.occlusion_guard import (
+    COVER_THRESHOLD, SUSPICION_THRESHOLD,
+)
+
 # ── VLM QA Cadence ──────────────────────────────────────────────────
 # Auto-inject annotated preview every N execute_script calls.
 # The counter is module-level and resets on server restart.
 VLM_QA_CADENCE: int = 5
+
+# Mutations counted before any document has been named by the host.
+_UNKNOWN_DOCUMENT: str = "<unknown document>"
 # CONTRACT: any new mutating tool MUST call _counter.increment().
 
 
 class _MutationCounter:
-    """Thread-safe mutation counter for VLM QA cadence.
+    """Thread-safe mutation counters, one per document.
+
+    This was a single process-wide integer. Editing two documents in one
+    session therefore advanced ONE cadence across both: the checkpoint fired
+    after five mutations spread over two documents and asked for evidence
+    about whichever document happened to be active, while each document
+    individually might have had only two or three unverified changes.
+
+    Counts are keyed by document name, which is what the host can cheaply
+    report on every call (see ``wrap_script``). ``_UNKNOWN_DOCUMENT`` holds
+    calls made before any document has been seen; when the host then names the
+    document, :meth:`reattribute` moves the count to the right key so the
+    unknown bucket does not accumulate.
 
     Uses a lock so increment/decrement are safe under free-threaded
     Python (PEP 703 / --disable-gil).
-    TODO: scope to connection/session if scaling to multi-agent SSE/HTTP.
     """
 
     def __init__(self) -> None:
-        self._count: int = 0
+        self._counts: dict = {}
+        self._active: str = _UNKNOWN_DOCUMENT
         self._lock = threading.Lock()
 
-    def increment(self) -> int:
-        """Atomically increment and return the new value."""
-        with self._lock:
-            self._count += 1
-            return self._count
+    # ── The document a mutation is attributed to ────────────────────
 
-    def decrement(self) -> None:
+    def set_active_document(self, name) -> None:
+        """Record which document subsequent mutations belong to.
+
+        Called with what the host reported on the last response, and with
+        ``None`` when the active document is gone (closed).
+        """
+        with self._lock:
+            self._active = name or _UNKNOWN_DOCUMENT
+
+    @property
+    def active_document(self) -> str:
+        with self._lock:
+            return self._active
+
+    def reattribute(self, name) -> None:
+        """Move the most recent unknown-document count onto a real document.
+
+        The count has to be taken before the script runs, but the host only
+        names the document in its reply. Rather than leave that first mutation
+        on an anonymous pile, it is moved once the answer arrives.
+        """
+        if not name:
+            return
+        with self._lock:
+            self._active = name
+            pending = self._counts.get(_UNKNOWN_DOCUMENT, 0)
+            if pending > 0 and name not in self._counts:
+                self._counts[name] = pending
+                self._counts[_UNKNOWN_DOCUMENT] = 0
+
+    def forget(self, name) -> None:
+        """Drop a document's cadence, e.g. when it is closed."""
+        with self._lock:
+            self._counts.pop(name or _UNKNOWN_DOCUMENT, None)
+            if self._active == (name or _UNKNOWN_DOCUMENT):
+                self._active = _UNKNOWN_DOCUMENT
+
+    # ── The counts themselves ───────────────────────────────────────
+
+    def increment(self, document=None) -> int:
+        """Atomically increment the document's counter and return it."""
+        with self._lock:
+            key = document or self._active
+            self._counts[key] = self._counts.get(key, 0) + 1
+            return self._counts[key]
+
+    def decrement(self, document=None) -> None:
         """Atomically decrement (floor at 0)."""
         with self._lock:
-            self._count = max(0, self._count - 1)
+            key = document or self._active
+            self._counts[key] = max(0, self._counts.get(key, 0) - 1)
 
     @property
     def value(self) -> int:
+        """The active document's count."""
         with self._lock:
-            return self._count
+            return self._counts.get(self._active, 0)
+
+    def value_for(self, document) -> int:
+        with self._lock:
+            return self._counts.get(document or _UNKNOWN_DOCUMENT, 0)
+
+    def snapshot(self) -> dict:
+        with self._lock:
+            return dict(self._counts)
 
     def reset(self) -> None:
         with self._lock:
-            self._count = 0
+            self._counts = {}
+            self._active = _UNKNOWN_DOCUMENT
 
 
 _counter = _MutationCounter()
-
-# Cognitive Forcing Function: injected as the LAST TextContent element
-# when cadence fires, forcing the AI to produce reasoning tokens about
-# the visual state before it can formulate its next action.
-VLM_CHECKPOINT_INSTRUCTION: str = (
-    "⛔ VLM QA CHECKPOINT (mutation #{count})\n"
-    "STOP. Describe what you see in the images above. "
-    "List any discrepancies vs intended design. "
-    "Only THEN proceed.\n"
-    "DO NOT call any tools until you have written your visual analysis."
-)
-
 
 def format_z_telemetry(telemetry: dict) -> str:
     """Format z-order telemetry as compact text for VLM checkpoint.
 
     Designed for maximum information density in minimal tokens.
     Two-tier cover markers:
-      🚨  cover ≥ 0.90  (abort-class / extreme)
-      ⚡  cover ≥ 0.70  (high suspicion)
+      🚨  cover ≥ COVER_THRESHOLD      (abort-class / extreme)
+      ⚡  cover ≥ SUSPICION_THRESHOLD  (high suspicion)
 
     Args:
         telemetry: Raw telemetry dict from z_telemetry.jsx
@@ -105,7 +166,9 @@ def format_z_telemetry(telemetry: dict) -> str:
         cover = item.get("coverRatio", 0)
         fill_hex = item.get("fillColorHex", "none")
 
-        flag = "  ← 🚨" if cover >= 0.90 else ("  ← ⚡" if cover >= 0.70 else "")
+        flag = "  ← 🚨" if cover >= COVER_THRESHOLD else (
+            "  ← ⚡" if cover >= SUSPICION_THRESHOLD else ""
+        )
         lines.append(
             f"  #{i+1} \"{name}\" {tn} L={layer} op={op} "
             f"blend={blend} fill={fill_hex} cover={cover}{flag}"
@@ -136,11 +199,42 @@ def format_z_telemetry(telemetry: dict) -> str:
     return "\n".join(lines)
 
 
-def get_mutation_count() -> int:
-    """Return the current mutation counter value."""
-    return _counter.value
+def get_mutation_count(document=None) -> int:
+    """Return the mutation count for a document (default: the active one)."""
+    if document is None:
+        return _counter.value
+    return _counter.value_for(document)
 
 
 def reset_mutation_count() -> None:
-    """Reset the mutation counter to 0."""
+    """Reset every document's mutation counter to 0."""
     _counter.reset()
+
+
+def set_active_document(name) -> None:
+    """Tell the cadence which document subsequent mutations belong to."""
+    _counter.set_active_document(name)
+
+
+def note_active_document(name) -> None:
+    """Record the document the host reported on its reply.
+
+    Also moves a count taken before the document was known onto that document,
+    so the first mutation of a session is not stranded on the unknown pile.
+    """
+    _counter.reattribute(name)
+
+
+def forget_document(name) -> None:
+    """Drop a closed document's cadence rather than carrying it forward."""
+    _counter.forget(name)
+
+
+def get_active_cadence_document() -> str:
+    """The document mutations are currently attributed to."""
+    return _counter.active_document
+
+
+def mutation_counts() -> dict:
+    """All per-document counts, for diagnostics."""
+    return _counter.snapshot()

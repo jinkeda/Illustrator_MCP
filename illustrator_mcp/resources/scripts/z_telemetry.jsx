@@ -160,6 +160,12 @@ for (var tl = 0; tl < topVisibleLayers.length; tl++) {
             typename: tn,
             layerName: tlLayer.name,
             layerIndex: tlInfo.index,
+            // Where the item sits in its layer's stack (0 = frontmost) and how
+            // deep that stack is. The occlusion guard needs this to tell a
+            // legitimate background — a full-cover shape with nothing beneath
+            // it — from a shape that is actually hiding the artwork.
+            zIndexInLayer: pi,
+            layerItemCount: tlLayer.pageItems.length,
             opacity: item.opacity,
             filled: isFilled,
             stroked: (hasFilled ? item.stroked : false),

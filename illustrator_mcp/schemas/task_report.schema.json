@@ -221,6 +221,11 @@
           "title": "Itemsprocessed",
           "type": "integer"
         },
+        "itemsCreated": {
+          "default": 0,
+          "title": "Itemscreated",
+          "type": "integer"
+        },
         "itemsModified": {
           "default": 0,
           "title": "Itemsmodified",

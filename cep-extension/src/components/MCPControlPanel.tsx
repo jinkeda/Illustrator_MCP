@@ -1,6 +1,7 @@
 import React, { useEffect, useRef, useMemo, useState } from 'react';
 import { Zap, Activity } from 'lucide-react';
 import { useMCP } from '../hooks/useMCP';
+import { MCP_ENDPOINT } from '../connection/ConnectionController';
 
 // Professional palette
 const COLORS = {
@@ -42,17 +43,19 @@ function groupLogs(logs: Array<{ id: string; timestamp: string; message: string;
 }
 
 export function MCPControlPanel() {
-  const { status, logs, connect, disconnect } = useMCP();
+  const { status, connectionControl, logs, connect, disconnect } = useMCP();
   const scrollRef = useRef<HTMLDivElement>(null);
   const prevStatus = useRef(status);
   const [flash, setFlash] = useState(false);
 
   useEffect(() => {
+    let timer: number | undefined;
     if (prevStatus.current !== 'connected' && status === 'connected') {
       setFlash(true);
-      setTimeout(() => setFlash(false), 600);
-    }
+      timer = window.setTimeout(() => setFlash(false), 600);
+    } else setFlash(false);
     prevStatus.current = status;
+    return () => { if (timer !== undefined) window.clearTimeout(timer); };
   }, [status]);
 
   useEffect(() => {
@@ -60,19 +63,18 @@ export function MCPControlPanel() {
   }, [logs]);
 
   const toggleConnection = () => {
-    if (status === 'connected') disconnect();
+    if (connectionControl.action === 'disconnect') disconnect();
     else connect();
   };
 
   const groupedLogs = useMemo(() => groupLogs(logs), [logs]);
 
-  const statusConfig = {
-    connected: { color: COLORS.success, label: 'Connected', btnLabel: 'Stop', btnColor: COLORS.danger },
-    connecting: { color: COLORS.accent, label: 'Connecting...', btnLabel: 'Wait', btnColor: COLORS.textMuted },
-    disconnected: { color: COLORS.textMuted, label: 'Disconnected', btnLabel: 'Connect', btnColor: COLORS.success },
-    error: { color: COLORS.danger, label: 'Error', btnLabel: 'Retry', btnColor: COLORS.accent },
+  const statusColors = {
+    connected: COLORS.success, connecting: COLORS.accent,
+    disconnected: COLORS.textMuted, disconnecting: COLORS.textMuted,
+    retrying: COLORS.warning, error: COLORS.danger,
   };
-  const cfg = statusConfig[status] || statusConfig.disconnected;
+  const cfg = {color:statusColors[status]};
 
   const getLogColor = (type: string) => ({
     success: COLORS.success,
@@ -96,6 +98,7 @@ export function MCPControlPanel() {
       {/* ===== COMPACT HEADER ===== */}
       <header style={{
         height: '44px',
+        gap: '6px',
         flexShrink: 0,
         display: 'flex',
         alignItems: 'center',
@@ -109,12 +112,14 @@ export function MCPControlPanel() {
           display: 'flex',
           alignItems: 'center',
           gap: '6px',
+          minWidth: 0,
           padding: '4px 10px 4px 8px',
           borderRadius: '12px',
           backgroundColor: `${cfg.color}12`,
           border: `1px solid ${cfg.color}25`,
         }}>
           <div style={{
+            flexShrink: 0,
             width: '6px',
             height: '6px',
             borderRadius: '50%',
@@ -122,35 +127,40 @@ export function MCPControlPanel() {
             boxShadow: flash ? `0 0 6px ${cfg.color}` : 'none',
             transition: 'box-shadow 0.3s',
           }} />
-          <span style={{ fontSize: '11px', color: cfg.color, fontWeight: 500, letterSpacing: '0.02em' }}>
-            {cfg.label}
+          <span role="status" aria-label={connectionControl.statusText} title={connectionControl.statusText}
+            style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', fontSize: '11px', color: cfg.color, fontWeight: 500, letterSpacing: '0.02em' }}>
+            {connectionControl.statusLabel}
           </span>
         </div>
 
         {/* Right: Icon Button */}
         <button
           onClick={toggleConnection}
-          disabled={status === 'connecting'}
-          title={status === 'connected' ? 'Disconnect' : 'Connect'}
+          disabled={!connectionControl.enabled}
+          aria-label={connectionControl.label}
+          title={connectionControl.action === 'disconnect'
+            ? 'Disconnect. Running Illustrator requests continue.'
+            : `${connectionControl.label}. ${connectionControl.statusText}`}
           style={{
             display: 'flex',
             alignItems: 'center',
             justifyContent: 'center',
+            flexShrink: 0,
             width: '32px',
             height: '32px',
             borderRadius: '8px',
             border: `1px solid ${COLORS.border}`,
-            cursor: status === 'connecting' ? 'default' : 'pointer',
+            cursor: !connectionControl.enabled ? 'default' : 'pointer',
             backgroundColor: 'transparent',
             color: status === 'connected' ? COLORS.success : COLORS.textMuted,
-            opacity: status === 'connecting' ? 0.5 : 1,
+            opacity: !connectionControl.enabled ? 0.5 : 1,
             transition: 'all 0.15s',
           }}
           onMouseEnter={(e) => {
             if (status === 'connected') {
               e.currentTarget.style.backgroundColor = 'rgba(248,113,113,0.12)';
               e.currentTarget.style.color = COLORS.danger;
-            } else if (status !== 'connecting') {
+            } else if (connectionControl.enabled) {
               e.currentTarget.style.backgroundColor = 'rgba(255,255,255,0.06)';
               e.currentTarget.style.color = COLORS.textPrimary;
             }
@@ -204,7 +214,7 @@ export function MCPControlPanel() {
                 {log.timestamp}
               </span>
               {/* Message */}
-              <span style={{
+              <span title={log.message} style={{
                 color: getLogColor(log.type),
                 overflow: 'hidden',
                 textOverflow: 'ellipsis',
@@ -234,8 +244,8 @@ export function MCPControlPanel() {
         color: COLORS.textMuted,
         fontFamily: '"SF Mono", Menlo, monospace',
       }}>
-        <span>ws://127.0.0.1:8081</span>
-        <span>v1.0.1</span>
+        <span>{MCP_ENDPOINT}</span>
+        <span>v{__APP_VERSION__}</span>
       </footer>
 
       <style>{`

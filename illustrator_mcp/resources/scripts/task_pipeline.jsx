@@ -30,18 +30,10 @@
  * @param {Object} [details] - Optional additional context
  * @returns {Object} TaskError object
  */
-function makeError(code, message, stage, itemRef, details) {
-    return {
-        ok: false,
-        error: {
-            code: code,
-            message: message,
-            stage: stage,
-            itemRef: itemRef || null,
-            details: details || null
-        }
-    };
-}
+// makeError now lives in error_envelope.jsx. It was here, and `targets.jsx`
+// — which this library depends on — calls it twenty-five times, so targets
+// could not declare where it came from without a cycle and declared nothing
+// instead. A leaf both can name breaks the knot. (OR14)
 
 // ==================== Error Handling ====================
 
@@ -313,6 +305,31 @@ function executeTask(payload, collectFn, computeFn, applyFn) {
         return report;
     }
 
+    // === T03: dryRun guard — BEFORE any side effect ===
+    // This check used to sit after the compute stage.  In SOC batch mode the
+    // compute function IS the mutating executor, so by the time the old check
+    // ran the document had already changed, yet the report said "no changes
+    // applied".  Collection also clears the selection and can stamp @mcp:id
+    // notes before that point.
+    //
+    // Rejecting here — before collect, selection clearing, ID assignment, or
+    // dispatch — is the only position from which the no-mutation promise is
+    // true.  Read-only pipelines (query_items) do not need the flag: they pass
+    // an apply function that does nothing.
+    if (options.dryRun) {
+        report.ok = false;
+        report.errors.push(makeError(
+            ErrorCodes.V_INVALID_PARAM_VALUE || "V011",
+            "dryRun (validation-only execution) is not supported: batch " +
+            "operations mutate during the compute stage, so the flag cannot " +
+            "prevent changes. Rejected before any document access; nothing " +
+            "was modified.",
+            "validate"
+        ));
+        report.timing = { collect_ms: 0, compute_ms: 0, apply_ms: 0, total_ms: 0 };
+        return report;
+    }
+
     // Check for active document
     var doc = null;
     try {
@@ -345,36 +362,10 @@ function executeTask(payload, collectFn, computeFn, applyFn) {
         try {
             if (trace) trace.push("[COLLECT] Starting target collection");
 
-            // Handle both v2.3 TargetSelector and legacy formats
-            var targets = payload.targets;
-            var targetObj = targets;
-            var orderBy = "zOrder";
-            var globalExclude = null;
-
-            if (targets && targets.target) {
-                // V2.3 TargetSelector format
-                targetObj = targets.target;
-                orderBy = targets.orderBy || "zOrder";
-                globalExclude = targets.exclude;
-            } else {
-                // Legacy format support - some might pass exclude/orderBy directly
-                if (targets && targets.exclude) globalExclude = targets.exclude;
-                if (targets && targets.orderBy) orderBy = targets.orderBy;
-            }
-
-            items = collectFn(doc, targetObj);
-
-            // Phase 4 guard: clear selection after resolution to prevent
-            // accidental coupling in downstream ops
-            try { if (typeof app !== "undefined") app.selection = null; } catch (selErr) { /* non-critical */ }
-
-            // Apply global exclusion
-            if (globalExclude) {
-                items = filterItems(items, globalExclude);
-            }
-
-            // Apply ordering
-            items = sortItems(items, orderBy);
+            // Selector normalization, exclusion and ordering live in targets.jsx.
+            // Keep the user's selection untouched: observation/collection must
+            // not change document UI state.
+            items = collectFn(doc, payload.targets);
 
             report.stats.itemsProcessed = items.length;
             if (trace) trace.push("[COLLECT] Found " + items.length + " items");
@@ -404,11 +395,11 @@ function executeTask(payload, collectFn, computeFn, applyFn) {
         } catch (e) {
             report.ok = false;
             report.errors.push(makeError(
-                ErrorCodes.R_COLLECT_FAILED,
+                e.code || ErrorCodes.R_COLLECT_FAILED,
                 e.message,
                 "collect",
                 null,
-                { line: e.line || null }
+                e.meta || { line: e.line || null }
             ));
             var t1_err = new Date().getTime();
             report.timing = { collect_ms: t1_err - t0, compute_ms: 0, apply_ms: 0, total_ms: t1_err - t0 };
@@ -450,17 +441,10 @@ function executeTask(payload, collectFn, computeFn, applyFn) {
     var t2 = new Date().getTime();
     report.timing.compute_ms = t2 - t1;
 
-    // DryRun mode
-    if (options.dryRun) {
-        if (trace) trace.push("[APPLY] Skipped (dryRun=true)");
-        report.timing.apply_ms = 0;
-        report.timing.total_ms = t2 - t0;
-        report.warnings.push({
-            stage: "apply",
-            message: "DryRun mode - no changes applied"
-        });
-        return report;
-    }
+    // NOTE: the post-compute `if (options.dryRun)` block that used to sit here
+    // is gone (T03).  It claimed "no changes applied" *after* the compute stage
+    // had already run the mutating batch executor.  dryRun is now rejected
+    // during validation, before any document access.
 
     // === APPLY stage ===
     if (!applyFn) {

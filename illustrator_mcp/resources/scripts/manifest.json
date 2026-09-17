@@ -1,608 +1,742 @@
 {
-    "$schema": "https://json-schema.org/draft/2020-12/schema",
-    "version": "3.0.0",
-    "description": "Library manifest for Illustrator MCP ExtendScript libraries. Enables automatic dependency resolution and symbol collision detection.",
-    "libraries": {
-        "geometry": {
-            "file": "geometry.jsx",
-            "version": "3.0.0",
-            "dependencies": [
-                "polyfills",
-                "mcp_id",
-                "heap",
-                "targets"
-            ],
-            "exports": [
-                "getContext",
-                "pointXY",
-                "rectXY",
-                "ellipseXY",
-                "lineXY",
-                "polygonXY",
-                "makeRGBColor",
-                "mmToPoints",
-                "pointsToMm",
-                "getVisibleBounds",
-                "getVisibleInfo",
-                "_createPath",
-                "drawPathPoints"
-            ],
-            "description": "Geometry, bounds calculations, unit conversions, and intuitive XY coordinate helpers"
-        },
-        "selection": {
-            "file": "selection.jsx",
-            "version": "1.0.0",
-            "dependencies": [
-                "geometry"
-            ],
-            "exports": [
-                "getOrderedSelection"
-            ],
-            "description": "Selection utilities and spatial ordering"
-        },
-        "layout": {
-            "file": "layout.jsx",
-            "version": "2.0.0",
-            "dependencies": [
-                "geometry"
-            ],
-            "exports": [
-                "arrangeInGrid",
-                "batchResize",
-                "createGrid",
-                "distributeHorizontal",
-                "distributeVertical",
-                "alignCenter",
-                "alignHorizontal",
-                "alignVertical"
-            ],
-            "description": "Grid creation, layout arrangement, distribution, and alignment helpers"
-        },
-        "assets": {
-            "file": "assets.jsx",
-            "version": "1.0.0",
-            "dependencies": [
-                "geometry"
-            ],
-            "exports": [
-                "analyzeAssets",
-                "getAssetInfo",
-                "collectAllPlaced",
-                "collectPlacedFromLayer",
-                "isPlacedOrRaster"
-            ],
-            "description": "Asset analysis for placed and raster items: metadata, bounds, aspect ratio"
-        },
-        "task_executor": {
-            "file": "task_executor.jsx",
-            "version": "2.3.1",
-            "deprecated": true,
-            "dependencies": [],
-            "exports": [
-                "ErrorCodes",
-                "RETRYABLE_CODES",
-                "makeError",
-                "getLayerPath",
-                "getIndexPath",
-                "describeItem",
-                "describeItemV2",
-                "assignItemId",
-                "assignItemIdV2",
-                "parseMcpTags",
-                "sortItems",
-                "filterItems",
-                "selectionToArray",
-                "findLayer",
-                "collectLayerItems",
-                "queryItems",
-                "collectTargets",
-                "safeExecute",
-                "buildReport",
-                "executeTask",
-                "executeTaskWithRetry",
-                "executeTaskWithRetrySafe",
-                "validatePayload",
-                "isRetryable",
-                "recordTaskHistory",
-                "getTaskHistory",
-                "clearTaskHistory",
-                "profile",
-                "formatTiming"
-            ],
-            "description": "DEPRECATED: Use polyfills + item_ref + targets + task_pipeline. Kept for backward compat."
-        },
-        "polyfills": {
-            "file": "polyfills.jsx",
-            "version": "1.0.0",
-            "dependencies": [],
-            "exports": [],
-            "description": "ES3 Array polyfills and JSON polyfill. Must load first."
-        },
-        "item_ref": {
-            "file": "item_ref.jsx",
-            "version": "1.0.0",
-            "dependencies": [
-                "polyfills"
-            ],
-            "exports": [
-                "getLayerPath",
-                "getIndexPath",
-                "describeItem",
-                "describeItemV2",
-                "parseMcpTags",
-                "assignItemId",
-                "assignItemIdV2"
-            ],
-            "description": "Stable item references, tag parsing, and ID assignment"
-        },
-        "targets": {
-            "file": "targets.jsx",
-            "version": "1.0.0",
-            "dependencies": [
-                "polyfills"
-            ],
-            "exports": [
-                "sortItems",
-                "filterItems",
-                "isInsideClippingMask",
-                "selectionToArray",
-                "pageItemsToArray",
-                "findLayer",
-                "collectContainerItems",
-                "collectLayerItems",
-                "queryItems",
-                "collectTargets"
-            ],
-            "description": "Declarative target selection, sorting, and filtering"
-        },
-        "task_pipeline": {
-            "file": "task_pipeline.jsx",
-            "version": "1.0.0",
-            "dependencies": [
-                "polyfills",
-                "contracts",
-                "item_ref",
-                "targets"
-            ],
-            "exports": [
-                "makeError",
-                "safeExecute",
-                "buildReport",
-                "validatePayload",
-                "executeTask",
-                "executeTaskWithRetry",
-                "executeTaskWithRetrySafe",
-                "isRetryable",
-                "recordTaskHistory",
-                "getTaskHistory",
-                "clearTaskHistory",
-                "profile",
-                "formatTiming"
-            ],
-            "description": "Task execution pipeline with collect->compute->apply flow, retry, and history"
-        },
-        "presets": {
-            "file": "presets.jsx",
-            "version": "2.0.0",
-            "dependencies": [
-                "geometry"
-            ],
-            "exports": [
-                "PRESETS",
-                "getPreset",
-                "computeSlotGeometry",
-                "fitToSlot",
-                "applyPreset",
-                "listPresets",
-                "COLOR_PALETTES",
-                "getColor",
-                "getColorDef",
-                "getPalette",
-                "listPalettes",
-                "getPaletteInfo",
-                "applyPaletteToItems"
-            ],
-            "description": "Layout presets (grid configurations) and color palettes for scientific figures"
-        },
-        "validate": {
-            "file": "validate.jsx",
-            "version": "1.2.0",
-            "dependencies": [],
-            "exports": [
-                "isItemCenterOnArtboard",
-                "isLayerHidden",
-                "countItemsOnArtboard"
-            ],
-            "description": "Bounds validation with clipping mask, scope, and layer-visibility support"
-        },
-        "op_schemas": {
-            "file": "op_schemas.jsx",
-            "version": "1.0.0",
-            "deprecated": true,
-            "dependencies": [
-                "contracts",
-                "field_eval"
-            ],
-            "exports": [
-                "OP_PARAM_SCHEMAS",
-                "validateOpParams",
-                "getOpSchema",
-                "listSchemaOps"
-            ],
-            "description": "DEPRECATED: Use contracts instead. Kept for backward compat."
-        },
-        "contracts": {
-            "file": "contracts.jsx",
-            "version": "1.0.0",
-            "dependencies": [
-                "field_eval"
-            ],
-            "exports": [
-                "CONTRACTS_CHECKSUM",
-                "ErrorCodes",
-                "RETRYABLE_CODES",
-                "OP_PARAM_SCHEMAS",
-                "validateOpParams",
-                "getOpSchema",
-                "listSchemaOps",
-                "getValueType"
-            ],
-            "description": "Compiled operation contracts (SSOT: schemas/contracts.py). Includes ErrorCodes, schemas, and validators."
-        },
-        "heap": {
-            "file": "heap.jsx",
-            "version": "1.0.0",
-            "dependencies": [
-                "mcp_id"
-            ],
-            "exports": [
-                "heapBeginTxn",
-                "heapCommitTxn",
-                "heapRollbackTxn",
-                "heapRegister",
-                "heapTombstone",
-                "heapDelete",
-                "heapResolve",
-                "heapResolveMany",
-                "heapRebuildIndex",
-                "heapInvalidate",
-                "heapDiagnostics"
-            ],
-            "description": "Transaction-scoped ID index with begin/commit/rollback lifecycle"
-        },
-        "snapshot": {
-            "file": "snapshot.jsx",
-            "version": "1.0.1",
-            "dependencies": [
-                "mcp_id"
-            ],
-            "exports": [
-                "captureSnapshot",
-                "restoreSnapshot",
-                "serializeColor",
-                "deserializeColor"
-            ],
-            "description": "Document state snapshot/restore for safer rollback"
-        },
-        "ops_journal": {
-            "file": "ops_journal.jsx",
-            "version": "1.0.0",
-            "dependencies": [
-                "snapshot",
-                "ops_core"
-            ],
-            "exports": [
-                "journalAppend",
-                "journalGet",
-                "journalClear",
-                "journalSummary",
-                "journalReplay",
-                "jsonStringify"
-            ],
-            "description": "Operation journal for batch replay and recomputability (P6)"
-        },
-        "field_eval": {
-            "file": "field_eval.jsx",
-            "version": "1.0.0",
-            "dependencies": [],
-            "exports": [
-                "FIELD_EVALUATORS",
-                "registerFieldEvaluator",
-                "isField",
-                "containsFields",
-                "evaluateField",
-                "resolveFields"
-            ],
-            "description": "Field evaluator preprocessing for dynamic params (P3). 4 built-ins: index_ratio, position, noise, lookup"
-        },
-        "ops_core": {
-            "file": "ops_core.jsx",
-            "version": "1.2.0",
-            "dependencies": [
-                "polyfills",
-                "task_pipeline",
-                "contracts",
-                "item_ref",
-                "targets",
-                "mcp_id",
-                "heap",
-                "snapshot",
-                "ops_journal",
-                "field_eval"
-            ],
-            "exports": [
-                "OP_SCHEMA_VERSION",
-                "generateUUID",
-                "OP_HANDLERS",
-                "registerOpHandler",
-                "validateOp",
-                "resolveTargets",
-                "executeOpBatch",
-                "profileOp"
-            ],
-            "description": "SOC operation batch executor with heap-based ID targeting, validation, and transactional index lifecycle"
-        },
-        "ops_element": {
-            "file": "ops_element.jsx",
-            "version": "1.0.0",
-            "dependencies": [
-                "ops_core",
-                "contracts",
-                "targets",
-                "geo_ir",
-                "curves",
-                "session",
-                "generative",
-                "geometry"
-            ],
-            "exports": [],
-            "description": "Element CRUD operations (create, modify, delete). Supports polyline and bezier path IR."
-        },
-        "ops_group": {
-            "file": "ops_group.jsx",
-            "version": "1.0.0",
-            "dependencies": [
-                "ops_core",
-                "contracts"
-            ],
-            "exports": [],
-            "description": "Group operations (create, ungroup, z-order)"
-        },
-        "ops_layer": {
-            "file": "ops_layer.jsx",
-            "version": "1.0.0",
-            "dependencies": [
-                "ops_core",
-                "contracts",
-                "targets"
-            ],
-            "exports": [],
-            "description": "Layer operations (create, activate, lock, visible, delete)"
-        },
-        "ops_style": {
-            "file": "ops_style.jsx",
-            "version": "1.0.0",
-            "dependencies": [
-                "ops_core",
-                "contracts"
-            ],
-            "exports": [],
-            "description": "Style operations (fill, stroke, opacity)"
-        },
-        "ops_text": {
-            "file": "ops_text.jsx",
-            "version": "1.1.0",
-            "dependencies": [
-                "ops_core",
-                "contracts",
-                "targets"
-            ],
-            "exports": [],
-            "description": "Text operations (create, set content, set style)"
-        },
-        "ops_align": {
-            "file": "ops_align.jsx",
-            "version": "2.0.0",
-            "dependencies": [
-                "ops_core",
-                "contracts",
-                "heap",
-                "mcp_id"
-            ],
-            "exports": [],
-            "description": "Alignment and distribution operations (key-object, coordinate, center-distribute)"
-        },
-        "ops_measure": {
-            "file": "ops_measure.jsx",
-            "version": "1.2.0",
-            "dependencies": [
-                "ops_core",
-                "contracts"
-            ],
-            "exports": [],
-            "description": "Measurement and assertion operations (assert_count, assert_bounds, assert_exists, assert_style, assert_text, assert_alignment, assert_z_order)"
-        },
-        "geo_ir": {
-            "file": "geo_ir.jsx",
-            "version": "1.2.0",
-            "dependencies": [],
-            "exports": [
-                "GEO_IR_VERSION",
-                "GEO_IR_TYPES",
-                "GEO_IR_KINDS",
-                "irPath",
-                "irBezierPath",
-                "irMulti",
-                "irPoints",
-                "isIR",
-                "irType",
-                "irValidate",
-                "irFlatten",
-                "irPointCount",
-                "irMapPoints"
-            ],
-            "description": "Geometry Intermediate Representation: versioned schema, factories (polyline + bezier), validation, and point mapping utilities"
-        },
-        "mcp_id": {
-            "file": "mcp_id.jsx",
-            "version": "1.0.0",
-            "dependencies": [],
-            "exports": [
-                "extractMcpId",
-                "setMcpId",
-                "removeIdFromNote"
-            ],
-            "description": "MCP ID utilities: extraction, assignment, note manipulation, and targeted index removal"
-        },
-        "auto_tag": {
-            "file": "auto_tag.jsx",
-            "version": "1.0.0",
-            "dependencies": [
-                "item_ref"
-            ],
-            "exports": [],
-            "description": "Auto-assign MCP IDs to untagged items. Supports delta (selection-first) and converge modes."
-        },
-        "checkpoint": {
-            "file": "checkpoint.jsx",
-            "version": "1.0.0",
-            "dependencies": [
-                "polyfills",
-                "snapshot",
-                "mcp_id"
-            ],
-            "exports": [
-                "checkpointSave",
-                "checkpointRestore",
-                "checkpointList",
-                "checkpointDelete"
-            ],
-            "description": "Named checkpoint management (save/restore/list/delete)"
-        },
-        "generative": {
-            "file": "generative.jsx",
-            "version": "1.5.0",
-            "dependencies": [
-                "geo_ir"
-            ],
-            "exports": [
-                "seededRandom",
-                "buildPermTable",
-                "getArtboardBounds",
-                "addLabel",
-                "smoothstep",
-                "lerp",
-                "valueNoise2D",
-                "fbm",
-                "ridgedNoise",
-                "marchingSquares",
-                "chainSegments",
-                "chaikinSmooth",
-                "decimatePoints",
-                "cleanPolyline",
-                "chainSegmentsIR",
-                "spatialHashBuild",
-                "spatialHashQuery",
-                "pairsWithinRadius",
-                "clusterByRadius",
-                "buildFieldGrid",
-                "integrateField",
-                "buildCurlField"
-            ],
-            "description": "Procedural generation utilities: seeded PRNG, artboard helpers, safe text, value noise, fBm, marching squares, segment chaining, Chaikin smoothing (with point budget), decimation, IR wrappers, spatial hashing, clustering, vector field precomputation, path integration, curl-noise fields"
-        },
-        "session": {
-            "file": "session.jsx",
-            "version": "1.0.0",
-            "dependencies": [
-                "geo_ir"
-            ],
-            "exports": [
-                "stashPut",
-                "stashGet",
-                "stashPutIR",
-                "stashKeys",
-                "stashClear",
-                "stashInfo"
-            ],
-            "description": "Session-scoped key-value stash for multi-call IR handoff. Keys namespaced by document name. stashPutIR validates IR schema before storing."
-        },
-        "curves": {
-            "file": "curves.jsx",
-            "version": "1.0.0",
-            "dependencies": [
-                "geo_ir"
-            ],
-            "exports": [
-                "smoothCurve",
-                "naturalSpline",
-                "circularArc",
-                "ellipticalArc",
-                "roundedPolygon"
-            ],
-            "description": "Bézier curve helpers: Catmull-Rom, natural spline, circular/elliptical arcs, rounded polygon. All output irBezierPath IR."
-        },
-        "ops_compound": {
-            "file": "ops_compound.jsx",
-            "version": "1.0.0",
-            "dependencies": [
-                "ops_core",
-                "contracts"
-            ],
-            "exports": [
-                "resolvePrevTokens"
-            ],
-            "description": "Compound meta-op: sequences sub-ops with $prev/$prevAll ID forwarding"
-        },
-        "grid_helper": {
-            "file": "grid_helper.jsx",
-            "version": "1.0.0",
-            "dependencies": [
-                "polyfills"
-            ],
-            "exports": [
-                "artboardGrid",
-                "itemsInCell"
-            ],
-            "description": "Grid-based element discovery: divides artboard into labeled cells (A1, B2…) for spatial targeting of unnamed items"
-        },
-        "geo_boolean": {
-            "file": "geo_boolean.jsx",
-            "version": "1.0.0",
-            "dependencies": [
-                "ops_core"
-            ],
-            "exports": [
-                "extractPathGeometry",
-                "reconstructRegions",
-                "deleteByMcpIds"
-            ],
-            "description": "Boolean geometry helpers: extract path geometry, reconstruct regions (with CompoundPathItem for holes), and safe cleanup"
-        },
-        "test_soc": {
-            "file": "test_soc.jsx",
-            "version": "1.1.0",
-            "dependencies": [
-                "polyfills",
-                "contracts",
-                "targets",
-                "task_pipeline",
-                "ops_core",
-                "ops_layer",
-                "ops_element",
-                "ops_measure",
-                "ops_style",
-                "ops_journal",
-                "ops_compound",
-                "session",
-                "geo_ir",
-                "generative"
-            ],
-            "exports": [
-                "runSOCTests",
-                "_socAssert"
-            ],
-            "description": "SOC integration test harness. Run runSOCTests() to verify all contracts."
-        }
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "version": "3.0.0",
+  "description": "Library manifest for Illustrator MCP ExtendScript libraries. Enables automatic dependency resolution and symbol collision detection.",
+  "libraries": {
+    "geometry": {
+      "file": "geometry.jsx",
+      "version": "3.0.0",
+      "dependencies": [
+        "polyfills",
+        "mcp_id",
+        "heap",
+        "targets",
+        "ownership"
+      ],
+      "exports": [
+        "getContext",
+        "pointXY",
+        "rectXY",
+        "ellipseXY",
+        "lineXY",
+        "polygonXY",
+        "makeRGBColor",
+        "mmToPoints",
+        "pointsToMm",
+        "getVisibleBounds",
+        "getVisibleInfo",
+        "_createPath",
+        "drawPathPoints"
+      ],
+      "description": "Geometry, bounds calculations, unit conversions, and intuitive XY coordinate helpers"
+    },
+    "selection": {
+      "file": "selection.jsx",
+      "version": "1.1.0",
+      "dependencies": [
+        "geometry"
+      ],
+      "exports": [
+        "getOrderedSelection"
+      ],
+      "description": "Selection utilities and spatial ordering"
+    },
+    "layout": {
+      "file": "layout.jsx",
+      "version": "2.0.0",
+      "dependencies": [
+        "geometry"
+      ],
+      "exports": [
+        "arrangeInGrid",
+        "batchResize",
+        "createGrid",
+        "distributeHorizontal",
+        "distributeVertical",
+        "alignCenter",
+        "alignHorizontal",
+        "alignVertical"
+      ],
+      "description": "Grid creation, layout arrangement, distribution, and alignment helpers"
+    },
+    "assets": {
+      "file": "assets.jsx",
+      "version": "1.0.0",
+      "dependencies": [
+        "geometry"
+      ],
+      "exports": [
+        "analyzeAssets",
+        "getAssetInfo",
+        "collectAllPlaced",
+        "collectPlacedFromLayer",
+        "isPlacedOrRaster"
+      ],
+      "description": "Asset analysis for placed and raster items: metadata, bounds, aspect ratio"
+    },
+    "task_executor": {
+      "file": "task_executor.jsx",
+      "version": "2.3.1",
+      "deprecated": true,
+      "dependencies": [],
+      "exports": [
+        "ErrorCodes",
+        "RETRYABLE_CODES",
+        "makeError",
+        "getLayerPath",
+        "getIndexPath",
+        "describeItem",
+        "describeItemV2",
+        "assignItemId",
+        "assignItemIdV2",
+        "parseMcpTags",
+        "sortItems",
+        "filterItems",
+        "selectionToArray",
+        "findLayer",
+        "collectLayerItems",
+        "queryItems",
+        "collectTargets",
+        "safeExecute",
+        "buildReport",
+        "executeTask",
+        "executeTaskWithRetry",
+        "executeTaskWithRetrySafe",
+        "validatePayload",
+        "isRetryable",
+        "recordTaskHistory",
+        "getTaskHistory",
+        "clearTaskHistory",
+        "profile",
+        "formatTiming"
+      ],
+      "description": "DEPRECATED: Use polyfills + item_ref + targets + task_pipeline. Kept for backward compat."
+    },
+    "polyfills": {
+      "file": "polyfills.jsx",
+      "version": "1.0.0",
+      "dependencies": [],
+      "exports": [],
+      "description": "ES3 Array polyfills and JSON polyfill. Must load first."
+    },
+    "item_ref": {
+      "file": "item_ref.jsx",
+      "version": "1.0.0",
+      "dependencies": [
+        "polyfills"
+      ],
+      "exports": [
+        "getLayerPath",
+        "getIndexPath",
+        "describeItem",
+        "describeItemV2",
+        "parseMcpTags",
+        "assignItemId",
+        "assignItemIdV2"
+      ],
+      "description": "Stable item references, tag parsing, and ID assignment"
+    },
+    "targets": {
+      "file": "targets.jsx",
+      "version": "1.2.0",
+      "dependencies": [
+        "polyfills",
+        "handles",
+        "contracts",
+        "grid_helper",
+        "error_envelope"
+      ],
+      "exports": [
+        "sortItems",
+        "filterItems",
+        "isInsideClippingMask",
+        "selectionToArray",
+        "pageItemsToArray",
+        "findLayer",
+        "collectContainerItems",
+        "collectLayerItems",
+        "queryItems",
+        "collectTargets",
+        "normalizeTargetSelector",
+        "dedupeTargetItems"
+      ],
+      "description": "Declarative target selection, sorting, filtering, and exact resolution of expiring artwork handles"
+    },
+    "handles": {
+      "file": "handles.jsx",
+      "version": "1.0.0",
+      "dependencies": [
+        "host_runtime",
+        "doc_session",
+        "mcp_id"
+      ],
+      "exports": [
+        "MCP_HANDLE_VERSION",
+        "mcpIssueHandle",
+        "mcpIssueHandles",
+        "mcpResolveHandle",
+        "mcpHandleStatus",
+        "mcpHandleInvalidateAll",
+        "mcpHandleState"
+      ],
+      "description": "Bounded, expiring, document-scoped identities for untagged artwork without note mutation"
+    },
+    "observation": {
+      "file": "observation.jsx",
+      "version": "1.0.0",
+      "dependencies": [
+        "handles",
+        "mcp_id"
+      ],
+      "exports": [
+        "MCP_OBSERVATION_VERSION",
+        "mcpObservationBegin",
+        "mcpObservationEnd"
+      ],
+      "description": "Coordinated observation snapshots and preservation guards with precise handles"
+    },
+    "task_pipeline": {
+      "file": "task_pipeline.jsx",
+      "version": "1.0.0",
+      "dependencies": [
+        "polyfills",
+        "contracts",
+        "item_ref",
+        "targets",
+        "error_envelope"
+      ],
+      "exports": [
+        "safeExecute",
+        "buildReport",
+        "validatePayload",
+        "executeTask",
+        "executeTaskWithRetry",
+        "executeTaskWithRetrySafe",
+        "isRetryable",
+        "recordTaskHistory",
+        "getTaskHistory",
+        "clearTaskHistory",
+        "profile",
+        "formatTiming"
+      ],
+      "description": "Task execution pipeline with collect->compute->apply flow, retry, and history"
+    },
+    "presets": {
+      "file": "presets.jsx",
+      "version": "2.0.0",
+      "dependencies": [
+        "geometry"
+      ],
+      "exports": [
+        "PRESETS",
+        "getPreset",
+        "computeSlotGeometry",
+        "fitToSlot",
+        "applyPreset",
+        "listPresets",
+        "COLOR_PALETTES",
+        "getColor",
+        "getColorDef",
+        "getPalette",
+        "listPalettes",
+        "getPaletteInfo",
+        "applyPaletteToItems"
+      ],
+      "description": "Layout presets (grid configurations) and color palettes for scientific figures"
+    },
+    "validate": {
+      "file": "validate.jsx",
+      "version": "1.2.0",
+      "dependencies": [],
+      "exports": [
+        "isItemCenterOnArtboard",
+        "isLayerHidden",
+        "countItemsOnArtboard",
+        "publicationPreflightScan"
+      ],
+      "description": "Bounds validation with clipping mask, scope, and layer-visibility support"
+    },
+    "op_schemas": {
+      "file": "op_schemas.jsx",
+      "version": "1.0.0",
+      "deprecated": true,
+      "dependencies": [
+        "contracts",
+        "field_eval"
+      ],
+      "exports": [
+        "OP_PARAM_SCHEMAS",
+        "validateOpParams",
+        "getOpSchema",
+        "listSchemaOps"
+      ],
+      "description": "DEPRECATED: Use contracts instead. Kept for backward compat."
+    },
+    "contracts": {
+      "file": "contracts.jsx",
+      "version": "1.0.0",
+      "dependencies": [
+        "field_eval"
+      ],
+      "exports": [
+        "CONTRACTS_CHECKSUM",
+        "ErrorCodes",
+        "RETRYABLE_CODES",
+        "OP_PARAM_SCHEMAS",
+        "validateOpParams",
+        "getOpSchema",
+        "listSchemaOps",
+        "getValueType"
+      ],
+      "description": "Compiled operation contracts (SSOT: schemas/contracts.py). Includes ErrorCodes, schemas, and validators."
+    },
+    "heap": {
+      "file": "heap.jsx",
+      "version": "1.0.0",
+      "dependencies": [
+        "mcp_id"
+      ],
+      "exports": [
+        "heapBeginTxn",
+        "heapCommitTxn",
+        "heapRollbackTxn",
+        "heapRegister",
+        "stampMcpId",
+        "resolveIdCompat",
+        "heapTombstone",
+        "heapDelete",
+        "heapResolve",
+        "heapResolveMany",
+        "heapRebuildIndex",
+        "heapInvalidate",
+        "heapDiagnostics"
+      ],
+      "description": "Transaction-scoped ID index with begin/commit/rollback lifecycle"
+    },
+    "snapshot": {
+      "file": "snapshot.jsx",
+      "version": "1.1.0",
+      "dependencies": [
+        "mcp_id"
+      ],
+      "exports": [
+        "captureSnapshot",
+        "restoreSnapshot",
+        "serializeColor",
+        "deserializeColor",
+        "SNAPSHOT_RECOVERY_SCOPE"
+      ],
+      "description": "Partial PROPERTY snapshot/restore for @mcp:id-tagged items. NOT a transaction: cannot restore deletions, path geometry, text, grouping, or z-order. See module header."
+    },
+    "ops_journal": {
+      "file": "ops_journal.jsx",
+      "version": "1.0.0",
+      "dependencies": [
+        "snapshot",
+        "ops_core"
+      ],
+      "exports": [
+        "journalAppend",
+        "journalGet",
+        "journalClear",
+        "journalSummary",
+        "journalReplay",
+        "jsonStringify"
+      ],
+      "description": "Operation journal for batch replay and recomputability (P6)"
+    },
+    "field_eval": {
+      "file": "field_eval.jsx",
+      "version": "1.0.0",
+      "dependencies": [],
+      "exports": [
+        "FIELD_EVALUATORS",
+        "registerFieldEvaluator",
+        "isField",
+        "containsFields",
+        "evaluateField",
+        "resolveFields"
+      ],
+      "description": "Field evaluator preprocessing for dynamic params (P3). 4 built-ins: index_ratio, position, noise, lookup"
+    },
+    "ops_core": {
+      "file": "ops_core.jsx",
+      "version": "1.2.0",
+      "dependencies": [
+        "polyfills",
+        "task_pipeline",
+        "contracts",
+        "item_ref",
+        "targets",
+        "mcp_id",
+        "heap",
+        "snapshot",
+        "ops_journal",
+        "field_eval"
+      ],
+      "exports": [
+        "OP_SCHEMA_VERSION",
+        "generateUUID",
+        "OP_HANDLERS",
+        "registerOpHandler",
+        "validateOp",
+        "resolveTargets",
+        "executeOpBatch",
+        "profileOp",
+        "mcpRecoveryReset",
+        "mcpRecoveryRecord",
+        "mcpRecoveryMark",
+        "mcpRecoveriesSince",
+        "mcpMergeRecovery",
+        "mcpSetCleanupFailures",
+        "mcpCleanupFailures",
+        "mcpTargetIdentity"
+      ],
+      "description": "SOC operation batch executor with heap-based ID targeting, validation, and transactional index lifecycle"
+    },
+    "ops_element": {
+      "file": "ops_element.jsx",
+      "version": "1.0.0",
+      "dependencies": [
+        "ops_core",
+        "contracts",
+        "targets",
+        "geo_ir",
+        "curves",
+        "session",
+        "generative",
+        "geometry",
+        "ownership"
+      ],
+      "exports": [],
+      "description": "Element CRUD operations (create, modify, delete). Supports polyline and bezier path IR."
+    },
+    "ops_group": {
+      "file": "ops_group.jsx",
+      "version": "1.0.0",
+      "dependencies": [
+        "ops_core",
+        "contracts",
+        "heap",
+        "ownership"
+      ],
+      "exports": [],
+      "description": "Group operations (create, ungroup, z-order)"
+    },
+    "ops_layer": {
+      "file": "ops_layer.jsx",
+      "version": "1.1.0",
+      "dependencies": [
+        "ops_core",
+        "contracts",
+        "targets",
+        "ownership"
+      ],
+      "exports": [],
+      "description": "Layer operations (create, reorder, activate, lock, visible, delete, list). Reordering an existing layer is layer_reorder, not layer_create."
+    },
+    "ops_style": {
+      "file": "ops_style.jsx",
+      "version": "1.0.0",
+      "dependencies": [
+        "ops_core",
+        "contracts",
+        "ownership"
+      ],
+      "exports": [
+        "_parseColorParam"
+      ],
+      "description": "Style operations (fill, stroke, opacity)"
+    },
+    "ops_text": {
+      "file": "ops_text.jsx",
+      "version": "1.2.0",
+      "dependencies": [
+        "ops_core",
+        "contracts",
+        "targets",
+        "ops_style",
+        "ownership"
+      ],
+      "exports": [
+        "resolveTextFont"
+      ],
+      "description": "Text operations (create, set content, set style)"
+    },
+    "ops_align": {
+      "file": "ops_align.jsx",
+      "version": "2.0.0",
+      "dependencies": [
+        "ops_core",
+        "contracts",
+        "heap",
+        "mcp_id"
+      ],
+      "exports": [],
+      "description": "Alignment and distribution operations (key-object, coordinate, center-distribute)"
+    },
+    "ops_measure": {
+      "file": "ops_measure.jsx",
+      "version": "1.2.0",
+      "dependencies": [
+        "ops_core",
+        "contracts"
+      ],
+      "exports": [],
+      "description": "Measurement and assertion operations (assert_count, assert_bounds, assert_exists, assert_style, assert_text, assert_alignment, assert_z_order)"
+    },
+    "geo_ir": {
+      "file": "geo_ir.jsx",
+      "version": "1.2.0",
+      "dependencies": [],
+      "exports": [
+        "GEO_IR_VERSION",
+        "GEO_IR_TYPES",
+        "GEO_IR_KINDS",
+        "irPath",
+        "irBezierPath",
+        "irMulti",
+        "irPoints",
+        "isIR",
+        "irType",
+        "irValidate",
+        "irFlatten",
+        "irPointCount",
+        "irMapPoints"
+      ],
+      "description": "Geometry Intermediate Representation: versioned schema, factories (polyline + bezier), validation, and point mapping utilities"
+    },
+    "doc_session": {
+      "file": "doc_session.jsx",
+      "version": "1.1.0",
+      "dependencies": [],
+      "exports": [
+        "MCP_DOC_SESSION_VERSION",
+        "mcpDocBind",
+        "mcpDocValidate",
+        "mcpDocContext",
+        "mcpDocRelease",
+        "mcpDocSessions",
+        "mcpDocList",
+        "mcpDocActivate"
+      ],
+      "description": "Opaque document-session identity bound to a live document reference (survives renaming, invalidates on close) plus explicit artboard/coordinate context"
+    },
+    "host_runtime": {
+      "file": "host_runtime.jsx",
+      "version": "1.1.0",
+      "dependencies": [],
+      "exports": [
+        "MCP_BOOTSTRAP_VERSION",
+        "mcpRuntimeState",
+        "mcpRuntimeInit",
+        "mcpRuntimeHandshake",
+        "mcpRuntimeBeginWork",
+        "mcpRuntimeCompleteWork",
+        "mcpRuntimeJobStatus",
+        "mcpRuntimeEndWork",
+        "mcpRuntimeReset"
+      ],
+      "description": "Versioned host runtime bootstrap with session epoch, active-job tracking, and a bounded completion ledger for reconciliation without replay"
+    },
+    "mcp_id": {
+      "file": "mcp_id.jsx",
+      "version": "1.2.0",
+      "dependencies": [],
+      "exports": [
+        "extractMcpId",
+        "extractAllMcpIds",
+        "noteHasMcpId",
+        "findItemsByMcpId",
+        "setMcpId",
+        "removeIdFromNote",
+        "mcpWalkPageItems",
+        "mcpFindItemByRef"
+      ],
+      "description": "MCP ID utilities plus shared layer-based DOM traversal: exact whole-token matching, duplicate-aware lookup, note manipulation. Walks layers because document.pageItems is stale within a script run."
+    },
+    "auto_tag": {
+      "file": "auto_tag.jsx",
+      "version": "1.0.0",
+      "dependencies": [
+        "item_ref"
+      ],
+      "exports": [],
+      "description": "Auto-assign MCP IDs to untagged items. Supports delta (selection-first) and converge modes."
+    },
+    "checkpoint": {
+      "file": "checkpoint.jsx",
+      "version": "1.0.0",
+      "dependencies": [
+        "polyfills",
+        "snapshot",
+        "mcp_id"
+      ],
+      "exports": [
+        "checkpointSave",
+        "checkpointRestore",
+        "checkpointList",
+        "checkpointDelete"
+      ],
+      "description": "Named checkpoint management (save/restore/list/delete)"
+    },
+    "generative": {
+      "file": "generative.jsx",
+      "version": "1.5.0",
+      "dependencies": [
+        "geo_ir",
+        "ownership"
+      ],
+      "exports": [
+        "seededRandom",
+        "buildPermTable",
+        "getArtboardBounds",
+        "addLabel",
+        "smoothstep",
+        "lerp",
+        "valueNoise2D",
+        "fbm",
+        "ridgedNoise",
+        "marchingSquares",
+        "chainSegments",
+        "chaikinSmooth",
+        "decimatePoints",
+        "cleanPolyline",
+        "chainSegmentsIR",
+        "spatialHashBuild",
+        "spatialHashQuery",
+        "pairsWithinRadius",
+        "clusterByRadius",
+        "buildFieldGrid",
+        "integrateField",
+        "buildCurlField"
+      ],
+      "description": "Procedural generation utilities: seeded PRNG, artboard helpers, safe text, value noise, fBm, marching squares, segment chaining, Chaikin smoothing (with point budget), decimation, IR wrappers, spatial hashing, clustering, vector field precomputation, path integration, curl-noise fields"
+    },
+    "session": {
+      "file": "session.jsx",
+      "version": "1.0.0",
+      "dependencies": [
+        "geo_ir"
+      ],
+      "exports": [
+        "stashPut",
+        "stashGet",
+        "stashPutIR",
+        "stashKeys",
+        "stashClear",
+        "stashInfo"
+      ],
+      "description": "Session-scoped key-value stash for multi-call IR handoff. Keys namespaced by document name. stashPutIR validates IR schema before storing."
+    },
+    "curves": {
+      "file": "curves.jsx",
+      "version": "1.0.0",
+      "dependencies": [
+        "geo_ir"
+      ],
+      "exports": [
+        "smoothCurve",
+        "naturalSpline",
+        "circularArc",
+        "ellipticalArc",
+        "roundedPolygon"
+      ],
+      "description": "Bézier curve helpers: Catmull-Rom, natural spline, circular/elliptical arcs, rounded polygon. All output irBezierPath IR."
+    },
+    "ops_compound": {
+      "file": "ops_compound.jsx",
+      "version": "1.0.0",
+      "dependencies": [
+        "ops_core",
+        "contracts"
+      ],
+      "exports": [
+        "resolvePrevTokens"
+      ],
+      "description": "Compound meta-op: sequences sub-ops with $prev/$prevAll ID forwarding"
+    },
+    "grid_helper": {
+      "file": "grid_helper.jsx",
+      "version": "1.0.0",
+      "dependencies": [
+        "polyfills"
+      ],
+      "exports": [
+        "artboardGrid",
+        "itemsInCell"
+      ],
+      "description": "Grid-based element discovery: divides artboard into labeled cells (A1, B2…) for spatial targeting of unnamed items"
+    },
+    "geo_boolean": {
+      "file": "geo_boolean.jsx",
+      "version": "1.3.0",
+      "dependencies": [
+        "ops_core",
+        "mcp_id",
+        "doc_session",
+        "ownership"
+      ],
+      "exports": [
+        "extractPathGeometry",
+        "reconstructRegions",
+        "deleteByMcpIds",
+        "commitBooleanRegions"
+      ],
+      "description": "Boolean geometry helpers with compound-path extraction and guarded single-eval replacement commits"
+    },
+    "symbols": {
+      "file": "symbols.jsx",
+      "version": "1.0.0",
+      "dependencies": [
+        "polyfills"
+      ],
+      "exports": [
+        "mcpSymbolDescribeItem",
+        "mcpSymbolContents",
+        "mcpSymbolDefinitions",
+        "mcpSymbolInstances"
+      ],
+      "description": "Read-only symbol definition and instance inspection; places and expands nothing"
+    },
+    "ownership": {
+      "file": "ownership.jsx",
+      "version": "1.0.0",
+      "dependencies": [],
+      "exports": [
+        "MCP_OWNERSHIP_RECORD_VERSION",
+        "mcpOwnBegin",
+        "mcpOwnAllocate",
+        "mcpOwnIdentify",
+        "mcpOwnAbsorb",
+        "mcpOwnReplace",
+        "mcpOwnCommit",
+        "mcpOwnRelease",
+        "mcpOwnCleanup",
+        "mcpOwnDispose",
+        "mcpOwnRecords",
+        "mcpOwnAllRecords",
+        "mcpOwnReset"
+      ],
+      "description": "Host-local ownership of artwork a scope is still building; records cleanup outcomes rather than swallowing them"
+    },
+    "error_envelope": {
+      "file": "error_envelope.jsx",
+      "version": "1.0.0",
+      "dependencies": [],
+      "exports": [
+        "makeError"
+      ],
+      "description": "The structured error envelope. A leaf so that libraries on both sides of the task_pipeline/targets dependency can declare it without a cycle."
+    },
+    "raw_fail": {
+      "file": "raw_fail.jsx",
+      "version": "1.0.0",
+      "dependencies": [],
+      "exports": [
+        "mcpFail"
+      ],
+      "description": "Explicit catchable raw-script failure; no artwork/filesystem side effects"
     }
+  }
 }

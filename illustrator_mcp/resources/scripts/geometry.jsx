@@ -65,6 +65,22 @@ function pointXY(x, y) {
 }
 
 /**
+ * Close a helper's own scope, and say what it could not remove.
+ *
+ * The helpers discarded the cleanup result, so a construction failure whose
+ * rollback also failed left artwork on the page and told the caller nothing —
+ * the swallowed-cleanup shape this workstream exists to remove, reappearing
+ * in the compatibility path for no-scope callers.
+ */
+function _geoCleanupOrDisclose(scope, error, label) {
+    var outcome = mcpOwnCleanup(scope);
+    if (outcome.ok) return;
+    try {
+        error.mcpCleanupFailures = [{ stage: label, failed: outcome.failed }];
+    } catch (attachError) { }
+}
+
+/**
  * Create a rectangle using intuitive (x, y, w, h) coordinates.
  * Handles Illustrator's (top, left, w, h) and Y-inversion internally.
  *
@@ -83,15 +99,19 @@ function pointXY(x, y) {
  * // Create a rounded rectangle with 20pt corners
  * var rounded = rectXY(50, 80, 200, 100, {cornerRadius: 20});
  */
-function rectXY(x, y, w, h, options) {
+function rectXY(x, y, w, h, options, scope) {
     var doc = app.activeDocument;
     var pos = pointXY(x, y);
 
     if (options && options.cornerRadius) {
         var r = options.cornerRadius;
-        return doc.pathItems.roundedRectangle(pos.top, pos.left, w, h, r, r);
+        var rounded = doc.pathItems.roundedRectangle(pos.top, pos.left, w, h, r, r);
+        mcpOwnAllocate(scope, rounded, "rect");
+        return rounded;
     }
-    return doc.pathItems.rectangle(pos.top, pos.left, w, h);
+    var rect = doc.pathItems.rectangle(pos.top, pos.left, w, h);
+    mcpOwnAllocate(scope, rect, "rect");
+    return rect;
 }
 
 /**
@@ -107,10 +127,12 @@ function rectXY(x, y, w, h, options) {
  * // Create a 100x100 circle, 50pt from left, 50pt from top
  * var circle = ellipseXY(50, 50, 100, 100);
  */
-function ellipseXY(x, y, w, h) {
+function ellipseXY(x, y, w, h, scope) {
     var doc = app.activeDocument;
     var pos = pointXY(x, y);
-    return doc.pathItems.ellipse(pos.top, pos.left, w, h);
+    var ellipse = doc.pathItems.ellipse(pos.top, pos.left, w, h);
+    mcpOwnAllocate(scope, ellipse, "ellipse");
+    return ellipse;
 }
 
 /**
@@ -126,14 +148,39 @@ function ellipseXY(x, y, w, h) {
  * // Draw a diagonal line from (10,10) to (100,100)
  * var line = lineXY(10, 10, 100, 100);
  */
-function lineXY(x1, y1, x2, y2) {
+function lineXY(x1, y1, x2, y2, scope) {
     var doc = app.activeDocument;
     var p1 = pointXY(x1, y1);
     var p2 = pointXY(x2, y2);
 
-    var line = doc.pathItems.add();
-    line.setEntirePath([[p1.left, p1.top], [p2.left, p2.top]]);
-    line.filled = false;
+    // Registered before setEntirePath, which is measured to throw on
+    // geometry the host will not build. `pathItems.add()` returns an empty
+    // path that already exists, so the window between the two is exactly
+    // where an orphan is created.
+    //
+    // A caller that passes no scope still gets that window closed: the helper
+    // owns the path for the length of its own construction and cleans it up
+    // if the description fails. Without this, the public no-scope form —
+    // which raw scripts and the documented examples use — left an orphan,
+    // and a syntactically adjacent registration that does nothing at runtime
+    // is not ownership.
+    var ownScope = scope || mcpOwnBegin("lineXY");
+    var line;
+    try {
+        // The allocation is inside the guard too. `pathItems.add()` can fail,
+        // and a local scope opened just above it was left on the ownership
+        // stack when it did — an open scope the next scope would inherit.
+        line = doc.pathItems.add();
+        mcpOwnAllocate(ownScope, line, "line");
+        line.setEntirePath([[p1.left, p1.top], [p2.left, p2.top]]);
+        line.filled = false;
+    } catch (lineError) {
+        if (!scope) _geoCleanupOrDisclose(ownScope, lineError, "lineXY");
+        throw lineError;
+    }
+    // A borrowed scope keeps ownership; a local one ends here, because the
+    // path is finished and the caller is about to hold it.
+    if (!scope) mcpOwnRelease(ownScope);
     return line;
 }
 
@@ -148,20 +195,31 @@ function lineXY(x1, y1, x2, y2) {
  * // Create a triangle
  * var tri = polygonXY([[50, 10], [10, 90], [90, 90]], true);
  */
-function polygonXY(points, closed) {
+function polygonXY(points, closed, scope) {
     if (closed === undefined) closed = true;
 
     var doc = app.activeDocument;
-    var path = doc.pathItems.add();
+    // Same self-owned fallback as lineXY: setEntirePath below can reject the
+    // geometry, and a no-scope caller must not be left with an empty path.
+    var ownScope = scope || mcpOwnBegin("polygonXY");
+    var path;
 
-    var ilPoints = [];
-    for (var i = 0; i < points.length; i++) {
-        var pos = pointXY(points[i][0], points[i][1]);
-        ilPoints.push([pos.left, pos.top]);
+    try {
+        path = doc.pathItems.add();
+        mcpOwnAllocate(ownScope, path, "polygon");
+        var ilPoints = [];
+        for (var i = 0; i < points.length; i++) {
+            var pos = pointXY(points[i][0], points[i][1]);
+            ilPoints.push([pos.left, pos.top]);
+        }
+
+        path.setEntirePath(ilPoints);
+        path.closed = closed;
+    } catch (polygonError) {
+        if (!scope) _geoCleanupOrDisclose(ownScope, polygonError, "polygonXY");
+        throw polygonError;
     }
-
-    path.setEntirePath(ilPoints);
-    path.closed = closed;
+    if (!scope) mcpOwnRelease(ownScope);
     return path;
 }
 
@@ -439,8 +497,24 @@ function drawPathPoints(spec) {
         targetLayer = doc.activeLayer;
     }
 
-    // Generate UUID — self-contained, no dependency on ops_core
-    var uuid = _geometryUUID();
+    // Generate UUID — or use user-supplied spec.id
+    var uuid;
+    if (spec.id) {
+        // User-supplied ID: check for collision before using
+        if (typeof heapResolveMany === "function") {
+            var existing = heapResolveMany(doc, [spec.id]);
+            if (existing.length > 0) {
+                throw new Error(
+                    "DPP_ID_COLLISION: item with @mcp:id=" + spec.id +
+                    " already exists (typename=" + existing[0].typename +
+                    "). Use a unique id or remove the existing item first."
+                );
+            }
+        }
+        uuid = spec.id;
+    } else {
+        uuid = _geometryUUID();
+    }
 
     // Determine path mode
     var isSingle = !!spec.points;
@@ -471,12 +545,21 @@ function drawPathPoints(spec) {
         }
     }
 
-    // Create path items — [H3] failure-atomicity
+    // Create path items — [H3] failure-atomicity.
+    //
+    // OR05. This was a hand-rolled `createdItems` list cleaned up in a catch
+    // that swallowed every removal failure, and it removed the children
+    // individually even after they had been moved into a container — which
+    // strips the container and leaves an empty one behind, the same defect
+    // OR03 fixed in the Boolean path. A scope owns them instead, and the
+    // container takes over ownership once it holds them.
+    var drawScope = mcpOwnBegin("drawPathPoints");
     var createdItems = [];
     try {
         for (var si = 0; si < subpaths.length; si++) {
             var sub = subpaths[si];
             var item = targetLayer.pathItems.add();
+            mcpOwnAllocate(drawScope, item, "path");
             createdItems.push(item);
             _createPath(item, sub.points, abLeft, abTop);
             item.closed = sub.closed !== false; // default true
@@ -486,18 +569,24 @@ function drawPathPoints(spec) {
         var resultItem;
         if (spec.compound && createdItems.length > 0) {
             var cpItem = targetLayer.compoundPathItems.add();
+            mcpOwnAllocate(drawScope, cpItem, "compound");
             for (var ci = 0; ci < createdItems.length; ci++) {
                 createdItems[ci].move(cpItem, ElementPlacement.PLACEATEND);
             }
+            // Only once they are actually inside it: a move that throws
+            // part-way leaves the rest still separately owned.
+            mcpOwnAbsorb(drawScope, createdItems, cpItem);
             resultItem = cpItem;
         } else if (createdItems.length === 1) {
             resultItem = createdItems[0];
         } else {
             // Multiple subpaths, no compound — group them
             var grp = targetLayer.groupItems.add();
+            mcpOwnAllocate(drawScope, grp, "group");
             for (var gi = 0; gi < createdItems.length; gi++) {
                 createdItems[gi].move(grp, ElementPlacement.PLACEATEND);
             }
+            mcpOwnAbsorb(drawScope, createdItems, grp);
             resultItem = grp;
         }
 
@@ -537,6 +626,7 @@ function drawPathPoints(spec) {
             resultItem.note = note + "@mcp:tag=" + spec.meta.tag;
         }
 
+        mcpOwnCommit(drawScope);
         return {
             ok: true,
             uuid: uuid,
@@ -547,9 +637,17 @@ function drawPathPoints(spec) {
         };
 
     } catch (e) {
-        // [H3] Failure-atomicity: clean up any items we created
-        for (var ri = 0; ri < createdItems.length; ri++) {
-            try { createdItems[ri].remove(); } catch (ignored) { }
+        // [H3] Failure-atomicity, through the scope. What it could not remove
+        // rides on the error rather than disappearing into `catch (ignored)`:
+        // artwork left behind carries no id yet, so a caller told nothing has
+        // no way to find it.
+        var drawCleanup = mcpOwnCleanup(drawScope);
+        if (!drawCleanup.ok) {
+            try {
+                e.mcpCleanupFailures = [{
+                    stage: "drawPathPoints", failed: drawCleanup.failed
+                }];
+            } catch (attachError) { }
         }
         throw e; // Re-throw after cleanup
     }

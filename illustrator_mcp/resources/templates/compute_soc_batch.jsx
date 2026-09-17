@@ -25,7 +25,7 @@ function compute(items, params, report) {
 
     // Determine ops array: explicit params.ops or auto-wrap single op
     var ops = null;
-    if (params.ops && params.ops.length > 0) {
+    if (params.ops && params.ops.length > 0 && payload.task !== "compound") {
         ops = params.ops;
     } else if (payload && payload.task) {
         // Single-op mode: wrap the top-level task+params as a single op.
@@ -34,7 +34,11 @@ function compute(items, params, report) {
     }
 
     if (ops && ops.length > 0) {
-        var result = executeOpBatch(ops, { strict: false });
+        var batchOptions = payload.options || {};
+        var result = executeOpBatch(ops, {
+            strict: batchOptions.stopOnError === true,
+            mode: batchOptions.mode || "apply"
+        });
 
         // --- Stats propagation ---
         // itemsProcessed: total ops attempted

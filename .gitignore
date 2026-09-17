@@ -1,45 +1,39 @@
-.DS_Store
+# Local configuration and secrets
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+# Generated files
 __pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+build/
+dist/
+node_modules/
+*.log
+.coverage*
+htmlcov/
+.pytest_cache/
+.pytest_tmp*/
+.review-*/
+.tmp/
+outputs/
+# Internal development material
+/docs/
+/tests/
+/tests_jsx/
+/living test/
+/scripts/
+/uxp-plugin/
+.agent/
+.agents/
+.claude/
+.Claude/
+.codex/
 .idea/
 .vscode/
-
-# Python
-*.egg-info/
-*.egg
-dist/
-build/
-.eggs/
-*.pyc
-
-# Node.js
-node_modules/
-npm-debug.log
-
-# Environment
-.env
-
-# Temp files
-nul
-tmpclaude-*
-
-# Test output artifacts
-*.log
-full_test_output*.txt
-test_output*.txt
-test_result*.txt
-pre_check.txt
-cep_build.txt
-
-# Coverage
-.coverage
-htmlcov/
-
-# Jupyter
-.ipynb_checkpoints/
-
-
-# User exclusions
-.Claude/
-.git/
-.pytest_cache/
-.venv/
+.DS_Store
+Thumbs.db

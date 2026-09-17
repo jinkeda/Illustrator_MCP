@@ -62,6 +62,16 @@ class ErrorCode(str, Enum):
     C_PREV_UNAVAILABLE = "C007"
     C_INVALID_TOKEN_POSITION = "C008"
     C_UNKNOWN_TOKEN = "C009"
+    # A reply that stopped mid-payload. Distinct from C005 because the cause
+    # is the transport, not malformed output: a large geometry extraction was
+    # cut around 77 kB and the caller was told their script had a syntax
+    # error, with advice to check brackets and quotes in code that was fine.
+    C_RESPONSE_TRUNCATED = "C010"
+    C_RESPONSE_OVERLONG = "C011"
+    C_RESPONSE_DIGEST = "C012"
+    C_RESPONSE_IDENTITY = "C013"
+    C_RESPONSE_DESCRIPTOR = "C014"
+    C_PAYLOAD_EXPIRED = "C015"
 
     # === VALIDATION (V) — fail before execution ===
     V_NO_DOCUMENT = "V001"
@@ -75,6 +85,13 @@ class ErrorCode(str, Enum):
     V_LIBRARY_NOT_FOUND = "V009"
     V_LIBRARY_CONFLICT = "V010"
     V_INVALID_PARAM_VALUE = "V011"  # Parameter value out of range / invalid
+    V_AMBIGUOUS_ID = "V012"     # More than one item carries a requested identity
+    V_INCOMPLETE_SCAN = "V013"  # A bounded selector scan cannot prove its result
+    V_EMPTY_TARGETS = "V014"    # A mutating operation resolved no targets
+    V_TARGET_COUNT_MISMATCH = "V015"
+    V_INVALID_COORDINATE_SPACE = "V016"
+    V_CAPTURE_EMPTY_REGION = "V017"
+    V_CAPTURE_MINIMUM_BUDGET_EXCEEDED = "V018"
 
     # === RUNTIME (R) — fail during execution ===
     R_COLLECT_FAILED = "R001"
@@ -93,6 +110,7 @@ class ErrorCode(str, Enum):
 
     # === EXECUTION INFRASTRUCTURE (E) ===
     E_EXECUTION = "E001"         # Generic execution infrastructure error
+    E_UNSUPPORTED_RECOVERY = "E002"  # Recovery/replay requested that cannot be honoured
 
     # === SCRIPT / SYSTEM (S) ===
     # Covers both ExtendScript engine failures (syntax, reference, type errors)
@@ -266,13 +284,21 @@ ERROR_SUGGESTIONS: Dict[str, Dict[str, Any]] = {
     },
 
     # Runtime errors
+    # A timeout says the client stopped waiting. It does not say the work
+    # stopped. Illustrator may still be running it, may have finished it, or
+    # may be sitting on a modal dialog. The old suggestions here framed it as
+    # "your script was too slow", which invites a retry — and retrying a
+    # mutation that already applied duplicates artwork.
     ErrorCode.R_TIMEOUT.value: {
-        "message": "Script execution timed out",
+        "message": "Timed out waiting for Illustrator; the work may still have run",
         "recoverable": True,
         "suggestions": [
-            "The script may be too complex - try breaking it into smaller operations",
-            "Check if Illustrator is responding (not frozen)",
-            "Increase timeout if processing large documents",
+            "This means the client stopped waiting, NOT that the work failed",
+            "Do not replay a mutation blindly: call illustrator_job_status with "
+            "the jobId in this result to find out what actually happened",
+            "Call illustrator_connection_status to see whether the panel is "
+            "busy, frozen, or blocked on a dialog",
+            "If the work genuinely did not run, raise the timeout or split it",
         ],
     },
     ErrorCode.R_LAYER_NOT_FOUND.value: {
@@ -311,6 +337,17 @@ ERROR_SUGGESTIONS: Dict[str, Dict[str, Any]] = {
             "Check JavaScript syntax in your script",
             "Verify all variables are defined before use",
             "Use illustrator_get_scripting_reference for correct API usage",
+        ],
+    },
+    ErrorCode.C_RESPONSE_TRUNCATED.value: {
+        "message": "Host response was cut short before it ended",
+        "recoverable": True,
+        "suggestions": [
+            "This is a transport limit, not a fault in your script",
+            "Return less in one call: page the result, or extract geometry in "
+            "chunks and combine them",
+            "For large geometry, write to a file from the script and read the "
+            "file instead of returning it",
         ],
     },
     ErrorCode.S_SYNTAX_ERROR.value: {
@@ -352,12 +389,20 @@ ERROR_SUGGESTIONS.update({
             "Verify enum parameters use allowed values",
         ],
     },
+    # Recoverable: a reply that will not parse says nothing about whether the
+    # work ran. Marking it unrecoverable told callers not to reconcile, which
+    # is the opposite of what an undetermined outcome calls for.
     ErrorCode.C_JSON_PARSE.value: {
-        "message": "JSON parse failure",
-        "recoverable": False,
+        "message": "Host reply is not valid JSON",
+        "recoverable": True,
         "suggestions": [
-            "The response payload is not valid JSON",
-            "Check CEP panel logs for malformed output",
+            "The cause is undetermined: this may be a cut transfer or "
+            "malformed host output, and the payload cannot distinguish them",
+            "If the call mutated the document, reconcile with "
+            "illustrator_job_status rather than replaying it",
+            "If the result was large, return less per call or extract it in "
+            "parts",
+            "Check the CEP panel logs for what the host actually emitted",
         ],
     },
     ErrorCode.C_NESTING_NOT_ALLOWED.value: {
@@ -371,6 +416,16 @@ ERROR_SUGGESTIONS.update({
         "suggestions": [
             "The execution environment encountered an error",
             "Retry the operation or check server logs",
+        ],
+    },
+    ErrorCode.E_UNSUPPORTED_RECOVERY.value: {
+        "message": "Requested recovery is not supported",
+        "recoverable": False,
+        "suggestions": [
+            "The request was rejected before execution — nothing was changed",
+            "Re-run without the recovery option and check the per-op results",
+            "Save the document or use illustrator_history checkpoint_save first "
+            "if you need a restore point",
         ],
     },
     ErrorCode.R_QUERY_FAILED.value: {
@@ -521,6 +576,26 @@ ERROR_PATTERNS = [
     (r"\[C001\]|DISCONNECTED|not connected|connection.*failed", ErrorCode.C_DISCONNECTED),
     (r"\[C002\]|transport.*timeout", ErrorCode.C_TIMEOUT),
     (r"\[C004\]|PROTOCOL_ERROR|Invalid JSON", ErrorCode.C_PROTOCOL),
+    # An explicit marker must win over the loose script-error patterns below,
+    # one of which matches the bare phrase "unterminated string" — wording the
+    # parse-failure description legitimately uses as an observation.
+    (r"\[C005\]", ErrorCode.C_JSON_PARSE),
+    # Truncation is decided at decoding, by describe_truncation(), which sees
+    # the payload and can tell a cut transfer from valid-but-malformed output.
+    # Only the marker it emits is matched here.
+    #
+    # An earlier version also matched "Unterminated string" and "Unexpected
+    # end of input" anywhere in a message. Those are exactly what a genuine
+    # unterminated string in the caller's own script produces, so a real
+    # syntax error was reported as a transport fault, told the author their
+    # script was fine, and inverted the bug it was meant to fix. Message text
+    # cannot distinguish the two; only the decoder can.
+    (r"\[C010\]|HOST_RESPONSE_TRUNCATED", ErrorCode.C_RESPONSE_TRUNCATED),
+    (r"\[C011\]", ErrorCode.C_RESPONSE_OVERLONG),
+    (r"\[C012\]", ErrorCode.C_RESPONSE_DIGEST),
+    (r"\[C013\]", ErrorCode.C_RESPONSE_IDENTITY),
+    (r"\[C014\]", ErrorCode.C_RESPONSE_DESCRIPTOR),
+    (r"\[C015\]", ErrorCode.C_PAYLOAD_EXPIRED),
 
     # Timeouts
     (r"\[R005\]|TIMEOUT|timed out", ErrorCode.R_TIMEOUT),
@@ -611,9 +686,21 @@ def create_structured_error(
         # so callers see "Type error in script: X is not a function"
         # instead of losing the actual error text.
         message = info.get("message", error_message)
-        _SCRIPT_CODES = {"S005", "S006", "S007", "S008"}
+        # Codes whose specific detail is the actionable part. For a script
+        # error that is the engine's own text; for a truncated response it is
+        # the offset, which is the one number that tells a caller how much
+        # came through and how much to ask for next time. Without this the
+        # canned sentence replaced it and the offset was computed, then lost.
+        _SCRIPT_CODES = {"S005", "S006", "S007", "S008",
+                         ErrorCode.C_RESPONSE_TRUNCATED.value,
+                         ErrorCode.C_JSON_PARSE.value}
         if code.value in _SCRIPT_CODES and error_message and error_message != message:
-            message = f"{message}: {error_message}"
+            detail = error_message
+            marker = f"[{code.value}] "
+            if detail.startswith(marker):
+                detail = detail[len(marker):]
+            if detail and detail != message:
+                message = f"{message}: {detail}"
         return StructuredError(
             code=code.value,
             message=message,

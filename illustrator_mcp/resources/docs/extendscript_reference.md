@@ -1,8 +1,13 @@
 # Illustrator ExtendScript Quick Reference
 
 ## Coordinate System
-- Origin: Top-left of artboard
-- Y-axis: NEGATIVE downward (use -y for visual y position)
+- Geometry helpers (`rectXY`, `ellipseXY`, `lineXY`, `polygonXY`, `pointXY`) use
+  artboard-relative coordinates: origin at the active artboard's top-left, with
+  Y increasing downward.
+- Raw Illustrator DOM positions use document-space coordinates, with Y
+  increasing upward. The active artboard's origin may be nonzero.
+- Convert an artboard-relative point `(x, y)` before a raw DOM call with
+  `[ab[0] + x, ab[1] - y]`, where `ab` is the active `artboardRect`.
 - Units: Points (1 pt = 1/72 inch)
 
 ## Common Patterns
@@ -13,26 +18,44 @@ var doc = app.activeDocument;
 var layer = doc.activeLayer;
 ```
 
-### Create Shapes
+### Create Shapes (raw DOM — document-space, Y-up)
 ```javascript
+var ab = doc.artboards[doc.artboards.getActiveArtboardIndex()].artboardRect;
+var x = 50;
+var y = 100;
+var left = ab[0] + x;
+var top = ab[1] - y;
+
 // Rectangle: rectangle(top, left, width, height)
-doc.pathItems.rectangle(-100, 50, 200, 100);
+doc.pathItems.rectangle(top, left, 200, 100);
 
 // Ellipse: ellipse(top, left, width, height)
-doc.pathItems.ellipse(-100, 50, 100, 100);
+doc.pathItems.ellipse(top, left, 100, 100);
 
 // Rounded Rectangle: roundedRectangle(top, left, width, height, hRadius, vRadius)
-doc.pathItems.roundedRectangle(-100, 50, 200, 100, 10, 10);
+doc.pathItems.roundedRectangle(top, left, 200, 100, 10, 10);
 
 // Polygon: polygon(centerX, centerY, radius, sides)
-doc.pathItems.polygon(100, -200, 50, 6);
+doc.pathItems.polygon(ab[0] + 100, ab[1] - 200, 50, 6);
 
 // Star: star(centerX, centerY, outerR, innerR, points)
-doc.pathItems.star(100, -200, 50, 25, 5);
+doc.pathItems.star(ab[0] + 100, ab[1] - 200, 50, 25, 5);
 
-// Line (path with 2 points)
+// Line from two artboard-relative points, converted to raw DOM coordinates
 var line = doc.pathItems.add();
-line.setEntirePath([[x1, -y1], [x2, -y2]]);
+line.setEntirePath([
+    [ab[0] + x1, ab[1] - y1],
+    [ab[0] + x2, ab[1] - y2]
+]);
+```
+
+On an artboard whose top-left is `(72, 720)`, artboard-relative `(100, 200)`
+therefore becomes the raw DOM position `[172, 520]`.
+
+### Create Shapes (geometry helpers — artboard-relative, Y-down)
+```javascript
+var rect = rectXY(50, 100, 200, 100);
+var ellipse = ellipseXY(50, 100, 100, 100);
 ```
 
 ### Colors
@@ -83,11 +106,12 @@ shape.fillColor = gradColor;
 gradient.type = GradientType.RADIAL;
 ```
 
-### Text
+### Text (raw DOM — document-space, Y-up)
 ```javascript
 var tf = doc.textFrames.add();
 tf.contents = "Hello World";
-tf.position = [x, -y];  // Note: -y for visual position
+var ab = doc.artboards[doc.artboards.getActiveArtboardIndex()].artboardRect;
+tf.position = [ab[0] + x, ab[1] - y];
 
 // Style text
 tf.textRange.characterAttributes.size = 12;
@@ -257,18 +281,23 @@ title.move(cardBg, ElementPlacement.PLACEBEFORE);  // title in front of bg
 ⚠️ **Common mistake**: Using `PLACEATEND` thinking it means "last created" — it actually means **bottommost z-order** (visually behind everything). Similarly, `PLACEBEFORE` means **visually in front of** the reference item, not "before" in creation order.
 
 ## Common Mistakes to Avoid
-- Using positive Y for downward (should be negative)
+- Passing artboard-relative Y-down coordinates directly to raw DOM methods
+- Negating Y without also adding the active artboard's left/top offsets
 - Using ctx.rect() instead of pathItems.rectangle()
 - Forgetting to set filled/stroked properties
-- Not using -y in position arrays
 - Forgetting to expand live effects before export
 - **Exceeding ~8000 points in setEntirePath()** — Illustrator crashes with 'Illegal Argument'. Use the `generative` library's `decimatePoints()` to auto-clamp.
 
-## Custom Paths and Polylines
+## Custom Paths and Polylines (raw DOM — document-space, Y-up)
 ```javascript
-// Multi-point path (up to ~8000 points safely)
+// Convert artboard-relative Y-down points before setEntirePath().
+var ab = doc.artboards[doc.artboards.getActiveArtboardIndex()].artboardRect;
+var userPts = [[0, 0], [50, 100], [100, 0], [150, 50]];
+var pts = [];
+for (var i = 0; i < userPts.length; i++) {
+    pts.push([ab[0] + userPts[i][0], ab[1] - userPts[i][1]]);
+}
 var path = doc.pathItems.add();
-var pts = [[0, 0], [50, -100], [100, 0], [150, -50]];
 path.setEntirePath(pts);
 path.closed = false;   // Open polyline (default: true for closed)
 path.stroked = true;

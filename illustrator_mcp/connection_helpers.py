@@ -17,6 +17,32 @@ from illustrator_mcp.errors import ErrorCode, format_code
 logger = logging.getLogger(__name__)
 
 
+# ── Recovery steps, named once ─────────────────────────────────────
+# Both the connection error raised mid-call and the status tool's report hand
+# the caller the same instructions. They were previously only in the error
+# string below, which meant the status tool would have had to restate them and
+# they would have drifted apart.
+
+SERVER_RECOVERY_STEPS: Tuple[str, ...] = (
+    "The local WebSocket server is not running in this process.",
+    "Check the owning MCP client's server logs for the startup identity and bind error.",
+    "Release the integration through its owning client, then reconnect the destination "
+    "client. Retrying a tool does not restart a failed bridge.",
+)
+
+PANEL_RECOVERY_STEPS: Tuple[str, ...] = (
+    "Open Adobe Illustrator if it is not running",
+    "Window > Extensions > MCP Control",
+    "Click 'Connect' in the panel",
+)
+
+ILLUSTRATOR_RECOVERY_STEPS: Tuple[str, ...] = (
+    "The panel is connected but Illustrator did not answer.",
+    "Check whether Illustrator is busy with a modal dialog and dismiss it.",
+    "If it is unresponsive, restart Illustrator and reconnect the panel.",
+)
+
+
 def create_connection_error(port: int, context: str = "") -> ExecutionResponse:
     """
     Create a standardized connection error response with actionable suggestions.
@@ -33,10 +59,11 @@ def create_connection_error(port: int, context: str = "") -> ExecutionResponse:
         "error": format_code(ErrorCode.C_DISCONNECTED,
             f"CEP panel is not connected{ctx}.\n\n"
             "Quick Fixes:\n"
-            "1. Open Adobe Illustrator if not running\n"
-            "2. Window > Extensions > MCP Control\n"
-            "3. Click 'Connect' in the panel\n\n"
-            f"(WebSocket server running on port {port})")
+            + "".join(f"{i}. {step}\n"
+                      for i, step in enumerate(PANEL_RECOVERY_STEPS, start=1))
+            + "\n"
+            f"(WebSocket server running on port {port})\n"
+            "Call illustrator_connection_status for a full report.")
     }
 
 
@@ -87,6 +114,12 @@ def check_connection_or_error(
         logger.warning(f"Bridge accessor failed: {e}")
         return False, create_connection_error(port, context)
 
+    info = bridge.get_connection_info()
+    if isinstance(info, dict) and info.get("startup_error"):
+        endpoint = str(info.get("host", "localhost")) + ":" + str(info.get("port", port))
+        return False, {"error": format_code(ErrorCode.C_BRIDGE_ERROR,
+            "Listener startup failed at " + endpoint + ": " + str(info["startup_error"]) +
+            ". Another process may own the endpoint. Call illustrator_connection_status for details.")}
     if not bridge.is_connected():
         return False, create_connection_error(port, context)
     

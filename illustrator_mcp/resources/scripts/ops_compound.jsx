@@ -29,14 +29,16 @@ function resolvePrevTokens(op, prevId, prevAllIds) {
         return { ok: true, op: op };
     }
 
-    // Tokens are only valid in type:"id" selectors
-    if (op.targets.type !== "id") {
+    // The Python boundary normalizes selectors to the wrapped shape. Keep
+    // both public spellings and all operation metadata during substitution.
+    var selector = op.targets.target || op.targets;
+    if (selector.type !== "id") {
         // Scan for accidental token usage in non-id targets
         var targetsStr = JSON.stringify(op.targets);
         if (targetsStr.indexOf("$prev") !== -1) {
             return makeError(
                 ErrorCodes.C_INVALID_TOKEN_POSITION,
-                "$prev tokens only valid in targets with type:'id', got type:'" + op.targets.type + "'",
+                "$prev tokens only valid in targets with type:'id', got type:'" + selector.type + "'",
                 "compound"
             );
         }
@@ -44,14 +46,14 @@ function resolvePrevTokens(op, prevId, prevAllIds) {
     }
 
     // No ids array → pass through
-    if (!op.targets.ids || !op.targets.ids.length) {
+    if (!selector.ids || !selector.ids.length) {
         return { ok: true, op: op };
     }
 
     // Deep-clone ids array only
     var resolvedIds = [];
-    for (var i = 0; i < op.targets.ids.length; i++) {
-        var id = op.targets.ids[i];
+    for (var i = 0; i < selector.ids.length; i++) {
+        var id = selector.ids[i];
 
         if (id === "$prev") {
             // Exact match only — no trim, case-sensitive
@@ -93,14 +95,16 @@ function resolvePrevTokens(op, prevId, prevAllIds) {
     }
 
     // Return shallow-cloned op with resolved targets
-    return {
-        ok: true,
-        op: {
-            task: op.task,
-            params: op.params,
-            targets: { type: "id", ids: resolvedIds }
-        }
-    };
+    var resolvedOp = {}, resolvedSelector = {}, key;
+    for (key in op) if (Object.prototype.hasOwnProperty.call(op, key)) resolvedOp[key] = op[key];
+    for (key in selector) if (Object.prototype.hasOwnProperty.call(selector, key)) resolvedSelector[key] = selector[key];
+    resolvedSelector.ids = resolvedIds;
+    if (op.targets.target) {
+        resolvedOp.targets = {};
+        for (key in op.targets) if (Object.prototype.hasOwnProperty.call(op.targets, key)) resolvedOp.targets[key] = op.targets[key];
+        resolvedOp.targets.target = resolvedSelector;
+    } else resolvedOp.targets = resolvedSelector;
+    return { ok: true, op: resolvedOp };
 }
 
 // ==================== Compound Handler ====================
@@ -124,21 +128,38 @@ registerOpHandler("compound", function (params, targets, ctx) {
         );
     }
 
+    // 2b. T04: `atomic` promised all-or-nothing but was backed by the same
+    // property snapshot as batch rollback — it could not undo a deletion, a
+    // path edit, a regroup, or a z-order change, and fell back to blind
+    // app.executeMenuCommand("undo") calls counted one-per-op when a single
+    // handler may perform several DOM mutations.  Rejected before the first
+    // sub-op runs, so no partial compound is left behind.
+    if (params.atomic) {
+        var atomicUnsupported = makeError(
+            ErrorCodes.E_UNSUPPORTED_RECOVERY || "E002",
+            "compound params.atomic is not supported: the available snapshot " +
+            "cannot restore deleted objects, path geometry, text, grouping, " +
+            "or z-order, so all-or-nothing cannot be honoured. Rejected " +
+            "before execution — no sub-ops ran. Re-run without atomic and " +
+            "inspect the per-op results, or take an explicit checkpoint first.",
+            "validate",
+            null,
+            { option: "atomic" }
+        );
+        atomicUnsupported.recovery = {
+            requested: "atomic",
+            status: "unsupported",
+            scope: "compound sub-operations"
+        };
+        return atomicUnsupported;
+    }
+
     // 3. Enter compound scope (try/finally ensures reset)
     ctx.compoundDepth = 1;
     try {
         var doc = ctx.doc;
-        var atomic = !!params.atomic;
-
-        // 4. Capture own preSnapshot for atomic rollback (never reverts outer batch ops)
-        var compoundSnapshot = null;
-        if (atomic && typeof captureSnapshot === "function") {
-            try {
-                compoundSnapshot = captureSnapshot(doc, { mcpOnly: true, clock: ctx.clock });
-            } catch (snapErr) {
-                // Snapshot failure is not fatal — rollback will fall back to undo
-            }
-        }
+        // T04: atomic is rejected above; sub-ops always run non-atomically and
+        // partial effects are reported rather than silently "rolled back".
 
         // 5. Execute sub-ops sequentially with inline $prev resolution
         //    Token resolution happens DURING execution because $prev depends on
@@ -151,7 +172,6 @@ registerOpHandler("compound", function (params, targets, ctx) {
         var undoCount = 0;
         var prevId = null;
         var prevAllIds = [];
-        var rolledBackCount = 0;
 
         for (var i = 0; i < subOps.length; i++) {
             // Resolve tokens for this op
@@ -170,13 +190,6 @@ registerOpHandler("compound", function (params, targets, ctx) {
                     error: resolved.error
                 });
                 failed++;
-                if (atomic) {
-                    // Atomic mode: rollback on any failure
-                    if (compoundSnapshot || createdIds.length > 0) {
-                        rolledBackCount = rollbackBatch(doc, compoundSnapshot, createdIds, undoCount, !!compoundSnapshot, null);
-                    }
-                    break;
-                }
                 continue;
             }
 
@@ -215,14 +228,10 @@ registerOpHandler("compound", function (params, targets, ctx) {
 
                 } else {
                     failed++;
-                    if (atomic) {
-                        // Atomic: rollback all compound sub-ops
-                        if (compoundSnapshot || createdIds.length > 0) {
-                            rolledBackCount = rollbackBatch(doc, compoundSnapshot, createdIds, undoCount, !!compoundSnapshot, null);
-                        }
-                        break;
-                    }
-                    // Non-atomic: reset prev tokens (can't forward from failed op)
+                    // Reset prev tokens (can't forward an ID from a failed op).
+                    // T04: no rollback — completed sub-ops stay applied and are
+                    // reported in data.createdIds / data.results so the caller
+                    // can see exactly what happened.
                     prevId = null;
                     prevAllIds = [];
                 }
@@ -238,17 +247,49 @@ registerOpHandler("compound", function (params, targets, ctx) {
             }
         }
 
+        // T04: on partial failure the completed sub-ops remain applied.  Say so
+        // instead of implying the compound was undone. This policy record is
+        // separate from narrow recovery a child may have attempted itself.
+        var compoundRecovery = {
+            status: "not_requested",
+            scope: "compound sub-operations",
+            policy: "non_atomic"
+        };
+        // Promote child recovery before data.results can be omitted by the
+        // response budget. Operation provenance survives the promotion.
+        for (var cri = 0; cri < results.length; cri++) {
+            var childRecords = results[cri].recovery;
+            if (!childRecords) continue;
+            if (!(childRecords instanceof Array)) childRecords = [childRecords];
+            for (var crj = 0; crj < childRecords.length; crj++) {
+                var child = childRecords[crj];
+                if (!child || typeof child !== "object") continue;
+                var promoted = {};
+                for (var crk in child) {
+                    if (child.hasOwnProperty(crk)) promoted[crk] = child[crk];
+                }
+                promoted.operationIndex = results[cri].index;
+                promoted.operationTask = results[cri].task;
+                compoundRecovery = mcpMergeRecovery(compoundRecovery, promoted);
+            }
+        }
         return {
             ok: failed === 0,
             id: lastId,
+            recovery: compoundRecovery,
             data: {
                 lastId: lastId,
                 createdIds: createdIds,
                 passed: passed,
                 failed: failed,
-                results: results
+                results: results,
+                recovery: { status: "not_requested", scope: null }
             },
-            warnings: rolledBackCount > 0 ? ["Compound rolled back " + rolledBackCount + " ops"] : []
+            warnings: failed > 0
+                ? ["Compound partially applied: " + passed + " sub-op(s) " +
+                   "succeeded and remain in the document, " + failed +
+                   " failed. No rollback was performed."]
+                : []
         };
 
     } finally {

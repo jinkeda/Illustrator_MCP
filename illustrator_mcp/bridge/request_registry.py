@@ -18,6 +18,9 @@ class PendingRequest:
     script: str
     command: Optional[Dict[str, Any]] = None  # Command metadata for logging
     trace_id: Optional[str] = None  # Trace ID for request correlation
+    request_token: Optional[str] = None
+    progress_queue: Optional[asyncio.Queue] = None
+    payload: Any = None  # Negotiated OR09 receiver, scoped to this request.
 
 
 @dataclass
@@ -46,13 +49,15 @@ class RequestRegistry:
         self._streaming: Dict[int, StreamingRequest] = {}
         self._request_id = 0
         self._lock = threading.Lock()
+        self._completed_tokens: Dict[int, str] = {}
         
     def create_request(
         self,
         loop: asyncio.AbstractEventLoop,
         script: str,
         command: Optional[Dict[str, Any]] = None,
-        trace_id: Optional[str] = None
+        trace_id: Optional[str] = None,
+        request_token: Optional[str] = None,
     ) -> tuple[int, asyncio.Future]:
         """
         Create a new pending request.
@@ -76,7 +81,8 @@ class RequestRegistry:
                 future=future,
                 script=script,
                 command=command,
-                trace_id=trace_id
+                trace_id=trace_id,
+                request_token=request_token,
             )
             
         return request_id, future
@@ -245,6 +251,11 @@ class RequestRegistry:
             return False
 
         with self._lock:
+            pending = self._pending.get(request_id)
+            if pending and pending.request_token is not None:
+                if not isinstance(result, dict) or result.get("requestToken") != pending.request_token:
+                    logger.warning("Ignoring uncorrelated completion for request %s", request_id)
+                    return False
             pending = self._pending.pop(request_id, None)
 
         if not pending:
@@ -272,10 +283,35 @@ class RequestRegistry:
 
         try:
             pending.future.set_result(result)
+            if pending.request_token:
+                with self._lock:
+                    self._completed_tokens[request_id] = pending.request_token
+                    while len(self._completed_tokens) > 500:
+                        self._completed_tokens.pop(next(iter(self._completed_tokens)))
             return True
         except Exception:
             logger.warning(f"Failed to set result for request {request_id}")
             return False
+
+    def was_completed(self, request_id: int, token: str) -> bool:
+        with self._lock:
+            return (request_id not in self._pending and bool(token)
+                    and self._completed_tokens.get(request_id) == token)
+
+    def retire_probe(self, request_id, token):
+        """Release pending resources, retaining only bounded ACK correlation."""
+        with self._lock:
+            pending = self._pending.get(request_id)
+            if pending is None or pending.request_token != token:
+                return False
+            self._pending.pop(request_id)
+            self._completed_tokens[request_id] = token
+            while len(self._completed_tokens) > 500:
+                self._completed_tokens.pop(next(iter(self._completed_tokens)))
+        if pending.payload:
+            pending.payload.expire()
+        pending.future.cancel()
+        return True
         
     def fail_request(self, request_id: int, error: Exception) -> bool:
         """

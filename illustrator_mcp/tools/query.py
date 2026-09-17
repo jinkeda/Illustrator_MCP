@@ -6,15 +6,19 @@ for more structured, observable, and debuggable operations.
 """
 
 import json
-from typing import Dict, Any, List, Optional
-from pydantic import Field
+from typing import Dict, Any, List, Optional, Literal
+from illustrator_mcp.tools.bounds import BoundsType, BoundsSource, BoundsScope, BoundsPolicy, BoundsOptions, check_bounds
+from pydantic import BaseModel, ConfigDict, Field, model_validator
+from illustrator_mcp.protocol import TargetSelector
 
 import logging
+from mcp.types import CallToolResult
 from illustrator_mcp.shared import mcp
-from illustrator_mcp.proxy_client import execute_script_with_context, format_envelope
+from illustrator_mcp.proxy_client import execute_script_with_context, format_envelope, note_host_truncation
 from illustrator_mcp.libraries import get_injection_metadata
 from illustrator_mcp.errors import ErrorCode, make_envelope
-from illustrator_mcp.tools.base import ToolInputBase, TOOL_ANNOTATIONS
+from illustrator_mcp.tools.base import ToolInputBase, TOOL_ANNOTATIONS, canonical_tool
+from illustrator_mcp.utils.response import JsxPayloadError, require_jsx_payload
 
 logger = logging.getLogger("illustrator_mcp")
 
@@ -22,23 +26,17 @@ logger = logging.getLogger("illustrator_mcp")
 class QueryItemsInput(ToolInputBase):
     """Input for querying items using declarative target selector.
     
-    The targets parameter accepts a Task Protocol target selector dict:
-    
-    Target types:
-    - {"type": "selection"} - Current selection (default)
-    - {"type": "layer", "layer": "Layer 1"} - All items on a specific layer
-    - {"type": "all"} - All items in document
-    - {"type": "query", "itemType": "PathItem", "pattern": "rect_*"} - Filter by type/name
-    
-    Compound selectors (advanced):
-    - {"type": "union", "selectors": [...]} - Union of multiple selectors
-    - {"type": "intersection", "selectors": [...]} - Intersection of selectors
-    
-    Example payloads from living_test.md can be used directly.
+    Accepts flat or wrapped selectors of type selection, all, layer, query,
+    id, handle, spatial, grid, or compound (anyOf, including nested compounds).
+    Ordering, exclusions and maxScan survive normalization. Unknown fields
+    are rejected, including nested filters. Prefer targets; the legacy target
+    alias is accepted unless it conflicts with targets.
     """
 
-    targets: Dict[str, Any] = Field(
-        default={"type": "selection"},
+    model_config = {"populate_by_name": True}
+
+    targets: TargetSelector = Field(
+        default_factory=lambda: TargetSelector.model_validate({"type": "selection"}),
         description=(
             "Task Protocol target selector. Examples: "
             "{'type': 'selection'}, "
@@ -47,6 +45,17 @@ class QueryItemsInput(ToolInputBase):
             "{'type': 'query', 'itemType': 'PathItem', 'pattern': 'rect_*'}"
         )
     )
+
+    @model_validator(mode="before")
+    @classmethod
+    def accept_target_alias(cls, value):
+        if isinstance(value, dict) and "target" in value:
+            value = dict(value)
+            alias = value.pop("target")
+            if "targets" in value and TargetSelector.model_validate(value["targets"]) != TargetSelector.model_validate(alias):
+                raise ValueError("Conflicting target and targets; use targets")
+            value.setdefault("targets", alias)
+        return value
 
     include_trace: bool = Field(
         default=False,
@@ -58,12 +67,21 @@ class QueryItemsInput(ToolInputBase):
         description="Return raw response for debugging"
     )
 
+    include_handles: bool = Field(
+        default=True,
+        description=(
+            "Return expiring document-scoped handles for exact follow-up edits. "
+            "Handles do not write item notes."
+        ),
+    )
+
 
 _QUERY_NAME = "illustrator_query_items"
 
 
 @mcp.tool(name=_QUERY_NAME, annotations=TOOL_ANNOTATIONS[_QUERY_NAME])
-async def illustrator_query_items(params: QueryItemsInput) -> str:
+@canonical_tool(_QUERY_NAME, reserve=False)
+async def illustrator_query_items(params: QueryItemsInput) -> CallToolResult:
     """Query items using the Task Protocol with declarative target selection.
 
     CONTRACT: readOnly=True, destructive=False, idempotent=True, openWorld=False
@@ -79,13 +97,32 @@ async def illustrator_query_items(params: QueryItemsInput) -> str:
       {type: "all", recursive: true} — all items in document
       {type: "query", itemType: "PathItem", pattern: "axis_*"} — filter by type/name
 
+    EXAMPLES:
+      Require exactly one matching text label:
+        {
+          "params": {
+            "targets": {
+              "type": "query",
+              "contents": "alpha-helix",
+              "expect": {
+                "count": 1
+              }
+            }
+          }
+        }
+      Every path whose name starts with axis_:
+        {"params": {"targets": {"type": "query", "itemType": "PathItem", "pattern": "axis_*"}}}
+      Everything on a named layer:
+        {"params": {"targets": {"type": "layer", "layer": "Layer 1"}}}
+
     NOTES:
-      - Returns ItemRef for each matched item, enabling stable references
+      - Returns ItemRef plus an expiring handle for exact untagged follow-up edits
+      - Handle issuance never writes item.note or item.name
       - Set include_trace=True for debugging
     """
     
     # Use targets directly from input (already matches Task Protocol format)
-    targets = params.targets
+    targets = params.targets.model_dump(mode="json", exclude_none=True)
     
     # Build payload
     payload = {
@@ -93,12 +130,17 @@ async def illustrator_query_items(params: QueryItemsInput) -> str:
         "targets": targets,
         "params": {},
         "options": {
-            "dryRun": True,  # Read-only query
+            # T03: no dryRun here.  This pipeline is read-only because its
+            # compute stage only reads item properties and its apply stage is
+            # a no-op — not because a flag says so.  dryRun is now rejected
+            # during validation, since in batch mode it could not prevent
+            # mutation and said otherwise.
             "trace": params.include_trace
         }
     }
     
     payload_json = json.dumps(payload)
+    include_handles_js = "true" if params.include_handles else "false"
     
     script = f"""
 // Pre-flight check: verify library functions are available
@@ -125,7 +167,7 @@ if (typeof executeTask !== "function" || typeof validatePayload !== "function") 
     }});
 }} else {{
     // Compute function - gather item info AND store in artifacts
-    // (store here because apply is skipped in dryRun mode)
+    // (read-only: property reads only, no DOM writes)
     function compute(items, params, report) {{
         var actions = [];
         report.artifacts = report.artifacts || {{}};
@@ -134,15 +176,21 @@ if (typeof executeTask !== "function" || typeof validatePayload !== "function") 
         for (var i = 0; i < items.length; i++) {{
             var item = items[i];
             var itemRef = describeItemV2(item, {{includeIdentity: true, includeTags: true}});
+            var handleResult = {include_handles_js} && typeof mcpIssueHandle === "function"
+                ? mcpIssueHandle(item) : null;
             var itemData = {{
                 itemRef: itemRef,
+                handle: handleResult && handleResult.ok ? handleResult.record.handle : null,
+                handleExpiresAt: handleResult && handleResult.ok ? handleResult.record.expiresAt : null,
                 name: item.name || "(unnamed)",
                 type: item.typename,
                 bounds: {{
                     left: item.left,
                     top: item.top,
                     width: item.width,
-                    height: item.height
+                    height: item.height,
+                    space: "illustrator_native_y_up",
+                    units: "pt"
                 }}
             }};
             actions.push(itemData);
@@ -154,7 +202,7 @@ if (typeof executeTask !== "function" || typeof validatePayload !== "function") 
 
     // Apply function - no-op for query (results already stored in compute)
     function apply(actions, report) {{
-        // No-op: items stored in compute stage for dryRun compatibility
+        // No-op: query is read-only; items were stored during compute.
     }}
 
     // Execute task
@@ -167,7 +215,7 @@ if (typeof executeTask !== "function" || typeof validatePayload !== "function") 
     # Get canonicalized includes metadata for diagnostics
     meta = get_injection_metadata(["task_pipeline"])
     diagnostics = {
-        "targets": params.targets,
+        "targets": targets,
         "includes": meta["includes_canonical"],
         "prelude_hash": meta["prelude_hash"]
     }
@@ -181,6 +229,7 @@ if (typeof executeTask !== "function" || typeof validatePayload !== "function") 
     )
 
     # Check for pipeline-level errors (connection, library injection, etc.)
+    note_host_truncation(diagnostics, response)
     if response.get("error"):
         return format_envelope(response, context="query_items", diagnostics=diagnostics)
 
@@ -199,11 +248,12 @@ if (typeof executeTask !== "function" || typeof validatePayload !== "function") 
 
     # Parse response and return standardized envelope
     try:
-        result = response.get("result", "{}")
-        if isinstance(result, str):
-            report = json.loads(result)
-        else:
-            report = result
+        # The host serializes the task report inside its own data envelope.
+        # Decode that layer before interpreting query statistics or errors.
+        from illustrator_mcp.utils.response import unwrap_jsx_result
+        report = unwrap_jsx_result(response, context="query_items")
+        if not report:
+            require_jsx_payload(response, context="query_items", required_keys=("ok",))
 
         # Extract warnings from report (if any)
         warnings = []
@@ -225,13 +275,24 @@ if (typeof executeTask !== "function" || typeof validatePayload !== "function") 
             error_code = err.get("code", ErrorCode.R_QUERY_FAILED.value) if err else ErrorCode.R_QUERY_FAILED.value
             return make_envelope(
                 ok=False,
-                error={"code": error_code, "message": error_msg},
+                error={**err, "code": error_code, "message": error_msg},
                 warnings=warnings,
                 diagnostics={**diagnostics, "report": report},
             )
 
         # ok is authoritative: reflect report status in envelope
         if report.get("ok", True):
+            # Diagnostic hint when query returns 0 items
+            stats = report.get("stats", {})
+            if stats.get("itemsProcessed", -1) == 0:
+                warnings.append(
+                    "Query returned 0 items. Common causes: "
+                    "(1) hidden or locked layers, "
+                    "(2) items inside clipping masks, "
+                    "(3) items in hidden groups, "
+                    "(4) wrong active document, "
+                    "(5) all items are guides."
+                )
             return make_envelope(
                 ok=True,
                 result=report,
@@ -255,7 +316,7 @@ if (typeof executeTask !== "function" || typeof validatePayload !== "function") 
                 diagnostics={**diagnostics, "stats": report.get("stats", {})},
             )
 
-    except json.JSONDecodeError as e:
+    except (json.JSONDecodeError, JsxPayloadError) as e:
         return make_envelope(
             ok=False,
             error={"code": ErrorCode.C_JSON_PARSE.value, "message": str(e)},
@@ -266,6 +327,15 @@ if (typeof executeTask !== "function" || typeof validatePayload !== "function") 
 # ==================== Preflight Check Tool ====================
 
 
+class PublicationThresholds(BaseModel):
+    model_config = ConfigDict(extra="forbid", allow_inf_nan=False)
+    output_width_mm: Optional[float] = Field(None, gt=0)
+    min_font_pt: Optional[float] = Field(None, gt=0)
+    min_stroke_pt: Optional[float] = Field(None, gt=0)
+    min_image_ppi: Optional[float] = Field(None, gt=0)
+    expected_color_mode: Optional[Literal["RGB", "CMYK"]] = None
+
+
 class PreflightCheckInput(ToolInputBase):
     """Input for preflight document validation."""
 
@@ -274,25 +344,42 @@ class PreflightCheckInput(ToolInputBase):
         description="Artboard index to check (None = active artboard)"
     )
 
-    bounds_type: str = Field(
+    bounds_type: BoundsType = Field(
         default="visible",
         description="Bounds type for validation: 'visible' (includes strokes/effects) or 'geometric' (path only)"
     )
 
-    bounds_source: str = Field(
+    bounds_source: BoundsSource = Field(
         default="group_visible",
         description="Bounds source: 'group_visible' (default) or 'clipping_path' (use clipping path bounds for clipped groups)"
     )
 
-    policy: str = Field(
+    policy: BoundsPolicy = Field(
         default="fully-contained",
         description="Containment policy: 'fully-contained' (entire item on artboard) or 'intersects' (any overlap)"
     )
 
-    scope: str = Field(
+    scope: BoundsScope = Field(
         default="document",
         description="Item scope: 'document' (all items) or 'artboard' (items on target artboard)"
     )
+
+    publication: Optional[PublicationThresholds] = Field(
+        default=None,
+        description=("Run bounded publication measurements instead of legacy preflight checks. "
+                     "Omitted legacy options are reported in legacy_preflight; explicitly requested "
+                     "omitted checks make verification unavailable. Run without publication for those checks."),
+    )
+    scan_max_items: int = Field(10000, gt=0, strict=True)
+    scan_budget_ms: int = Field(2000, gt=0, strict=True)
+
+    @model_validator(mode="after")
+    def publication_scope(self):
+        if self.publication is not None:
+            if "scope" in self.model_fields_set and self.scope != "artboard":
+                raise ValueError("Publication requires artboard scope; nextStep: omit scope or choose artboard")
+            self.scope = "artboard"
+        return self
 
     check_zero_size: bool = Field(
         default=True,
@@ -312,9 +399,15 @@ class PreflightCheckInput(ToolInputBase):
 
 _PREFLIGHT_NAME = "illustrator_preflight_check"
 
+#: The minimum payload a preflight scan must return to count as having run.
+#: A genuinely empty document still reports all three (with an empty ``issues``
+#: list), so their absence means evidence was lost, not that nothing was found.
+_PREFLIGHT_REQUIRED_KEYS = ("checks", "issues", "summary")
+
 
 @mcp.tool(name=_PREFLIGHT_NAME, annotations=TOOL_ANNOTATIONS[_PREFLIGHT_NAME])
-async def illustrator_preflight_check(params: PreflightCheckInput) -> str:
+@canonical_tool(_PREFLIGHT_NAME, reserve=False)
+async def illustrator_preflight_check(params: PreflightCheckInput) -> CallToolResult:
     """Perform observational validation on the active document.
 
     CONTRACT: readOnly=True, destructive=False, idempotent=True, openWorld=False
@@ -328,16 +421,32 @@ async def illustrator_preflight_check(params: PreflightCheckInput) -> str:
       empty text frames, locked layers/items.
       Does NOT modify the document.
 
+    EXAMPLES:
+      Check supplied publication thresholds:
+        {
+          "params": {
+            "publication": {
+              "output_width_mm": 89,
+              "min_font_pt": 5,
+              "min_stroke_pt": 0.25,
+              "min_image_ppi": 300
+            }
+          }
+        }
+      Check the active artboard before exporting:
+        {"params": {}}
+      Check one artboard, counting any overlap as on-artboard:
+        {"params": {"artboard_index": 0, "policy": "intersects"}}
+
     NOTES:
-      - Returns ok=true if all checks pass, with warnings for issues found
-      - Bounds policy: 'warn' (default) emits warnings; 'error' sets ok=false
+      - Returns ok=true only when the scan ran and found no non-info issues
+      - Locked layers/items are reported as info and do not fail the check
+      - If the scan cannot be read back, the result is an error with
+        diagnostics.scan_status='unavailable' — never a passing check
     """
     ab_idx = params.artboard_index if params.artboard_index is not None else 'null'
 
     # F9: Use json.dumps for user-supplied strings to prevent JSX injection
-    bounds_type_js = json.dumps(params.bounds_type)
-    bounds_source_js = json.dumps(params.bounds_source)
-    policy_js = json.dumps(params.policy)
     scope_js = json.dumps(params.scope)
 
     # Build the preflight check script
@@ -365,15 +474,9 @@ async def illustrator_preflight_check(params: PreflightCheckInput) -> str:
     var ab = doc.artboards[abIdx].artboardRect;
 
     // 1. Bounds check using validate library
-    var boundsResult = JSON.parse(countItemsOnArtboard({{
-        artboardIndex: abIdx,
-        boundsType: {bounds_type_js},
-        boundsSource: {bounds_source_js},
-        policy: {policy_js},
-        scope: {scope_js},
-        ignoreHidden: true,
-        ignoreLocked: false
-    }}));
+    var boundsOptions = {BoundsOptions(artboardIndex=params.artboard_index, boundsType=params.bounds_type, boundsSource=params.bounds_source, policy=params.policy, scope=params.scope, ignoreHidden=True, ignoreLocked=False).jsx()};
+    boundsOptions.artboardIndex = abIdx;
+    var boundsResult = JSON.parse(countItemsOnArtboard(boundsOptions));
 
     result.checks.bounds = boundsResult;
     result.summary.total_items = boundsResult.items_checked;
@@ -512,6 +615,13 @@ async def illustrator_preflight_check(params: PreflightCheckInput) -> str:
 }})();
 """
 
+    if params.publication is not None:
+        script = "JSON.stringify(publicationPreflightScan(app.activeDocument, " + json.dumps({
+            "artboard_index": params.artboard_index,
+            "publication": params.publication.model_dump(exclude_none=True),
+            "scan_max_items": params.scan_max_items, "scan_budget_ms": params.scan_budget_ms,
+        }) + "))"
+
     # Get canonicalized includes metadata
     preflight_meta = get_injection_metadata(["validate"])
     diagnostics = {
@@ -535,37 +645,122 @@ async def illustrator_preflight_check(params: PreflightCheckInput) -> str:
             includes=["validate"]
         )
 
+        # The successful preflight path builds its own envelope after parsing
+        # the scan. Preserve any host-disclosed response limit before doing so;
+        # otherwise a cut scan could leave the registered boundary claiming it
+        # was not truncated.
+        note_host_truncation(diagnostics, response)
+
         # Check for pipeline-level errors (connection, library injection, etc.)
         if response.get("error"):
             return format_envelope(response, context="preflight_check", diagnostics=diagnostics)
 
-        # Parse result - CEP returns {"success": bool, "result": "JSON string"}
-        cep_result = response.get("result", {})
-        if isinstance(cep_result, str):
-            cep_result = json.loads(cep_result)
+        # The host wraps a bare script return as ``{ok: true, data: <value>}``
+        # (host.jsx ``executeScript``).  This block used to read a nested
+        # ``result`` key from the older ``{success, result}`` shape; once the
+        # envelope was unified that key stopped existing, the lookup fell back
+        # to "{}", and every scan reported zero findings — a validation tool
+        # that could not fail.  Parse through the shared unwrapper instead, and
+        # require the keys that make a scan readable, so a malformed or
+        # truncated payload is reported as *unavailable* rather than as a pass.
+        try:
+            preflight_data = require_jsx_payload(
+                response,
+                context="preflight_check",
+                required_keys=_PREFLIGHT_REQUIRED_KEYS,
+            )
+            issues = preflight_data["issues"]
+            if not isinstance(issues, list):
+                raise JsxPayloadError(
+                    f"preflight 'issues' is {type(issues).__name__}, expected a list"
+                )
+        except JsxPayloadError as exc:
+            logger.error("Preflight verification unavailable: %s", exc)
+            return make_envelope(
+                ok=False,
+                error={
+                    "code": ErrorCode.R_PREFLIGHT_FAILED.value,
+                    "message": (
+                        f"Preflight verification unavailable: {exc}. "
+                        "The document was not checked — this is not a passing result."
+                    ),
+                },
+                diagnostics={**diagnostics, "scan_status": "unavailable"},
+            )
 
-        # Extract the inner result (preflight data as JSON string)
-        inner_result = cep_result.get("result", "{}")
-        if isinstance(inner_result, str):
-            preflight_data = json.loads(inner_result)
-        else:
-            preflight_data = inner_result
+        if params.publication is not None:
+            from illustrator_mcp.results import CanonicalResult, ExecutionStatus, Verification, VerificationStatus, build_call_result
+            # Aggregate only requested thresholds. Embedding is informational,
+            # and missing evidence for a requested check must never become a pass.
+            requested = {
+                "min_font_pt": "font", "min_stroke_pt": "stroke",
+                "min_image_ppi": "image", "expected_color_mode": "color_mode",
+            }
+            statuses = [
+                preflight_data["checks"].get(name, {}).get("status", "unknown")
+                for field, name in requested.items()
+                if getattr(params.publication, field) is not None
+            ]
+            # The bounded publication scanner does not execute the legacy scan.
+            # Disclose defaults as well as explicit requests, with exact options
+            # so callers can run that scan separately without losing intent.
+            legacy = {name: getattr(params, name) for name in (
+                "bounds_type", "bounds_source", "policy", "check_zero_size",
+                "check_empty_text", "check_locked",
+            )}
+            explicitly_requested = [
+                name for name in legacy if name in params.model_fields_set
+                and (not name.startswith("check_") or legacy[name])
+            ]
+            preflight_data["legacy_preflight"] = {
+                "status": "not_run", "options": legacy,
+                "explicitly_requested": explicitly_requested,
+                "nextStep": "Run illustrator_preflight_check with publication omitted to execute these checks.",
+            }
+            preflight_data.setdefault("omissions", []).append(
+                "Publication mode omits legacy bounds, zero-size, empty-text and locked-artwork checks; "
+                "see legacy_preflight for the options and follow-up."
+            )
+            if explicitly_requested or not statuses:
+                statuses.append("unknown")
+            statuses = [value if value in {"pass", "fail"} else "unknown" for value in statuses]
+            status = VerificationStatus.FAILED if "fail" in statuses else VerificationStatus.UNAVAILABLE if "unknown" in statuses else VerificationStatus.PASSED
+            return build_call_result(CanonicalResult(
+                tool=_PREFLIGHT_NAME, execution=ExecutionStatus.SUCCEEDED, data=preflight_data,
+                diagnostics={**diagnostics, "scan_status": "completed"},
+                verification=Verification(status=status, scope="publication", detail="See per-check measurements and coverage."),
+            ))
 
-        # Build warnings from issues
-        warnings = []
-        for issue in preflight_data.get("issues", []):
-            if issue.get("severity") != "info":
-                warnings.append(issue.get("message", "Unknown issue"))
+        # Findings policy is unchanged: informational findings (locked layers
+        # and items) are reported without failing the check.  Separating a
+        # completed scan from its findings is a public contract change and is
+        # deferred to the declared breaking boundary; until then
+        # `diagnostics.scan_status` distinguishes "scanned and found issues"
+        # from "could not scan at all".
+        non_info_issues = [
+            issue for issue in issues
+            if isinstance(issue, dict) and issue.get("severity") != "info"
+        ]
+        warnings = [
+            issue.get("message", "Unknown issue") for issue in non_info_issues
+        ]
 
-        # Determine ok status: ok if no non-info issues
-        non_info_issues = [i for i in preflight_data.get("issues", []) if i.get("severity") != "info"]
-        is_ok = len(non_info_issues) == 0
+        # ``make_envelope`` drops ``result`` whenever ok is false, and "the
+        # check found something" is exactly the failing case whose issue list,
+        # counts and summary the caller needs.  So on a failure the scan also
+        # rides in diagnostics, where it survives.  On a pass it does not:
+        # ``result`` already carries it, and duplicating it there doubled the
+        # payload of the most common outcome for nothing.
+        passed = not non_info_issues
+        scan_diagnostics = {**diagnostics, "scan_status": "completed"}
+        if not passed:
+            scan_diagnostics["scan"] = preflight_data
 
         return make_envelope(
-            ok=is_ok,
+            ok=passed,
             result=preflight_data,
             warnings=warnings,
-            diagnostics=diagnostics,
+            diagnostics=scan_diagnostics,
         )
 
     except Exception as e:
@@ -573,5 +768,5 @@ async def illustrator_preflight_check(params: PreflightCheckInput) -> str:
         return make_envelope(
             ok=False,
             error={"code": ErrorCode.R_PREFLIGHT_FAILED.value, "message": str(e)},
-            diagnostics=diagnostics,
+            diagnostics={**diagnostics, "scan_status": "unavailable"},
         )

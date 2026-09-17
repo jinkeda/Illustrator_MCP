@@ -16,20 +16,28 @@ import os
 import re
 from dataclasses import dataclass, field as dc_field
 from typing import Any, Dict, List, Literal, Optional, Union
+from illustrator_mcp.tools.base import MutationInputBase
+from illustrator_mcp.tools.bounds import BoundsType, BoundsSource, BoundsScope, BoundsPolicy, BoundsOptions, check_bounds
 from pydantic import Field, model_validator
 from illustrator_mcp.shared import mcp
 from illustrator_mcp.proxy_client import execute_script_with_context, format_envelope
+from illustrator_mcp.execution.coordinator import HostUnresolvedError
+from illustrator_mcp.results import finalize_tool_result
+from mcp.types import CallToolResult
 from illustrator_mcp.libraries import get_injection_metadata
 from illustrator_mcp.tools.base import (
     ToolInputBase, TOOL_ANNOTATIONS, ABSTRACTION_LADDER, COORDINATE_SYSTEM_BLOCK,
 )
+from illustrator_mcp.tools import evidence
 from illustrator_mcp.utils.load_script import load_script
-from illustrator_mcp.utils.response import unwrap_jsx_result
+from illustrator_mcp.utils.response import (
+    JsxPayloadError, require_jsx_payload, unwrap_jsx_result,
+)
 from mcp.types import ImageContent, TextContent
 
 # Import from sibling modules
 from illustrator_mcp.tools.cadence import (
-    _MutationCounter, _counter, VLM_QA_CADENCE, VLM_CHECKPOINT_INSTRUCTION,
+    _MutationCounter, _counter, VLM_QA_CADENCE,
     get_mutation_count, reset_mutation_count,
     format_z_telemetry,
 )
@@ -55,12 +63,21 @@ _PATHFINDER_CMD_RE = re.compile(
     r'executeMenuCommand\s*\(\s*["\'](?:Live Pathfinder|pathfinder)',
     re.IGNORECASE,
 )
-# Fix 3: fresh pathPoints patterns
+# Fix 3: fresh pathPoints patterns.
+#
+# The gap before ``pathItems.add`` excludes semicolons so it cannot reach
+# across a statement boundary. It used to be ``.*?``, which on a single-line
+# script matched from the first declaration on the line all the way to a later
+# ``add()`` call, capturing the wrong variable: given
+# ``var doc = app.activeDocument; var z = doc.pathItems.add(); z.pathPoints[0]``
+# it captured ``doc``, looked for ``doc.pathPoints[``, found none, and stayed
+# silent about a script that does throw. Newlines hid this, since ``.`` does
+# not cross them.
 _ADD_PATH_VAR_RE = re.compile(
-    r'(?:var|let|const)\s+(\w+)\s*=\s*.*?pathItems\.add\s*\(\s*\)',
+    r'(?:var|let|const)\s+(\w+)\s*=\s*[^;]*?pathItems\.add\s*\(\s*\)',
 )
 _ADD_PATH_ASSIGN_RE = re.compile(
-    r'(\w+)\s*=\s*.*?pathItems\.add\s*\(\s*\)',
+    r'(\w+)\s*=\s*[^;]*?pathItems\.add\s*\(\s*\)',
 )
 _ADD_PATH_CHAINED_RE = re.compile(
     r'pathItems\.add\s*\(\s*\)\s*\.\s*pathPoints\s*\[',
@@ -70,6 +87,78 @@ _RECT_ELLIPSE_CALL_RE = re.compile(
     r'(?:rectangle|ellipse)\s*\(',
 )
 _MAX_ADVISORY_HINTS = 3
+
+#: What counts as giving a fresh path its points. Indexing ``pathPoints`` is
+#: only a mistake while the path is still empty, and these are the two ways it
+#: stops being empty.
+_POPULATES_PATH_RE_TMPL = r'\b{var}\.(?:setEntirePath\s*\(|pathPoints\.add\s*\()'
+
+
+def _loop_bodies(script: str) -> "list[str]":
+    """The source inside each ``for`` loop body.
+
+    The batch-creation advisory used to test for a loop anywhere and two shape
+    calls anywhere, with nothing tying the two together. A script whose loop
+    converted coordinates and which separately created two paths matched both
+    halves and was told to use batch creation, which was no help at all.
+
+    Extracting the bodies lets the advisory ask the question it meant to ask:
+    is anything being created *in* the loop.
+
+    ``while`` is deliberately not covered, matching the rule this replaces.
+    Widening what fires is a separate decision from making it accurate.
+    """
+    bodies: "list[str]" = []
+    for match in _LOOP_RE.finditer(script):
+        # Step over the loop header, which contains its own parentheses.
+        depth, i = 0, match.end() - 1
+        while i < len(script):
+            if script[i] == '(':
+                depth += 1
+            elif script[i] == ')':
+                depth -= 1
+                if depth == 0:
+                    break
+            i += 1
+        if i >= len(script):
+            continue  # unbalanced header; nothing reliable to read
+
+        i += 1
+        while i < len(script) and script[i].isspace():
+            i += 1
+        if i >= len(script):
+            continue
+
+        if script[i] == '{':
+            depth, start = 0, i + 1
+            while i < len(script):
+                if script[i] == '{':
+                    depth += 1
+                elif script[i] == '}':
+                    depth -= 1
+                    if depth == 0:
+                        bodies.append(script[start:i])
+                        break
+                i += 1
+        else:
+            end = script.find(';', i)
+            bodies.append(script[i:end if end != -1 else len(script)])
+    return bodies
+
+
+def _points_are_populated(script: str, var_name: str, start: int, end: int) -> bool:
+    """Whether *var_name* is given points between two positions in the script.
+
+    ``pathItems.add()`` returns a path with no points, so indexing them throws.
+    But the documented way to build a path is to add it, call setEntirePath,
+    and only then adjust the handles. Warning about that sequence contradicts
+    this tool's own notes, so the span between creation and use is checked
+    before the warning is raised.
+    """
+    if start >= end:
+        return False
+    pattern = _POPULATES_PATH_RE_TMPL.format(var=re.escape(var_name))
+    return re.search(pattern, script[start:end]) is not None
 
 
 def _split_call_args(text: str, start: int) -> "list[str] | None":
@@ -104,8 +193,10 @@ def _abstraction_advisory(script: str) -> list:
     """
     hints = []
 
-    # Batch creation: for-loop + multiple shape API calls
-    if _LOOP_RE.search(script) and len(_SHAPE_API_RE.findall(script)) >= 2:
+    # Batch creation: shapes created *inside* a loop body. Counting calls
+    # anywhere in the script matched coordinate-processing loops that happened
+    # to sit near unrelated creation calls.
+    if sum(len(_SHAPE_API_RE.findall(body)) for body in _loop_bodies(script)) >= 2:
         hints.append(
             "\U0001f4a1 This script creates shapes in a loop. "
             "Consider element_create_batch (array or template+instances)."
@@ -145,22 +236,28 @@ def _abstraction_advisory(script: str) -> list:
         # Pattern 1: chained form — pathItems.add().pathPoints[
         if _ADD_PATH_CHAINED_RE.search(script):
             _fresh_path_warned = True
-        # Pattern 2: var-declared + same var .pathPoints[
-        if not _fresh_path_warned:
-            for m in _ADD_PATH_VAR_RE.finditer(script):
-                var_name = m.group(1)
-                if re.search(rf'\b{re.escape(var_name)}\.pathPoints\s*\[', script):
-                    _fresh_path_warned = True
-                    break
-        # Pattern 3: assignment without var + same var .pathPoints[
-        if not _fresh_path_warned:
-            for m in _ADD_PATH_ASSIGN_RE.finditer(script):
+        # Patterns 2 and 3 bind creation and use through a variable name, so
+        # they can also see what happened in between. Indexing pathPoints is
+        # only a mistake while the path is still empty; the documented way to
+        # build one is add, setEntirePath, then adjust handles, and warning
+        # about that sequence contradicts this tool's own notes.
+        for pattern in (_ADD_PATH_VAR_RE, _ADD_PATH_ASSIGN_RE):
+            if _fresh_path_warned:
+                break
+            for m in pattern.finditer(script):
                 var_name = m.group(1)
                 if var_name in ('var', 'let', 'const'):
-                    continue  # already handled by pattern 2
-                if re.search(rf'\b{re.escape(var_name)}\.pathPoints\s*\[', script):
-                    _fresh_path_warned = True
-                    break
+                    continue  # already handled by the declared-variable pass
+                use = re.search(
+                    rf'\b{re.escape(var_name)}\.pathPoints\s*\[', script[m.end():]
+                )
+                if not use:
+                    continue
+                use_at = m.end() + use.start()
+                if _points_are_populated(script, var_name, m.end(), use_at):
+                    continue
+                _fresh_path_warned = True
+                break
         if _fresh_path_warned:
             hints.append(
                 "\u26a0\ufe0f pathItems.add() creates a path with zero points. "
@@ -238,10 +335,28 @@ async def _run_auto_tag(
         return None
 
     parsed = unwrap_jsx_result(resp, context="auto_tag")
-    return parsed or None
+    if not parsed:
+        return None
+
+    # Say plainly that this is not a complete account of what the script did.
+    #
+    # A raw script is opaque to this server: it can create, delete, restack and
+    # restyle anything, and auto-tagging infers "what was created" from a count
+    # delta plus a cushion, preferring the selection. That is a useful guess and
+    # nothing more. The structured executor knows its own effects and reports
+    # `effects.complete`; a raw script must never be read the same way, so the
+    # diagnostics carry the distinction rather than leaving a reader to assume
+    # the tagged set is the change set.
+    parsed["complete"] = False
+    parsed["basis"] = (
+        "heuristic: selection first, then a count delta with a cushion"
+        if mode == "delta" else f"scan of untagged items in scope '{scope}'"
+    )
+    parsed["covers"] = "items this scan could identify, not the script's full effect"
+    return parsed
 
 
-class ExecuteScriptInput(ToolInputBase):
+class ExecuteScriptInput(MutationInputBase):
     """Input for executing raw JavaScript in Illustrator."""
 
     script: Optional[str] = Field(
@@ -272,16 +387,26 @@ class ExecuteScriptInput(ToolInputBase):
     @model_validator(mode='after')
     def resolve_script_source(self):
         """Ensure either script or file_path is provided, resolve file_path, and inject params."""
+        from illustrator_mcp.tools.preview import CaptureOptions
+        self.clip_box = CaptureOptions(clip_box=self.clip_box, clip_space=self.clip_space).clip_box
         if not self.script and not self.file_path:
             raise ValueError("Provide either 'script' or 'file_path'")
         if self.script and self.file_path:
             raise ValueError("Provide 'script' or 'file_path', not both")
         if self.file_path:
-            path = self.file_path
-            if not os.path.isfile(path):
-                raise ValueError(f"Script file not found: {path}")
-            with open(path, 'r', encoding='utf-8') as f:
-                self.script = f.read()
+            from pathlib import Path
+            from illustrator_mcp.execution import get_coordinator
+            path = str(Path(self.file_path).resolve())
+            retained = get_coordinator().get(self.job_id) if self.job_id else None
+            snapshot = retained.source_snapshot if retained and retained.label == "illustrator_execute_script" else None
+            if snapshot and snapshot.get("path") == path and "scriptSource" in snapshot:
+                self.script = snapshot["scriptSource"]
+            else:
+                if not os.path.isfile(path):
+                    raise ValueError(f"Script file not found: {path}")
+                with open(path, 'r', encoding='utf-8') as f:
+                    self.script = f.read()
+            self._script_source = self.script
             if not self.script.strip():
                 raise ValueError(f"Script file is empty: {path}")
 
@@ -319,7 +444,7 @@ class ExecuteScriptInput(ToolInputBase):
         description="Check if items are on artboard after execution"
     )
 
-    bounds_type: str = Field(
+    bounds_type: BoundsType = Field(
         default="visible",
         description="Bounds type for validation: 'visible' (includes strokes/effects) or 'geometric' (path only)"
     )
@@ -339,12 +464,12 @@ class ExecuteScriptInput(ToolInputBase):
         description="Skip locked items in validation"
     )
 
-    bounds_scope: str = Field(
+    bounds_scope: BoundsScope = Field(
         default="document",
         description="Scope: 'document' (all items) or 'artboard' (items on target artboard)"
     )
 
-    bounds_source: str = Field(
+    bounds_source: BoundsSource = Field(
         default="group_visible",
         description="Bounds source: 'group_visible' (default) or 'clipping_path' (use clipping path bounds for clipped groups)"
     )
@@ -377,12 +502,15 @@ class ExecuteScriptInput(ToolInputBase):
         le=500
     )
 
+    clip_space: Literal["artboard_relative_y_down", "illustrator_native_y_up"] = "artboard_relative_y_down"
+
     clip_box: Optional[List[float]] = Field(
         default=None,
         description=(
             "Optional high-resolution crop region: [xmin, ymin, xmax, ymax] in "
-            "screen-space Y-down points.  When set, the preview exports a zoomed, "
-            "upscaled crop of just this region.  Annotations are culled and mapped "
+            "artboard-relative Y-down points by default; clip_space can select native "
+            "[left,top,right,bottom] Y-up coordinates. The preview captures a bounded "
+            "region at the disclosed actual resolution. Annotations are culled and mapped "
             "to the crop.  All coordinates in the annotation map remain in global "
             "document space.  Use this when fine details are too small to see or "
             "when annotation tags overlap in dense areas."
@@ -405,6 +533,19 @@ class ExecuteScriptInput(ToolInputBase):
         default=False,
         description="Set to True on the last mutation to force an annotated VLM QA preview, "
                     "regardless of the cadence counter."
+    )
+
+    read_only: bool = Field(
+        default=False,
+        description=(
+            "Declare that this script only reads. The server cannot tell a "
+            "readback from an edit on its own, so without this every raw call "
+            "counts as a mutation and can be asked to produce visual evidence "
+            "for a script that changed nothing. Setting it skips the mutation "
+            "counter, the occlusion guard and the evidence requirement. It is "
+            "a claim about your script, not a sandbox: the script can still "
+            "mutate. Server auto-tagging is forced off; item counts are only a limited mutation hint."
+        ),
     )
 
     max_ops: int = Field(
@@ -438,9 +579,9 @@ class ExecuteScriptInput(ToolInputBase):
                     '"delta": tag items likely created by this script (selection-first, '
                     'bounded by count delta + cushion). '
                     '"converge": tag ALL untagged items in scope (up to cap, explicit migration). '
-                    '"off": no scanning, no tagging. '
+                    '"off": no tag scanning or tagging; read-only count hints remain. '
                     'Auto-tagging mutates item.note by writing @mcp:id= tags. '
-                    'Delta mode is cheap (skips entirely when no items created). '
+                    'Read-only calls force off. Delta retains a zero-count cushion and may tag existing selected items; it is not a creation record. '
                     'Converge mode can be expensive on large legacy documents.'
     )
 
@@ -475,12 +616,26 @@ class _ExecContext:
 
     warnings: list = dc_field(default_factory=list)
     diagnostics: dict = dc_field(default_factory=dict)
+    effective_auto_tag: str = "off"
+    read_count_before: Optional[dict] = None
     auto_tag_pre_count: Optional[int] = None
+    evidence: object = None  # evidence.EvidenceDecision for this call
     is_vlm_checkpoint: bool = False
     checkpoint_skipped: bool = False
     command_type: str = ""
     context: str = ""  # for format_envelope
     guard_result: Optional[GuardCheckpointResult] = None
+
+
+def _mark_evidence(ctx, *, supplied: bool) -> None:
+    """Record whether the required evidence was actually attached.
+
+    Kept as one call so the several return paths cannot disagree about it,
+    which is how the previous checkpoint text drifted across seven sites.
+    """
+    block = ctx.diagnostics.get("evidence")
+    if isinstance(block, dict):
+        block["evidenceSupplied"] = supplied
 
 
 # ── Phase 1: Pre-execution ────────────────────────────────────────
@@ -508,25 +663,44 @@ def _pre_execute(params: ExecuteScriptInput, count: int) -> tuple:
     if advisory_hints:
         ctx.warnings.extend(advisory_hints)
 
-    # VLM QA Cadence
-    is_checkpoint = (count % VLM_QA_CADENCE == 0) or params.final_step
+    # ── What verification does this edit require? ──
+    #
+    # A raw script is opaque: the server cannot classify what it did, so it
+    # cannot reason about layout, clipping or boolean changes the way it can
+    # for a structured batch. This path therefore keeps the backlog rule as
+    # its trigger and says so in the reason, rather than guessing.
+    decision = evidence.NO_EVIDENCE if params.read_only else (
+        evidence.limit_to_available(
+            evidence.decide(
+                opaque_script=True,
+                mutation_count=count,
+                final_step=params.final_step,
+            ),
+            ("annotated", "raw"),
+        )
+    )
+    ctx.evidence = decision
 
-    if is_checkpoint:
-        if params.return_preview is False and not params.final_step:
-            ctx.warnings.append(
-                f"VLM QA checkpoint skipped (mutation #{count}). "
-                "Consider using return_preview=True, preview_mode='annotated' "
-                "to visually verify the document state."
-            )
+    if decision.required:
+        declined = evidence.capture_declined(params.return_preview, final_step=params.final_step)
+        if declined:
+            # The requirement stands and is reported unmet; only capture is
+            # suppressed. A skipped check that leaves no trace is how an
+            # unverified document comes to look verified.
             ctx.checkpoint_skipped = True
         else:
             params.return_preview = True
-            params.preview_mode = "annotated"
+            params.preview_mode = (
+                "annotated" if decision.mode == "annotated" else "artboard"
+            )
             ctx.is_vlm_checkpoint = True
             logger.info(
-                f"VLM QA cadence: checkpoint at mutation #{count} "
-                f"(final_step={params.final_step})"
+                "evidence required at mutation #%s: %s",
+                count, ", ".join(decision.reason_values),
             )
+
+    # Deterministic ES3 method support; resolver deduplicates explicit includes.
+    params.includes = list(dict.fromkeys(["polyfills", *(params.includes or [])]))
 
     # Canonicalized includes metadata
     if params.includes:
@@ -546,7 +720,13 @@ def _pre_execute(params: ExecuteScriptInput, count: int) -> tuple:
         "bounds_scope": params.bounds_scope,
         "artboard_index": params.artboard_index,
         "is_vlm_checkpoint": ctx.is_vlm_checkpoint,
+        "evidence": evidence.diagnostics(decision, evidence_supplied=False),
     }
+
+    ctx.effective_auto_tag = "off" if params.read_only else params.auto_assign_ids
+    ctx.diagnostics["autoTagMode"] = ctx.effective_auto_tag
+    if params.read_only and "auto_assign_ids" in params.model_fields_set and params.auto_assign_ids != "off":
+        ctx.warnings.append("read_only forces auto_assign_ids off; explicit " + params.auto_assign_ids + " was ignored.")
 
     # Command type for CEP panel
     desc = params.description.strip() if params.description else None
@@ -559,6 +739,9 @@ def _pre_execute(params: ExecuteScriptInput, count: int) -> tuple:
 
     ctx.context = f"execute_script: {desc}" if desc else "execute_script"
 
+    # Keep the helper out of trusted connectivity probes and shared wrappers.
+    from illustrator_mcp.utils.load_script import load_inline_script
+    script = load_inline_script("raw_fail.jsx") + "\n" + script
     return script, ctx
 
 
@@ -566,7 +749,9 @@ def _pre_execute(params: ExecuteScriptInput, count: int) -> tuple:
 
 async def _pre_execute_async(params: ExecuteScriptInput, ctx: _ExecContext) -> _ExecContext:
     """Async pre-execution: auto-tag precount (requires bridge call)."""
-    if params.auto_assign_ids != "off":
+    if params.read_only:
+        ctx.read_count_before = await _read_count_hint()
+    if not params.read_only and params.auto_assign_ids != "off":
         _scope_expr = (
             "doc.activeLayer.pageItems.length"
             if params.auto_tag_scope == "activeLayer"
@@ -583,14 +768,46 @@ async def _pre_execute_async(params: ExecuteScriptInput, ctx: _ExecContext) -> _
                 tool_name="illustrator_execute_script",
                 timeout=5.0,
             )
-            _count_data = unwrap_jsx_result(
-                _count_resp, context="auto_tag_precount"
+            # A lost payload must not read as a baseline of zero: auto-tagging
+            # infers "what was created" from the delta against this number, so
+            # zero makes every pre-existing item look newly created.  The
+            # strict unwrapper raises instead of returning an empty dict, which
+            # lands in the handler below and skips auto-tagging — the same
+            # degradation this block already applies to an execution failure.
+            _count_data = require_jsx_payload(
+                _count_resp,
+                context="auto_tag_precount",
+                required_keys=("count",),
             )
-            ctx.auto_tag_pre_count = _count_data.get("count", 0)
+            _pre_count = _count_data["count"]
+            if isinstance(_pre_count, bool) or not isinstance(_pre_count, int):
+                raise JsxPayloadError(
+                    f"auto-tag pre-count is {type(_pre_count).__name__}, "
+                    "expected an int"
+                )
+            ctx.auto_tag_pre_count = _pre_count
         except Exception as e:
             logger.debug("Auto-tag pre-count failed: %s", e)
             ctx.auto_tag_pre_count = None  # Graceful degradation: skip auto-tag
     return ctx
+
+
+async def _read_count_hint():
+    """Compare document-wide populations, never two different active layers."""
+    from illustrator_mcp.execution import get_coordinator
+    try:
+        get_coordinator().assert_host_available()
+        response = await execute_script_with_context(
+            script="(function(){var d=app.activeDocument;return JSON.stringify({count:d.pageItems.length,token:mcpDocBind().token});})()",
+            command_type="read_only_count", tool_name=_NAME, timeout=5.0,
+            includes=["doc_session"],
+        )
+        data = require_jsx_payload(response, context="read_only_count", required_keys=("count", "token"))
+        if type(data["count"]) is not int or not data["token"]:
+            return None
+        return data
+    except Exception:
+        return None
 
 
 # ── Phase 3: Post-execution ───────────────────────────────────────
@@ -608,51 +825,37 @@ async def _post_execute(
 
     Returns (response, ctx) with updated diagnostics/warnings.
     """
+    if params.read_only:
+        after = None if response.get("error") or response.get("execution") == "unknown" else await _read_count_hint()
+        before = ctx.read_count_before
+        comparable = before is not None and after is not None and before["token"] == after["token"]
+        ctx.diagnostics["readOnlyCountHint"] = {
+            "before": before, "after": after, "scope": "document",
+            "status": "comparable" if comparable else "unavailable",
+            "completeMutationDetection": False,
+        }
+        if comparable and before["count"] != after["count"]:
+            ctx.warnings.append("Declared read-only script changed the observed document item count; counts do not detect all mutations.")
+        elif comparable:
+            ctx.diagnostics["readOnlyCountHint"]["detail"] = "Unchanged counts do not prove preservation (styles, notes and equal-count replacement are unobserved)."
+
     # ── Bounds validation ──
     if params.validate_bounds:
-        ab_idx = params.artboard_index if params.artboard_index is not None else 'null'
-        check_script = f"""
-        countItemsOnArtboard({{
-            artboardIndex: {ab_idx},
-            boundsType: "{params.bounds_type}",
-            boundsSource: "{params.bounds_source}",
-            ignoreHidden: {str(params.ignore_hidden).lower()},
-            ignoreLocked: {str(params.ignore_locked).lower()},
-            policy: "fully-contained",
-            scope: "{params.bounds_scope}"
-        }});
-        """
         try:
-            check_response = await execute_script_with_context(
-                script=check_script,
-                command_type="bounds_validation",
-                tool_name="illustrator_execute_script",
-                includes=["validate"]
-            )
-            cep_result = check_response.get("result", {})
-            if isinstance(cep_result, str):
-                cep_result = json.loads(cep_result)
-
-            if cep_result.get("ok") is False or cep_result.get("error"):
-                error_info = cep_result.get("error", {})
-                error_msg = error_info.get("message", "unknown error") if isinstance(error_info, dict) else str(error_info)
-                ctx.warnings.append(f"Bounds validation failed: {error_msg}")
-            else:
-                inner_result = cep_result.get("result", "{}")
-                if isinstance(inner_result, str):
-                    bounds = json.loads(inner_result)
-                else:
-                    bounds = inner_result
-
-                if bounds:
-                    ctx.diagnostics["validation_result"] = bounds
-                    if bounds.get('off_artboard', 0) > 0:
-                        ctx.warnings.append(
-                            f"{bounds['off_artboard']} items outside artboard bounds "
-                            f"(policy: fully-contained, {params.bounds_type}Bounds)"
-                        )
-        except Exception as e:
-            ctx.warnings.append(f"Bounds validation failed: {e}")
+            bounds = await check_bounds(execute_script_with_context,
+                options=BoundsOptions(artboardIndex=params.artboard_index,
+                    boundsType=params.bounds_type, boundsSource=params.bounds_source,
+                    scope=params.bounds_scope, ignoreHidden=params.ignore_hidden,
+                    ignoreLocked=params.ignore_locked),
+                command="bounds_validation", tool="illustrator_execute_script")
+            ctx.diagnostics["validation_result"] = bounds
+            ctx.diagnostics["boundsVerification"] = {
+                "status": "failed" if bounds["off_artboard"] else "passed", "findings": bounds}
+            if bounds["off_artboard"]:
+                ctx.warnings.append(f"{bounds['off_artboard']} items outside artboard bounds (policy: fully-contained, {params.bounds_type}Bounds)")
+        except Exception as exc:
+            ctx.diagnostics["boundsVerification"] = {"status": "unavailable", "detail": str(exc)}
+            ctx.warnings.append(f"Bounds validation failed: {exc}")
 
     # ── Preview state injection ──
     has_error = response.get("error") is not None
@@ -667,6 +870,18 @@ async def _post_execute(
         ctx.guard_result = gcp
         ctx.diagnostics["guard_status"] = gcp.guard_status
 
+        # Geometry the guard finds suspicious raises the requirement, using the
+        # guard's own tiers rather than a second set of numbers.
+        if ctx.evidence is not None:
+            ctx.evidence = evidence.escalate_for_geometry(
+                ctx.evidence, gcp.guard_telemetry
+            )
+            ctx.diagnostics["evidence"] = evidence.diagnostics(
+                ctx.evidence,
+                evidence_supplied=ctx.diagnostics.get(
+                    "evidence", {}).get("evidenceSupplied", False),
+            )
+
         if gcp.should_abort:
             # Mark for abort in _present, but do NOT return early
             params.return_preview = False
@@ -680,7 +895,8 @@ async def _post_execute(
 
     # ── Auto-tag (always runs if mode != off, regardless of guard outcome) ──
     if (
-        params.auto_assign_ids != "off"
+        not params.read_only
+        and params.auto_assign_ids != "off"
         and ctx.auto_tag_pre_count is not None
         and not response.get("error")
     ):
@@ -694,6 +910,13 @@ async def _post_execute(
             )
             if _auto_tag_result:
                 ctx.diagnostics["auto_assign_ids"] = _auto_tag_result
+                if _auto_tag_result.get("tagged"):
+                    ctx.warnings.append(
+                        f"Auto-tagged {_auto_tag_result['tagged']} item(s) after a raw "
+                        "script. This is an inferred set, not a complete record of "
+                        "what the script changed — use illustrator_execute_task for "
+                        "operations whose effects must be known."
+                    )
                 if _auto_tag_result.get("cap_hit"):
                     ctx.warnings.append(
                         f"Auto-tag cap hit: tagged {_auto_tag_result['tagged']}/{params.max_auto_tag} items. "
@@ -756,12 +979,16 @@ async def _present(
                 type="text",
                 text=gcp.telemetry_text,
             ))
-        abort_parts.append(TextContent(
-            type="text",
-            text=VLM_CHECKPOINT_INSTRUCTION.format(
-                count=_counter.value
-            ),
-        ))
+        if ctx.evidence is not None and ctx.evidence.required:
+            abort_parts.append(TextContent(
+                type="text",
+                text=evidence.requirement_text(
+                    ctx.evidence,
+                    evidence_supplied=any(
+                        isinstance(b, ImageContent) for b in abort_parts
+                    ),
+                ),
+            ))
         return abort_parts
 
     # ── Preview generation (read-only export) ──
@@ -772,6 +999,9 @@ async def _present(
                 timeout=params.timeout
             )
             if preview_result:
+                from illustrator_mcp.tools.preview import capture_metadata
+                ctx.diagnostics["capture"] = capture_metadata.get()
+                envelope = format_envelope(response=response, context=ctx.context, warnings=ctx.warnings, diagnostics=ctx.diagnostics)
                 if params.preview_mode == "annotated":
                     import base64 as _b64
                     raw_bytes = _b64.b64decode(preview_result.data)
@@ -780,7 +1010,7 @@ async def _present(
                         max_items=params.preview_max_items,
                         timeout=params.timeout,
                         probe_points=params.probe_points,
-                        clip_box=params.clip_box,
+                        clip_box=params.clip_box, clip_space=params.clip_space,
                     )
                     ann_b64 = _b64.b64encode(annotated_bytes).decode('utf-8')
                     result_parts = [
@@ -828,13 +1058,41 @@ async def _present(
                         ))
 
                     # VLM checkpoint instruction — last for maximum recency weight
+                    # Skip checkpoint on empty canvas (0 annotations = nothing to review)
                     if ctx.is_vlm_checkpoint:
-                        result_parts.append(TextContent(
-                            type="text",
-                            text=VLM_CHECKPOINT_INSTRUCTION.format(
-                                count=_counter.value
-                            ),
-                        ))
+                        ann_count = annotation_result.get("meta", {}).get("annotated_count", 0)
+                        if ann_count == 0:
+                            # Nothing on the page to review. The requirement is
+                            # not silently dropped: it is reported unmet, which
+                            # is what "unavailable" means everywhere else in
+                            # this codebase — wanted, but not obtainable.
+                            ctx.diagnostics["checkpoint_skipped_empty_canvas"] = True
+                            _mark_evidence(ctx, supplied=False)
+                            result_parts.append(TextContent(
+                                type="text",
+                                text=(
+                                    "Verification unavailable: checkpoint skipped "
+                                    "on an empty canvas (0 annotations)."
+                                ),
+                            ))
+                        elif ctx.evidence is not None:
+                            _mark_evidence(ctx, supplied=True)
+                            # The envelope was serialised before this capture,
+                            # so the dict update above cannot reach the client;
+                            # stamp the built string too.
+                            result_parts[0] = TextContent(
+                                type="text",
+                                text=evidence.stamp_supplied(
+                                    result_parts[0].text, ctx.evidence,
+                                    supplied=True,
+                                ),
+                            )
+                            result_parts.append(TextContent(
+                                type="text",
+                                text=evidence.requirement_text(
+                                    ctx.evidence, evidence_supplied=True
+                                ),
+                            ))
                     return result_parts
                 else:
                     return [
@@ -850,10 +1108,11 @@ async def _present(
                     warnings=ctx.warnings,
                     diagnostics=ctx.diagnostics,
                 )
-                if ctx.is_vlm_checkpoint:
+                if ctx.is_vlm_checkpoint and ctx.evidence is not None:
                     return [
                         TextContent(type="text", text=envelope),
-                        TextContent(type="text", text=VLM_CHECKPOINT_INSTRUCTION.format(count=_counter.value)),
+                        TextContent(type="text", text=evidence.requirement_text(
+                            ctx.evidence, evidence_supplied=False)),
                     ]
                 return envelope
         except Exception as e:
@@ -865,10 +1124,11 @@ async def _present(
                 warnings=ctx.warnings,
                 diagnostics=ctx.diagnostics,
             )
-            if ctx.is_vlm_checkpoint:
+            if ctx.is_vlm_checkpoint and ctx.evidence is not None:
                 return [
                     TextContent(type="text", text=envelope),
-                    TextContent(type="text", text=VLM_CHECKPOINT_INSTRUCTION.format(count=_counter.value)),
+                    TextContent(type="text", text=evidence.requirement_text(
+                        ctx.evidence, evidence_supplied=False)),
                 ]
             return envelope
 
@@ -879,7 +1139,7 @@ async def _present(
 # ── Main tool function ─────────────────────────────────────────────
 
 @mcp.tool(name=_NAME, annotations=TOOL_ANNOTATIONS[_NAME])
-async def illustrator_execute_script(params: ExecuteScriptInput) -> Union[str, list]:
+async def illustrator_execute_script(params: ExecuteScriptInput) -> CallToolResult:
     """Execute raw JavaScript/ExtendScript code in Adobe Illustrator.
 
     CONTRACT: readOnly=False, destructive=True, idempotent=False, openWorld=True
@@ -888,6 +1148,29 @@ async def illustrator_execute_script(params: ExecuteScriptInput) -> Union[str, l
       - Single one-off items, quick prototypes, or operations not covered by higher-level tools
       - Full DOM access when structured tools are insufficient
       - Reading document state with custom logic
+      - To SEE the artwork, use illustrator_observe instead: it returns the
+        image inline with a numbered map of items, their handles and bounds,
+        so there is no file to export, locate and open
+
+    EXECUTION CONTRACT:
+      Your script is evaluated at the top level, not inside a function.
+        - The value of the LAST EXPRESSION is the result. End with the value
+          you want back, usually a JSON.stringify(...) call.
+        - A bare `return` is a syntax error: "Illegal return outside of a
+          function body". Wrap the code in a function and call it immediately
+          when you need an early exit.
+        - Returning an object is fine; it is serialised for you. Returning
+          nothing is a valid outcome and is reported as data: null.
+      Injected helper libraries are declared at the same top level, so they
+      are in scope either way. See EXAMPLES for both forms.
+      Top-level {ok:false}, {success:false}, or a string error field produces
+      a warning, not an execution failure. Nested values remain opaque.
+      Use throw or mcpFail(message, details) for an explicit failure:
+        try { doWork(); } catch (e) { mcpFail("Label failed", {cause:String(e)}); }
+      mcpFail throws an ordinary catchable Error; details are bounded to 2048
+      characters. Neither throwing nor returning an error rolls back edits.
+      Host line numbers, when available, refer to injected host code, not
+      necessarily to the caller's source lines. Verification is separate.
 
     ABSTRACTION LADDER — prefer higher levels before using raw script:
       Level 5 — illustrator_path_boolean: boolean sculpt (unite/subtract/intersect/xor)
@@ -902,19 +1185,84 @@ async def illustrator_execute_script(params: ExecuteScriptInput) -> Union[str, l
       - setEntirePath with >12 coord pairs — STOP and use smooth:true or illustrator_path_import_svg
 
     COORDINATE SYSTEM:
-      - API coordinates use top-left origin with y increasing downward (screen space)
-      - ExtendScript expects Y-up internally; use -y when calling Illustrator DOM methods
+      - Geometry helpers use artboard-relative coordinates: origin at the active
+        artboard's top-left, with y increasing downward (screen space)
+      - Raw Illustrator DOM positions use document-space coordinates, with y
+        increasing upward; do not assume that the active artboard starts at (0, 0)
       - Units: points (1 pt = 1/72 inch)
-      - Example: to place at visual position (100, 200), use position = [100, -200]
+
+    HELPERS — ARTBOARD-RELATIVE, Y-DOWN (includes: ['geometry']):
+      Use these to avoid manual conversion to raw document coordinates:
+        rectXY(x, y, w, h)          — rectangle at screen-space (x,y)
+        ellipseXY(x, y, w, h)       — ellipse at screen-space (x,y)
+        lineXY(x1, y1, x2, y2)      — line between screen-space points
+        polygonXY([[x,y],...], closed)— polygon from screen-space points
+        pointXY(x, y)               — returns {left, top} for position assignments
+        drawPathPoints(spec)         — full path with handles, UUID, heap registration
+      Example: var rect = rectXY(100, 200, 50, 30);  // no -y needed
+
+    RAW DOM — DOCUMENT-SPACE, Y-UP (only when helpers are insufficient):
+      These are API snippets to put inside a script, not tool calls. Convert
+      an artboard-relative point before passing it to the DOM:
+        var ab = doc.artboards[doc.artboards.getActiveArtboardIndex()].artboardRect;
+        var position = [ab[0] + x, ab[1] - y];
+        // Nonzero-origin example: ab top-left (72, 720), (x, y) = (100, 200)
+        // gives the raw DOM position [172, 520].
+        Rectangle: doc.pathItems.rectangle(position[1], position[0], width, height)
+          ⚠ width & height must be POSITIVE. Negative height → shape above artboard (invisible).
+        Ellipse: doc.pathItems.ellipse(position[1], position[0], width, height)
+        Line: convert each artboard-relative point with the same ab-offset formula
+        Color: var c = new RGBColor(); c.red=255; c.green=0; c.blue=0; shape.fillColor = c;
+        Text: var tf = doc.textFrames.add(); tf.contents = "text"; tf.position = position;
+        Grid helpers: artboardGrid(cols, rows), itemsInCell(cell, mode)
 
     EXAMPLES:
-      Rectangle: doc.pathItems.rectangle(top, left, width, height)
-        ⚠ width & height must be POSITIVE. Negative height → shape above artboard (invisible).
-      Ellipse: doc.pathItems.ellipse(top, left, width, height)
-      Line: var p = doc.pathItems.add(); p.setEntirePath([[x1,-y1], [x2,-y2]])
-      Color: var c = new RGBColor(); c.red=255; c.green=0; c.blue=0; shape.fillColor = c;
-      Text: var tf = doc.textFrames.add(); tf.contents = "text"; tf.position = [x, -y];
-      Grid helpers: artboardGrid(cols, rows), itemsInCell(cell, mode)
+      Read with a native-coordinate crop:
+        {
+          "params": {
+            "script": "app.activeDocument.name;",
+            "return_preview": true,
+            "clip_box": [
+              0,
+              125,
+              125,
+              0
+            ],
+            "clip_space": "illustrator_native_y_up"
+          }
+        }
+      Draw in artboard-relative Y-down coordinates with geometry helpers:
+        {
+          "params": {
+            "script": "var r = rectXY(50, 80, 200, 100); r.fillColor = makeRGBColor(255, 0, 0); r.name;",
+            "includes": [
+              "geometry"
+            ],
+            "description": "red banner"
+          }
+        }
+      Position text from an offset artboard using raw DOM coordinates:
+        {
+          "params": {
+            "script": "var doc = app.activeDocument; var ab = doc.artboards[doc.artboards.getActiveArtboardIndex()].artboardRect; var x = 100; var y = 200; var tf = doc.textFrames.add(); tf.contents = 'Offset'; tf.position = [ab[0] + x, ab[1] - y]; tf.position;",
+            "description": "raw DOM offset-artboard placement"
+          }
+        }
+      Read state back; the last expression is the result:
+        {"params": {"script": "JSON.stringify({items: app.activeDocument.pageItems.length});"}}
+      Return early, which needs a function wrapper:
+        {
+          "params": {
+            "script": "(function () { var d = app.activeDocument; if (d.pageItems.length === 0) return 'empty'; return d.pageItems[0].name; })()"
+          }
+        }
+      A readback, declared so it is not treated as an edit:
+        {
+          "params": {
+            "script": "JSON.stringify({name: app.activeDocument.name});",
+            "read_only": true
+          }
+        }
 
     ELEMENT DISCOVERY:
       - Use artboardGrid(cols, rows) to partition the artboard into a labeled grid
@@ -923,13 +1271,19 @@ async def illustrator_execute_script(params: ExecuteScriptInput) -> Union[str, l
       - Cell labels follow A1 scheme (letter row + number col, e.g. A1, B3)
 
     MUTATION SAFETY:
-      - Each call increments a mutation counter for VLM QA cadence tracking
-      - Failed executions auto-decrement the counter to avoid cadence drift
-      - Use final_step=true on the last mutation to force a visual checkpoint
+      - Each call increments a per-document mutation counter
+      - Failed executions decrement it again, so failures do not accumulate
+      - A raw script is opaque to this server, so it cannot tell which kind of
+        change you made. Evidence is therefore requested on a backlog rule
+        rather than on the operations performed, unlike illustrator_execute_task
+      - Use final_step=true on the last mutation to require final evidence
 
     NOTES:
-      - Every call increments a mutation counter; annotated preview auto-injected at VLM cadence
-      - Set final_step=true on the last mutation to force a VLM checkpoint
+      - When evidence is required the result carries a VERIFICATION REQUIRED
+        block naming what to confirm, and diagnostics.evidence says whether an
+        image was actually supplied
+      - return_preview=false suppresses capture but not the requirement, which
+        is then reported unmet rather than dropped
       - setEntirePath() creates corner points only; set handles after creation
       - ExtendScript can access File/Folder and OS — treat as open-world
 
@@ -938,38 +1292,40 @@ async def illustrator_execute_script(params: ExecuteScriptInput) -> Union[str, l
       - Never iterate live Illustrator collections if adding/removing items
       - Use __mcp_forEachSnapshot(collection, fn) or __mcp_snapshot(collection) instead
     """
-    count = _counter.increment()
-    try:
-        # Phase 1: Pre-execution (sync setup)
+    # A declared read does not advance the cadence. Counting reads is what
+    # let a script that only returned document properties be asked to verify
+    # itself visually, citing an opaque script and geometry it never touched.
+    from illustrator_mcp.execution.logical_job import run_logical_job
+    async def body(job):
+        count = _counter.value if params.read_only else _counter.increment()
         script, ctx = _pre_execute(params, count)
-
-        # Phase 1b: Async pre-execution (precount bridge call)
         ctx = await _pre_execute_async(params, ctx)
-
-        script_len = len(script)
-        logger.info(f"execute_script: {ctx.command_type} ({script_len} chars)")
-
-        # Phase 2: Execution
         response = await execute_script_with_context(
-            script=script,
-            command_type=ctx.command_type,
-            tool_name="illustrator_execute_script",
-            params={"description": params.description or "raw script", "length": script_len},
-            timeout=params.timeout,
-            includes=params.includes,
+            script=script, command_type=ctx.command_type,
+            tool_name=_NAME,
+            params={"description": params.description or "raw script", "length": len(script)},
+            timeout=params.timeout, includes=params.includes,
         )
-
-        # Phase 3: Post-execution (always runs on success)
+        from illustrator_mcp.utils.response import normalize_raw_script_response
+        response = normalize_raw_script_response(response)
+        value = response.get("_rawScriptValue")
+        if isinstance(value, dict) and (
+            value.get("ok") is False or value.get("success") is False
+            or isinstance(value.get("error"), str)
+        ):
+            ctx.warnings.append(
+                "The top-level return value looks like a failure, but raw values "
+                "are opaque and do not change execution status. Use throw or "
+                "mcpFail(message, details) to fail the call. Prior edits are not rolled back."
+            )
         response, ctx = await _post_execute(response, params, ctx)
-
-        # Phase 4: Presentation (multiple returns are fine here)
         return await _present(response, params, ctx)
-
-    except Exception as e:
-        logger.error(f"Script execution failed: {str(e)}")
+    try:
+        return await run_logical_job(_NAME, params, body)
+    except Exception:
+        if not params.read_only:
+            _counter.decrement()
         raise
-    finally:
-        _counter.decrement()
 
 
 # ── Backward-compatible re-exports ──────────────────────────────────
@@ -984,7 +1340,7 @@ from illustrator_mcp.tools.task_execution import (  # noqa: E402, F401
 
 __all__ = [
     # Cadence
-    "_MutationCounter", "_counter", "VLM_QA_CADENCE", "VLM_CHECKPOINT_INSTRUCTION",
+    "_MutationCounter", "_counter", "VLM_QA_CADENCE",
     "get_mutation_count", "reset_mutation_count",
     # Preview
     "_build_export_script", "_capture_artboard", "_capture_artboard_png",

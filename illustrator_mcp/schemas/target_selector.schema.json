@@ -1,6 +1,7 @@
 {
   "$defs": {
     "AllTarget": {
+      "additionalProperties": false,
       "description": "Target: all items in document.",
       "properties": {
         "type": {
@@ -19,6 +20,7 @@
       "type": "object"
     },
     "CompoundTarget": {
+      "additionalProperties": false,
       "description": "Compound target selector with boolean logic.\n\nExamples:\n    # Union of multiple sources\n    {\"type\": \"compound\", \"anyOf\": [{\"type\": \"layer\", \"layer\": \"Panels\"}, {\"type\": \"selection\"}]}\n    \n    # With exclusions\n    {\"type\": \"compound\", \"anyOf\": [...], \"exclude\": {\"locked\": true, \"hidden\": true}}",
       "properties": {
         "type": {
@@ -28,7 +30,7 @@
           "type": "string"
         },
         "anyOf": {
-          "description": "Union of targets",
+          "description": "Union of targets (nested compounds supported)",
           "items": {
             "anyOf": [
               {
@@ -42,6 +44,21 @@
               },
               {
                 "$ref": "#/$defs/QueryTarget"
+              },
+              {
+                "$ref": "#/$defs/IdTarget"
+              },
+              {
+                "$ref": "#/$defs/HandleTarget"
+              },
+              {
+                "$ref": "#/$defs/SpatialTarget"
+              },
+              {
+                "$ref": "#/$defs/GridTarget"
+              },
+              {
+                "$ref": "#/$defs/CompoundTarget"
               }
             ]
           },
@@ -69,6 +86,7 @@
       "type": "object"
     },
     "ExcludeFilter": {
+      "additionalProperties": false,
       "description": "Filter to exclude items from results.",
       "properties": {
         "locked": {
@@ -99,7 +117,105 @@
       "title": "ExcludeFilter",
       "type": "object"
     },
+    "GridTarget": {
+      "additionalProperties": false,
+      "properties": {
+        "type": {
+          "const": "grid",
+          "default": "grid",
+          "title": "Type",
+          "type": "string"
+        },
+        "cell": {
+          "minLength": 1,
+          "title": "Cell",
+          "type": "string"
+        },
+        "cols": {
+          "default": 4,
+          "maximum": 99,
+          "minimum": 1,
+          "title": "Cols",
+          "type": "integer"
+        },
+        "rows": {
+          "default": 4,
+          "maximum": 26,
+          "minimum": 1,
+          "title": "Rows",
+          "type": "integer"
+        },
+        "layer": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Layer"
+        }
+      },
+      "required": [
+        "cell"
+      ],
+      "title": "GridTarget",
+      "type": "object"
+    },
+    "HandleTarget": {
+      "additionalProperties": false,
+      "description": "Target exact untagged artwork through an expiring host handle.",
+      "properties": {
+        "type": {
+          "const": "handle",
+          "default": "handle",
+          "title": "Type",
+          "type": "string"
+        },
+        "handles": {
+          "items": {
+            "type": "string"
+          },
+          "minItems": 1,
+          "title": "Handles",
+          "type": "array"
+        }
+      },
+      "required": [
+        "handles"
+      ],
+      "title": "HandleTarget",
+      "type": "object"
+    },
+    "IdTarget": {
+      "additionalProperties": false,
+      "description": "Target one or more explicitly stamped item identities.",
+      "properties": {
+        "type": {
+          "const": "id",
+          "default": "id",
+          "title": "Type",
+          "type": "string"
+        },
+        "ids": {
+          "items": {
+            "type": "string"
+          },
+          "minItems": 1,
+          "title": "Ids",
+          "type": "array"
+        }
+      },
+      "required": [
+        "ids"
+      ],
+      "title": "IdTarget",
+      "type": "object"
+    },
     "LayerTarget": {
+      "additionalProperties": false,
       "description": "Target: all items on a layer.",
       "properties": {
         "type": {
@@ -126,6 +242,27 @@
       "title": "LayerTarget",
       "type": "object"
     },
+    "NearTarget": {
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "minLength": 1,
+          "title": "Id",
+          "type": "string"
+        },
+        "radius": {
+          "minimum": 0,
+          "title": "Radius",
+          "type": "number"
+        }
+      },
+      "required": [
+        "id",
+        "radius"
+      ],
+      "title": "NearTarget",
+      "type": "object"
+    },
     "OrderBy": {
       "description": "Deterministic ordering modes for target results.",
       "enum": [
@@ -142,6 +279,7 @@
       "type": "string"
     },
     "QueryTarget": {
+      "additionalProperties": false,
       "description": "Target: items matching query filters.",
       "properties": {
         "type": {
@@ -176,6 +314,19 @@
           "description": "Name pattern with * wildcard",
           "title": "Pattern"
         },
+        "contents": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Exact TextFrame contents; CRLF/LF match Illustrator CR.",
+          "title": "Contents"
+        },
         "layer": {
           "anyOf": [
             {
@@ -198,6 +349,7 @@
       "type": "object"
     },
     "SelectionTarget": {
+      "additionalProperties": false,
       "description": "Target: current selection.",
       "properties": {
         "type": {
@@ -209,63 +361,963 @@
       },
       "title": "SelectionTarget",
       "type": "object"
-    }
-  },
-  "description": "Complete target selector with ordering.\n\nThe 'target' field can be a simple selector or compound.\nThe 'orderBy' field ensures deterministic result ordering.",
-  "properties": {
-    "target": {
-      "discriminator": {
-        "mapping": {
-          "all": "#/$defs/AllTarget",
-          "compound": "#/$defs/CompoundTarget",
-          "layer": "#/$defs/LayerTarget",
-          "query": "#/$defs/QueryTarget",
-          "selection": "#/$defs/SelectionTarget"
+    },
+    "SpatialRect": {
+      "additionalProperties": false,
+      "properties": {
+        "x": {
+          "title": "X",
+          "type": "number"
         },
-        "propertyName": "type"
+        "y": {
+          "title": "Y",
+          "type": "number"
+        },
+        "width": {
+          "title": "Width",
+          "type": "number"
+        },
+        "height": {
+          "title": "Height",
+          "type": "number"
+        }
       },
-      "oneOf": [
-        {
-          "$ref": "#/$defs/SelectionTarget"
-        },
-        {
-          "$ref": "#/$defs/LayerTarget"
-        },
-        {
-          "$ref": "#/$defs/AllTarget"
-        },
-        {
-          "$ref": "#/$defs/QueryTarget"
-        },
-        {
-          "$ref": "#/$defs/CompoundTarget"
-        }
+      "required": [
+        "x",
+        "y",
+        "width",
+        "height"
       ],
-      "title": "Target"
+      "title": "SpatialRect",
+      "type": "object"
     },
-    "orderBy": {
-      "$ref": "#/$defs/OrderBy",
-      "default": "zOrder",
-      "description": "Result ordering (critical for layout reproducibility)"
-    },
-    "exclude": {
-      "anyOf": [
-        {
-          "$ref": "#/$defs/ExcludeFilter"
+    "SpatialTarget": {
+      "additionalProperties": false,
+      "properties": {
+        "type": {
+          "const": "spatial",
+          "default": "spatial",
+          "title": "Type",
+          "type": "string"
         },
-        {
-          "type": "null"
+        "within": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/SpatialRect"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "outside": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/SpatialRect"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "nearTo": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/NearTarget"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "coord": {
+          "default": "user",
+          "enum": [
+            "user",
+            "ai"
+          ],
+          "title": "Coord",
+          "type": "string"
+        },
+        "layer": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Layer"
         }
+      },
+      "title": "SpatialTarget",
+      "type": "object"
+    },
+    "TargetExpectation": {
+      "additionalProperties": false,
+      "properties": {
+        "count": {
+          "minimum": 0,
+          "title": "Count",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "count"
       ],
-      "default": null,
-      "description": "Global exclusion filter (applied after target resolution)"
+      "title": "TargetExpectation",
+      "type": "object"
     }
   },
-  "required": [
-    "target"
+  "description": "\n    Complete target selector with ordering.\n    \n    The 'target' field can be a simple selector or compound.\n    The 'orderBy' field ensures deterministic result ordering.\n    ",
+  "oneOf": [
+    {
+      "additionalProperties": false,
+      "description": "Complete target selector with ordering.\n\nThe 'target' field can be a simple selector or compound.\nThe 'orderBy' field ensures deterministic result ordering.",
+      "properties": {
+        "target": {
+          "discriminator": {
+            "mapping": {
+              "all": "#/$defs/AllTarget",
+              "compound": "#/$defs/CompoundTarget",
+              "grid": "#/$defs/GridTarget",
+              "handle": "#/$defs/HandleTarget",
+              "id": "#/$defs/IdTarget",
+              "layer": "#/$defs/LayerTarget",
+              "query": "#/$defs/QueryTarget",
+              "selection": "#/$defs/SelectionTarget",
+              "spatial": "#/$defs/SpatialTarget"
+            },
+            "propertyName": "type"
+          },
+          "oneOf": [
+            {
+              "$ref": "#/$defs/SelectionTarget"
+            },
+            {
+              "$ref": "#/$defs/LayerTarget"
+            },
+            {
+              "$ref": "#/$defs/AllTarget"
+            },
+            {
+              "$ref": "#/$defs/QueryTarget"
+            },
+            {
+              "$ref": "#/$defs/IdTarget"
+            },
+            {
+              "$ref": "#/$defs/HandleTarget"
+            },
+            {
+              "$ref": "#/$defs/SpatialTarget"
+            },
+            {
+              "$ref": "#/$defs/GridTarget"
+            },
+            {
+              "$ref": "#/$defs/CompoundTarget"
+            }
+          ],
+          "title": "Target"
+        },
+        "orderBy": {
+          "$ref": "#/$defs/OrderBy",
+          "default": "zOrder",
+          "description": "Result ordering (critical for layout reproducibility)"
+        },
+        "exclude": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ExcludeFilter"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Global exclusion filter (applied after target resolution)"
+        },
+        "maxScan": {
+          "anyOf": [
+            {
+              "minimum": 1,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Optional selector scan cap. If the cap prevents a complete result, resolution fails explicitly instead of returning a partial/no-match result.",
+          "title": "Maxscan"
+        },
+        "expect": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/TargetExpectation"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        }
+      },
+      "required": [
+        "target"
+      ],
+      "title": "TargetSelector",
+      "type": "object"
+    },
+    {
+      "additionalProperties": false,
+      "description": "Target: current selection.",
+      "properties": {
+        "type": {
+          "const": "selection",
+          "default": "selection",
+          "title": "Type",
+          "type": "string"
+        },
+        "orderBy": {
+          "$ref": "#/$defs/OrderBy",
+          "default": "zOrder",
+          "description": "Result ordering (critical for layout reproducibility)"
+        },
+        "exclude": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ExcludeFilter"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Global exclusion filter (applied after target resolution)"
+        },
+        "maxScan": {
+          "anyOf": [
+            {
+              "minimum": 1,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Optional selector scan cap. If the cap prevents a complete result, resolution fails explicitly instead of returning a partial/no-match result.",
+          "title": "Maxscan"
+        },
+        "expect": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/TargetExpectation"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        }
+      },
+      "title": "SelectionTarget",
+      "type": "object"
+    },
+    {
+      "additionalProperties": false,
+      "description": "Target: all items on a layer.",
+      "properties": {
+        "type": {
+          "const": "layer",
+          "default": "layer",
+          "title": "Type",
+          "type": "string"
+        },
+        "layer": {
+          "description": "Layer name",
+          "minLength": 1,
+          "title": "Layer",
+          "type": "string"
+        },
+        "recursive": {
+          "default": false,
+          "title": "Recursive",
+          "type": "boolean"
+        },
+        "orderBy": {
+          "$ref": "#/$defs/OrderBy",
+          "default": "zOrder",
+          "description": "Result ordering (critical for layout reproducibility)"
+        },
+        "exclude": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ExcludeFilter"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Global exclusion filter (applied after target resolution)"
+        },
+        "maxScan": {
+          "anyOf": [
+            {
+              "minimum": 1,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Optional selector scan cap. If the cap prevents a complete result, resolution fails explicitly instead of returning a partial/no-match result.",
+          "title": "Maxscan"
+        },
+        "expect": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/TargetExpectation"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        }
+      },
+      "required": [
+        "layer",
+        "type"
+      ],
+      "title": "LayerTarget",
+      "type": "object"
+    },
+    {
+      "additionalProperties": false,
+      "description": "Target: all items in document.",
+      "properties": {
+        "type": {
+          "const": "all",
+          "default": "all",
+          "title": "Type",
+          "type": "string"
+        },
+        "recursive": {
+          "default": false,
+          "title": "Recursive",
+          "type": "boolean"
+        },
+        "orderBy": {
+          "$ref": "#/$defs/OrderBy",
+          "default": "zOrder",
+          "description": "Result ordering (critical for layout reproducibility)"
+        },
+        "exclude": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ExcludeFilter"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Global exclusion filter (applied after target resolution)"
+        },
+        "maxScan": {
+          "anyOf": [
+            {
+              "minimum": 1,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Optional selector scan cap. If the cap prevents a complete result, resolution fails explicitly instead of returning a partial/no-match result.",
+          "title": "Maxscan"
+        },
+        "expect": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/TargetExpectation"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        }
+      },
+      "required": [
+        "type"
+      ],
+      "title": "AllTarget",
+      "type": "object"
+    },
+    {
+      "additionalProperties": false,
+      "description": "Target: items matching query filters.",
+      "properties": {
+        "type": {
+          "const": "query",
+          "default": "query",
+          "title": "Type",
+          "type": "string"
+        },
+        "itemType": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "PathItem, TextFrame, etc.",
+          "title": "Itemtype"
+        },
+        "pattern": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Name pattern with * wildcard",
+          "title": "Pattern"
+        },
+        "contents": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Exact TextFrame contents; CRLF/LF match Illustrator CR.",
+          "title": "Contents"
+        },
+        "layer": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Layer"
+        },
+        "recursive": {
+          "default": false,
+          "title": "Recursive",
+          "type": "boolean"
+        },
+        "orderBy": {
+          "$ref": "#/$defs/OrderBy",
+          "default": "zOrder",
+          "description": "Result ordering (critical for layout reproducibility)"
+        },
+        "exclude": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ExcludeFilter"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Global exclusion filter (applied after target resolution)"
+        },
+        "maxScan": {
+          "anyOf": [
+            {
+              "minimum": 1,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Optional selector scan cap. If the cap prevents a complete result, resolution fails explicitly instead of returning a partial/no-match result.",
+          "title": "Maxscan"
+        },
+        "expect": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/TargetExpectation"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        }
+      },
+      "required": [
+        "type"
+      ],
+      "title": "QueryTarget",
+      "type": "object"
+    },
+    {
+      "additionalProperties": false,
+      "description": "Target one or more explicitly stamped item identities.",
+      "properties": {
+        "type": {
+          "const": "id",
+          "default": "id",
+          "title": "Type",
+          "type": "string"
+        },
+        "ids": {
+          "items": {
+            "type": "string"
+          },
+          "minItems": 1,
+          "title": "Ids",
+          "type": "array"
+        },
+        "orderBy": {
+          "$ref": "#/$defs/OrderBy",
+          "default": "zOrder",
+          "description": "Result ordering (critical for layout reproducibility)"
+        },
+        "exclude": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ExcludeFilter"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Global exclusion filter (applied after target resolution)"
+        },
+        "maxScan": {
+          "anyOf": [
+            {
+              "minimum": 1,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Optional selector scan cap. If the cap prevents a complete result, resolution fails explicitly instead of returning a partial/no-match result.",
+          "title": "Maxscan"
+        },
+        "expect": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/TargetExpectation"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        }
+      },
+      "required": [
+        "ids",
+        "type"
+      ],
+      "title": "IdTarget",
+      "type": "object"
+    },
+    {
+      "additionalProperties": false,
+      "description": "Target exact untagged artwork through an expiring host handle.",
+      "properties": {
+        "type": {
+          "const": "handle",
+          "default": "handle",
+          "title": "Type",
+          "type": "string"
+        },
+        "handles": {
+          "items": {
+            "type": "string"
+          },
+          "minItems": 1,
+          "title": "Handles",
+          "type": "array"
+        },
+        "orderBy": {
+          "$ref": "#/$defs/OrderBy",
+          "default": "zOrder",
+          "description": "Result ordering (critical for layout reproducibility)"
+        },
+        "exclude": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ExcludeFilter"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Global exclusion filter (applied after target resolution)"
+        },
+        "maxScan": {
+          "anyOf": [
+            {
+              "minimum": 1,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Optional selector scan cap. If the cap prevents a complete result, resolution fails explicitly instead of returning a partial/no-match result.",
+          "title": "Maxscan"
+        },
+        "expect": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/TargetExpectation"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        }
+      },
+      "required": [
+        "handles",
+        "type"
+      ],
+      "title": "HandleTarget",
+      "type": "object"
+    },
+    {
+      "additionalProperties": false,
+      "properties": {
+        "type": {
+          "const": "spatial",
+          "default": "spatial",
+          "title": "Type",
+          "type": "string"
+        },
+        "within": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/SpatialRect"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "outside": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/SpatialRect"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "nearTo": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/NearTarget"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "coord": {
+          "default": "user",
+          "enum": [
+            "user",
+            "ai"
+          ],
+          "title": "Coord",
+          "type": "string"
+        },
+        "layer": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Layer"
+        },
+        "orderBy": {
+          "$ref": "#/$defs/OrderBy",
+          "default": "zOrder",
+          "description": "Result ordering (critical for layout reproducibility)"
+        },
+        "exclude": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ExcludeFilter"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Global exclusion filter (applied after target resolution)"
+        },
+        "maxScan": {
+          "anyOf": [
+            {
+              "minimum": 1,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Optional selector scan cap. If the cap prevents a complete result, resolution fails explicitly instead of returning a partial/no-match result.",
+          "title": "Maxscan"
+        },
+        "expect": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/TargetExpectation"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        }
+      },
+      "required": [
+        "type"
+      ],
+      "title": "SpatialTarget",
+      "type": "object"
+    },
+    {
+      "additionalProperties": false,
+      "properties": {
+        "type": {
+          "const": "grid",
+          "default": "grid",
+          "title": "Type",
+          "type": "string"
+        },
+        "cell": {
+          "minLength": 1,
+          "title": "Cell",
+          "type": "string"
+        },
+        "cols": {
+          "default": 4,
+          "maximum": 99,
+          "minimum": 1,
+          "title": "Cols",
+          "type": "integer"
+        },
+        "rows": {
+          "default": 4,
+          "maximum": 26,
+          "minimum": 1,
+          "title": "Rows",
+          "type": "integer"
+        },
+        "layer": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Layer"
+        },
+        "orderBy": {
+          "$ref": "#/$defs/OrderBy",
+          "default": "zOrder",
+          "description": "Result ordering (critical for layout reproducibility)"
+        },
+        "exclude": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ExcludeFilter"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Global exclusion filter (applied after target resolution)"
+        },
+        "maxScan": {
+          "anyOf": [
+            {
+              "minimum": 1,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Optional selector scan cap. If the cap prevents a complete result, resolution fails explicitly instead of returning a partial/no-match result.",
+          "title": "Maxscan"
+        },
+        "expect": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/TargetExpectation"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        }
+      },
+      "required": [
+        "cell",
+        "type"
+      ],
+      "title": "GridTarget",
+      "type": "object"
+    },
+    {
+      "additionalProperties": false,
+      "description": "Compound target selector with boolean logic.\n\nExamples:\n    # Union of multiple sources\n    {\"type\": \"compound\", \"anyOf\": [{\"type\": \"layer\", \"layer\": \"Panels\"}, {\"type\": \"selection\"}]}\n    \n    # With exclusions\n    {\"type\": \"compound\", \"anyOf\": [...], \"exclude\": {\"locked\": true, \"hidden\": true}}",
+      "properties": {
+        "type": {
+          "const": "compound",
+          "default": "compound",
+          "title": "Type",
+          "type": "string"
+        },
+        "anyOf": {
+          "description": "Union of targets (nested compounds supported)",
+          "items": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/SelectionTarget"
+              },
+              {
+                "$ref": "#/$defs/LayerTarget"
+              },
+              {
+                "$ref": "#/$defs/AllTarget"
+              },
+              {
+                "$ref": "#/$defs/QueryTarget"
+              },
+              {
+                "$ref": "#/$defs/IdTarget"
+              },
+              {
+                "$ref": "#/$defs/HandleTarget"
+              },
+              {
+                "$ref": "#/$defs/SpatialTarget"
+              },
+              {
+                "$ref": "#/$defs/GridTarget"
+              },
+              {
+                "$ref": "#/$defs/CompoundTarget"
+              }
+            ]
+          },
+          "minItems": 1,
+          "title": "Anyof",
+          "type": "array"
+        },
+        "exclude": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ExcludeFilter"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Global exclusion filter (applied after target resolution)"
+        },
+        "orderBy": {
+          "$ref": "#/$defs/OrderBy",
+          "default": "zOrder",
+          "description": "Result ordering (critical for layout reproducibility)"
+        },
+        "maxScan": {
+          "anyOf": [
+            {
+              "minimum": 1,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Optional selector scan cap. If the cap prevents a complete result, resolution fails explicitly instead of returning a partial/no-match result.",
+          "title": "Maxscan"
+        },
+        "expect": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/TargetExpectation"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        }
+      },
+      "required": [
+        "anyOf",
+        "type"
+      ],
+      "title": "CompoundTarget",
+      "type": "object"
+    }
   ],
   "title": "TargetSelector",
-  "type": "object",
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://illustrator-mcp.local/schemas/target_selector.json"
 }

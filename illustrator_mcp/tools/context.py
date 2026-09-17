@@ -12,8 +12,9 @@ from typing import Dict, List, Literal, Optional
 
 from pydantic import Field
 
+from mcp.types import CallToolResult
 from illustrator_mcp.shared import mcp
-from illustrator_mcp.tools.base import ToolInputBase, execute_jsx_tool, TOOL_ANNOTATIONS
+from illustrator_mcp.tools.base import ToolInputBase, execute_jsx_tool, TOOL_ANNOTATIONS, canonical_tool
 from illustrator_mcp.errors import make_envelope
 from illustrator_mcp import templates
 
@@ -24,6 +25,7 @@ logger = logging.getLogger(__name__)
 _RESOURCES_DIR = Path(__file__).parent.parent / "resources"
 _REFERENCE_PATH = _RESOURCES_DIR / "docs" / "extendscript_reference.md"
 _MANIFEST_PATH = _RESOURCES_DIR / "scripts" / "manifest.json"
+_LIBRARY_REFERENCE_PATH = _RESOURCES_DIR / "docs" / "library_reference.json"
 
 
 # ==================== Internal Helpers ====================
@@ -105,12 +107,97 @@ def _generate_library_catalog() -> str:
                 lines.append(f"**Exports:** `{'`, `'.join(shown)}`{suffix}")
             if deps:
                 lines.append(f"**Deps:** `{'`, `'.join(deps)}`")
+            lines.append(f"**Details:** illustrator://libraries/{name} (active)")
             lines.append("")
 
     return "\n".join(lines)
 
 
 # ==================== MCP Resources ====================
+
+def _operation_summary(schema) -> dict:
+    from illustrator_mcp.tools.evidence import classify_operation
+
+    reason = classify_operation(schema.name)
+    return {
+        "name": schema.name,
+        "purpose": schema.description,
+        "backend": schema.backend,
+        "route": schema.route,
+        "publicRoute": schema.public_route,
+        "requiresTargets": schema.requires_targets,
+        "evidenceReason": reason.value if reason else None,
+        "detailUri": f"illustrator://ops/{schema.name}",
+    }
+
+
+_OP_AVAILABILITY = (
+    "Static support in this release, not live connection or dependency health. "
+    "Use illustrator_connection_status for runtime health. JSX dispatch still "
+    "requires a registered handler; catalogue membership never enables dispatch. "
+    "The separate Python boolean tool requires the optional geometry extra."
+)
+
+
+@mcp.resource("illustrator://ops", mime_type="application/json")
+def operation_catalog_resource() -> str:
+    """Operation routes and purpose; read detailUri for parameters and examples."""
+    from illustrator_mcp.schemas.contracts import OP_SCHEMAS
+
+    return json.dumps({
+        "availability": _OP_AVAILABILITY,
+        "targetRequirement": "requiresTargets means nonempty, not full cardinality; read each detail.",
+        "evidencePolicy": "evidenceReason is the existing single-operation classifier; batch policy can add requirements.",
+        "operations": [_operation_summary(s) for s in OP_SCHEMAS],
+    }, indent=2)
+
+
+@mcp.resource("illustrator://ops/{name}", mime_type="application/json")
+def operation_detail_resource(name: str) -> str:
+    """Operation constraints, coordinates, results and a complete public tool call."""
+    from typing import get_args
+    from illustrator_mcp.schemas.contracts import get_op_schema
+    from illustrator_mcp.tools.examples import operation_example
+
+    schema = get_op_schema(name)
+    if schema is None:
+        raise ValueError(f"Unknown operation {name!r}; read illustrator://ops for available names.")
+    detail = _operation_summary(schema)
+    detail.update(schema.documentation.model_dump(exclude={"example_params", "example_targets"}))
+    detail.update({
+        "availability": _OP_AVAILABILITY,
+        "parameters": {key: value.model_dump(mode="json", exclude_none=True)
+                       for key, value in schema.params.items()},
+        "parameterContract": (
+            "The existing broad SOC contract; nested rules and handler defaults are described below. "
+            "For typed/Python routes, inputSchema comes from the actual input model; "
+            "custom validation described in constraints also applies. "
+            "SOC parameters are checked in Python and JSX for availability, required fields, broad types, enums and unknown keys. Pilot nested checks remain stronger."
+        ),
+        "example": operation_example(name),
+        "resultEnvelope": "illustrator://schema/result; JSX success per-op data is under data.report.batchReport.ops[].data (or data.batchReport when the report is unwrapped). Failure reports can be in diagnostics.batchReport. Inspect execution, errors, warnings and effects.",
+    })
+    if schema.route == "typed_batch":
+        from illustrator_mcp.tools.task_execution import PilotOperation
+
+        # Read the actual discriminated union rather than maintain a second map.
+        for model in get_args(get_args(PilotOperation)[0]):
+            if name in get_args(model.model_fields["task"].annotation):
+                detail["inputSchema"] = model.model_json_schema()
+                break
+        detail["inputSchemaScope"] = "One batch.operations[] object (including task, params and targets)."
+        detail["alsoSupportedRoute"] = "illustrator_execute_task.params.payload.params.ops"
+    elif schema.route == "python_tool":
+        from illustrator_mcp.tools.task_execution import PathBooleanInput
+
+        detail["inputSchema"] = PathBooleanInput.model_json_schema()
+        detail["parameters"] = {key: {**value, "required": key in detail["inputSchema"].get("required", [])}
+                                for key, value in detail["inputSchema"]["properties"].items()}
+        detail["parameterContract"] = "Python-tool parameters derive from the actual input model below; $ref values resolve within inputSchema. This operation has no JSX batch route."
+        detail["inputSchemaScope"] = "The params object of illustrator_path_boolean. Operands are MCP ID strings or canonical {target:{...}} selectors; clip also accepts a nonempty ordered list. Each selector must match exactly one path."
+        detail["resultEnvelope"] = "illustrator://schema/result; Python boolean result is in canonical data; inspect effects and warnings."
+    return json.dumps(detail, indent=2)
+
 
 @mcp.resource("illustrator://reference/extendscript")
 def extendscript_reference_resource() -> str:
@@ -124,30 +211,105 @@ def library_catalog_resource() -> str:
     return _generate_library_catalog()
 
 
+@mcp.resource("illustrator://libraries/{name}", mime_type="application/json")
+def library_detail_resource(name: str) -> str:
+    """Verified helper signatures and examples; inventory comes from the manifest."""
+    libraries = _load_manifest().get("libraries", {})
+    if name not in libraries:
+        raise ValueError(
+            f"Unknown library {name!r}; read illustrator://reference/libraries for available names."
+        )
+    info = libraries[name]
+    reference = json.loads(_LIBRARY_REFERENCE_PATH.read_text(encoding="utf-8")).get(name, {})
+    exports = []
+    for symbol in info.get("exports", []):
+        documentation = reference.get("exports", {}).get(symbol)
+        exports.append({"name": symbol, **({
+            "status": "verified", "deprecated": bool(info.get("deprecated", False)),
+            **documentation,
+        } if documentation else {
+            "status": "unavailable", "reason": "This export has not been verified."
+        })})
+    return json.dumps({
+        "name": name,
+        "version": info.get("version"),
+        "description": info.get("description"),
+        "deprecated": bool(info.get("deprecated", False)),
+        "includes": [name],
+        "dependencies": info.get("dependencies", []),
+        "source": "resources/scripts/" + info["file"],
+        "verification": "Authored against the shipped JSX; not a live Illustrator certification. "
+                        "Dependencies are resolved by the existing library resolver.",
+        "coordinates": reference.get("coordinates", "unavailable"),
+        "notes": reference.get("notes", "Details have not been verified."),
+        "example": ({"includes": [name], **reference["example"],
+                     "code": "(function () {\n" + reference["example"]["code"] + "\n})();"}
+                    if "example" in reference else None),
+        "exports": exports,
+    }, indent=2)
+
+
 @mcp.resource("extendscript://snippets/update_linked_items")
 def update_linked_items_snippet() -> str:
     """JSX snippet for updating all linked items from source files."""
     return templates.UPDATE_LINKED_ITEMS
 
 
+@mcp.resource("illustrator://schema/result")
+def canonical_result_schema_resource() -> str:
+    """JSON Schema for the canonical result in ``structuredContent`` (T11).
+
+    Published as a resource rather than as each tool's MCP ``outputSchema``:
+    in mcp 1.25.0 a tool that returns ``CallToolResult`` — which is how it
+    controls ``isError`` and attaches preview images — cannot also declare an
+    output schema, because FastMCP derives that from the return annotation.
+    Exposing it here keeps the contract discoverable and machine-readable, and
+    every result carries a matching ``schemaVersion``.
+    """
+    import json
+
+    from illustrator_mcp.results import RESULT_SCHEMA_VERSION, CanonicalResult
+
+    schema = CanonicalResult.model_json_schema(by_alias=True, mode="serialization")
+    schema["$id"] = "illustrator://schema/result"
+    schema["x-schema-version"] = RESULT_SCHEMA_VERSION
+    return json.dumps(schema, indent=2)
+
+
 class GetDocumentInput(ToolInputBase):
     """Input parameters for get_document with pagination and scope support."""
-    scope: Literal["document", "app", "both"] = Field(
+    scope: Literal["document", "app", "both", "symbols"] = Field(
         "document",
-        description="What to return: 'document' (default), 'app' (Illustrator info), or 'both'"
+        description=(
+            "What to return: 'document' (default), 'app' (Illustrator info), "
+            "'both', or 'symbols' (symbol definitions and placed instances, "
+            "read-only)"
+        ),
     )
     max_items: int = Field(200, ge=1, le=5000, description="Max items per layer (default 200)")
     max_layers: int = Field(50, ge=1, le=200, description="Max layers to return (default 50)")
     offset: int = Field(0, ge=0, description="Skip first N items per layer (for paging)")
     layer_name: Optional[str] = Field(None, description="Filter to single layer by name")
     layer_index: Optional[int] = Field(None, ge=0, description="Filter to single layer by index")
+    symbol_name: Optional[str] = Field(
+        None,
+        description="scope='symbols': report only this symbol, by name.",
+    )
+    symbol_contents: bool = Field(
+        True,
+        description=(
+            "scope='symbols': walk each definition's artwork. Turn off for a "
+            "faster name-and-count listing."
+        ),
+    )
 
 
 _GETDOC_NAME = "illustrator_get_document"
 
 
 @mcp.tool(name=_GETDOC_NAME, annotations=TOOL_ANNOTATIONS[_GETDOC_NAME])
-async def illustrator_get_document(params: GetDocumentInput) -> str:
+@canonical_tool(_GETDOC_NAME, reserve=False)
+async def illustrator_get_document(params: GetDocumentInput) -> CallToolResult:
     """Get complete document information and structure as a JSON tree.
 
     CONTRACT: readOnly=True, destructive=False, idempotent=True, openWorld=False
@@ -156,6 +318,9 @@ async def illustrator_get_document(params: GetDocumentInput) -> str:
       - Understanding canvas state before writing modification scripts
       - Inspecting layers, items, positions, and properties
       - Getting Illustrator application info (scope='app')
+      - This reports structure, not appearance. For what the page looks like,
+        call illustrator_observe; for whether it is fit to export, call
+        illustrator_preflight_check
 
     OPTIONS:
       scope: 'document' (default), 'app', or 'both'
@@ -165,15 +330,59 @@ async def illustrator_get_document(params: GetDocumentInput) -> str:
       layer_name / layer_index: filter to single layer
 
     EXAMPLES:
-      illustrator_get_document()
-      illustrator_get_document(scope="app")
-      illustrator_get_document(layer_name="Layer 1", offset=200, max_items=200)
+      Document structure:
+        {"params": {}}
+      Application info, with no document open:
+        {"params": {"scope": "app"}}
+      One layer, paginated:
+        {"params": {"layer_name": "Layer 1", "offset": 200, "max_items": 200}}
+      Symbol definitions and instances, without placing anything:
+        {"params": {"scope": "symbols"}}
+      One symbol, names and counts only:
+        {"params": {"scope": "symbols", "symbol_name": "icon-star", "symbol_contents": false}}
 
     NOTES:
       - If a layer is truncated, response includes truncated=true and nextOffset
       - scope='both' returns {document: {...}, app: {...}}
     """
     scope = params.scope
+
+    # Symbols: definitions and instances, without placing or expanding
+    # anything. Inspecting a symbol used to mean instantiating it and
+    # expanding a throwaway copy, which put artwork on the page and left an
+    # audit duplicate to hunt down afterwards.
+    if scope == "symbols":
+        import json as _json
+        name_arg = _json.dumps(params.symbol_name) if params.symbol_name else "null"
+        script = f"""
+        (function () {{
+            var defs = JSON.parse(mcpSymbolDefinitions({{
+                includeContents: {str(params.symbol_contents).lower()},
+                maxItems: {params.max_items},
+                name: {name_arg}
+            }}));
+            var inst = JSON.parse(mcpSymbolInstances({{
+                name: {name_arg},
+                maxInstances: {params.max_items}
+            }}));
+            return JSON.stringify({{
+                ok: true,
+                definitions: defs.definitions,
+                definitionCount: defs.definitionCount,
+                instances: inst.instances,
+                instanceCount: inst.instanceCount,
+                truncated: defs.definitions.length < defs.definitionCount || inst.truncated,
+                note: inst.note
+            }});
+        }})()
+        """
+        return await execute_jsx_tool(
+            script=script,
+            command_type="get_symbols",
+            tool_name=_GETDOC_NAME,
+            params={"scope": "symbols", "symbol_name": params.symbol_name},
+            includes=["polyfills", "symbols"],
+        )
 
     # App-only scope: no active document required
     if scope == "app":

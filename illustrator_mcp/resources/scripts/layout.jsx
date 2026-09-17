@@ -245,44 +245,63 @@ function createGrid(params) {
     var startX = (CTX.width - totalW) / 2 + offsetX;
     var startY = (CTX.height - totalH) / 2 + offsetY;
 
+    // OR05. A grid is many creations and a styling step against each, so a
+    // failure part way through used to leave a partial grid nobody removed.
+    // The geometry helpers take this scope, which is what makes the objects
+    // they return cleanable — passing none leaves them to the caller.
+    var gridScope = mcpOwnBegin("createGrid");
     var items = [];
     var idx = 0;
 
-    for (var row = 0; row < rows; row++) {
-        for (var col = 0; col < cols; col++) {
-            var x = startX + col * (itemW + gapX);
-            var y = startY + row * (itemH + gapY);
+    try {
+        for (var row = 0; row < rows; row++) {
+            for (var col = 0; col < cols; col++) {
+                var x = startX + col * (itemW + gapX);
+                var y = startY + row * (itemH + gapY);
 
-            var item;
-            if (shape === 'ellipse') {
-                item = ellipseXY(x, y, itemW, itemH);
-            } else {
-                // Default to rectangle
-                if (cornerRadius > 0) {
-                    item = rectXY(x, y, itemW, itemH, {cornerRadius: cornerRadius});
+                var item;
+                if (shape === 'ellipse') {
+                    item = ellipseXY(x, y, itemW, itemH, gridScope);
                 } else {
-                    item = rectXY(x, y, itemW, itemH);
+                    // Default to rectangle
+                    if (cornerRadius > 0) {
+                        item = rectXY(x, y, itemW, itemH,
+                                      {cornerRadius: cornerRadius}, gridScope);
+                    } else {
+                        item = rectXY(x, y, itemW, itemH, null, gridScope);
+                    }
                 }
-            }
 
-            // Apply color if provided
-            if (colors[idx]) {
-                var c = colors[idx];
-                item.fillColor = makeRGBColor(c.r, c.g, c.b);
-            }
+                // Apply color if provided
+                if (colors[idx]) {
+                    var c = colors[idx];
+                    item.fillColor = makeRGBColor(c.r, c.g, c.b);
+                }
 
-            // Apply name if provided
-            if (names[idx]) {
-                item.name = names[idx];
-            } else {
-                item.name = 'grid_' + row + '_' + col;
-            }
+                // Apply name if provided
+                if (names[idx]) {
+                    item.name = names[idx];
+                } else {
+                    item.name = 'grid_' + row + '_' + col;
+                }
 
-            items.push(item);
-            idx++;
+                items.push(item);
+                idx++;
+            }
         }
+    } catch (gridError) {
+        var gridCleanup = mcpOwnCleanup(gridScope);
+        if (!gridCleanup.ok) {
+            try {
+                gridError.mcpCleanupFailures = [{
+                    stage: "createGrid", failed: gridCleanup.failed
+                }];
+            } catch (attachError) { }
+        }
+        throw gridError;
     }
 
+    mcpOwnCommit(gridScope);
     return items;
 }
 

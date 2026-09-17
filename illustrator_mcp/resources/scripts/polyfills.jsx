@@ -127,28 +127,97 @@ if (!Array.prototype.reduce) {
 }
 
 // ==================== JSON Polyfill ====================
+//
+// DO NOT reintroduce `var JSON` here. The previous version was:
+//
+//     if (typeof JSON === "undefined") { var JSON = {}; JSON.stringify = ... }
+//
+// `var` is function-scoped and hoisted, so declaring it *inside* the guard
+// still created a local `JSON` shadowing the host's for the whole injected
+// script. `typeof JSON === "undefined"` was therefore ALWAYS true, and every
+// script that injected any library (polyfills is a dependency of nearly all
+// of them) silently lost host.jsx's JSON implementation and got this one —
+// which had no `parse` at all, and a `stringify` that escaped only `"` and
+// `\n`.
+//
+// Not escaping backslashes is the damaging part: stringifying a value that
+// already contains JSON (e.g. wrapping extractPathGeometry's output, which is
+// full of \" sequences) emitted unescaped backslashes and produced INVALID
+// JSON. Python then failed to parse the response, which surfaced as
+// "could not parse host result" rather than anything pointing here.
+//
+// So: never shadow, and only fill in members that are genuinely missing.
 
 if (typeof JSON === "undefined") {
-    var JSON = {};
-    JSON.stringify = function (obj) {
-        var t = typeof obj;
-        if (t !== "object" || obj === null) {
-            if (t === "string") return '"' + obj.replace(/"/g, '\\"').replace(/\n/g, '\\n') + '"';
-            return String(obj);
-        }
-        var n, v, json = [];
-        var isArray = (obj && obj.constructor === Array);
-        for (n in obj) {
-            if (!obj.hasOwnProperty(n)) continue;
-            v = obj[n];
-            t = typeof v;
-            if (t === "string") {
-                v = '"' + v.replace(/"/g, '\\"').replace(/\n/g, '\\n') + '"';
-            } else if (t === "object" && v !== null) {
-                v = JSON.stringify(v);
+    $.global.JSON = {};
+}
+
+if (typeof JSON.stringify !== "function") {
+    JSON.stringify = (function () {
+        var ESCAPES = {
+            "\\": "\\\\",
+            '"': '\\"',
+            "\b": "\\b",
+            "\f": "\\f",
+            "\n": "\\n",
+            "\r": "\\r",
+            "\t": "\\t"
+        };
+
+        function quote(s) {
+            var out = '"', i, c, code;
+            for (i = 0; i < s.length; i++) {
+                c = s.charAt(i);
+                if (ESCAPES[c]) {
+                    out += ESCAPES[c];
+                    continue;
+                }
+                code = s.charCodeAt(i);
+                if (code < 0x20) {
+                    // Control characters must be \u-escaped or the result is
+                    // not valid JSON.
+                    var hex = code.toString(16);
+                    while (hex.length < 4) hex = "0" + hex;
+                    out += "\\u" + hex;
+                } else {
+                    out += c;
+                }
             }
-            json.push((isArray ? "" : '"' + n + '":') + String(v));
+            return out + '"';
         }
-        return (isArray ? "[" : "{") + String(json) + (isArray ? "]" : "}");
+
+        function serialize(value) {
+            var t = typeof value;
+            if (value === null) return "null";
+            if (t === "string") return quote(value);
+            if (t === "number") return isFinite(value) ? String(value) : "null";
+            if (t === "boolean") return String(value);
+            if (t === "undefined" || t === "function") return undefined;
+            if (t !== "object") return quote(String(value));
+
+            var parts = [], i, n, encoded;
+            if (value instanceof Array) {
+                for (i = 0; i < value.length; i++) {
+                    encoded = serialize(value[i]);
+                    parts.push(encoded === undefined ? "null" : encoded);
+                }
+                return "[" + parts.join(",") + "]";
+            }
+            for (n in value) {
+                if (!value.hasOwnProperty(n)) continue;
+                encoded = serialize(value[n]);
+                if (encoded === undefined) continue;
+                parts.push(quote(String(n)) + ":" + encoded);
+            }
+            return "{" + parts.join(",") + "}";
+        }
+
+        return function (obj) { return serialize(obj); };
+    })();
+}
+
+if (typeof JSON.parse !== "function") {
+    JSON.parse = function (str) {
+        return eval("(" + str + ")");
     };
 }

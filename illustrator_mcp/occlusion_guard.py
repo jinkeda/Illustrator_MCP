@@ -13,6 +13,11 @@ from typing import Any, Dict, List, Optional
 
 # ── Thresholds (from docs/qa_invariants.md) ──────────────────────────
 COVER_THRESHOLD: float = 0.90
+#: The lower tier the z-order telemetry has always marked as high suspicion.
+#: It was written as a literal in two places; the evidence policy needs the
+#: same number to decide when geometry is worth looking at, so it is named
+#: here rather than copied a third time.
+SUSPICION_THRESHOLD: float = 0.70
 OPACITY_THRESHOLD: float = 95.0
 MAX_VISIBLE_LAYERS_TO_SCAN: int = 2
 DEFAULT_BG_LAYER_NAMES: set = {"sky", "background", "bg"}
@@ -72,6 +77,45 @@ def _artboard_area(artboard: list) -> float:
 
 
 # ── Main Detection ───────────────────────────────────────────────────
+
+def _has_visible_content_below(item: dict, layers: List[dict]) -> bool:
+    """Whether any visible artwork sits beneath this item.
+
+    A full-cover filled shape is only a bug if it is hiding something. A
+    background rectangle at the bottom of the stack covers 100% of the
+    artboard by design and occludes nothing — and a monochrome design is
+    mostly made of exactly that. Flagging those as abort-level findings, with
+    a suggested "fix" that restacks the user's artwork, is worse than not
+    checking at all.
+
+    Beneath means: further back in the item's own layer, or in any *visible*
+    layer below it. Hidden layers hold nothing that could be occluded.
+    """
+    z_index = item.get("zIndexInLayer")
+    layer_count = item.get("layerItemCount")
+    layer_index = item.get("layerIndex")
+
+    # Without z-position we cannot prove the item is harmless, so assume the
+    # worst and let the existing checks speak.
+    if z_index is None or layer_count is None or layer_index is None:
+        return True
+
+    # Something behind it inside its own layer.
+    if z_index < layer_count - 1:
+        return True
+
+    # Something in a visible layer below it (layer index 0 is the topmost).
+    for layer in layers:
+        idx = layer.get("index")
+        if idx is None or idx <= layer_index:
+            continue
+        if not layer.get("visible", False):
+            continue
+        if layer.get("itemCount", 0) > 0:
+            return True
+
+    return False
+
 
 def check_occlusion(
     layers: List[dict],
@@ -210,6 +254,12 @@ def check_occlusion(
         }
 
         if blend == "Normal":
+            if not _has_visible_content_below(item, layers):
+                # Nothing beneath it: this is a background, not an occluder.
+                diag.setdefault("backgrounds_allowed", []).append(
+                    offender_info["name"]
+                )
+                continue
             findings.append(OcclusionFinding(
                 code="Q001",
                 severity="abort",

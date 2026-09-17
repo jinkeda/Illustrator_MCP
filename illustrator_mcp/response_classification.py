@@ -3,7 +3,7 @@ Response classification module — single source of truth for interpreting
 Illustrator bridge responses.
 
 Separates "what happened?" (classification) from "how to display it?"
-(formatting in format_response / format_envelope in proxy_client).
+(formatting in format_envelope in proxy_client).
 """
 
 from __future__ import annotations
@@ -67,7 +67,7 @@ def classify_response(
     """Classify a bridge response into success or error.
 
     This is the single source of truth for determining whether a response
-    represents success or failure. Both format_response and format_envelope
+    represents success or failure. format_envelope
     delegate to this function.
 
     The classification follows a priority chain:

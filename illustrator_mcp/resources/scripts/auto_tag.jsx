@@ -105,6 +105,9 @@
         // Skip already-processed items (dedup across selection + scan phases)
         if (alreadySeen(item)) return false;
 
+        // Skip empty groups (orphans from failed operations like clip_create)
+        if (item.typename === "GroupItem" && item.pageItems.length === 0) return false;
+
         // Delegate to assignItemIdV2 — handles check + assign in one call
         var result;
         try {

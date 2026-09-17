@@ -100,21 +100,47 @@ function getArtboardBounds(doc, index) {
  * @param {string} [opts.name] - Item name for scripting access
  * @returns {TextFrame} The created text frame
  */
-function addLabel(container, x, y, text, opts) {
+function addLabel(container, x, y, text, opts, scope) {
     opts = opts || {};
-    var tf = container.textFrames.pointText([x, y]);
-    tf.contents = text;
-    var ca = tf.characters[0].characterAttributes;
-    ca.size = opts.size || 12;
-    if (opts.color) {
-        ca.fillColor = opts.color;
+    // OR05. Five fallible steps follow the creation — contents, size, colour,
+    // a font lookup that throws when the family is not installed, and the
+    // name — and none of them cleaned up, so a missing font left an empty
+    // text frame on the page and the exception escaped.
+    //
+    // A caller that passes no scope still gets that window closed: the helper
+    // owns the frame for the length of its own construction. A caller that
+    // passes one keeps ownership, as with the geometry helpers.
+    var ownScope = scope || mcpOwnBegin("addLabel");
+    var tf;
+    try {
+        tf = container.textFrames.pointText([x, y]);
+        mcpOwnAllocate(ownScope, tf, "label");
+        tf.contents = text;
+        var ca = tf.characters[0].characterAttributes;
+        ca.size = opts.size || 12;
+        if (opts.color) {
+            ca.fillColor = opts.color;
+        }
+        if (opts.font) {
+            ca.textFont = app.textFonts.getByName(opts.font);
+        }
+        if (opts.name) {
+            tf.name = opts.name;
+        }
+    } catch (labelError) {
+        if (!scope) {
+            var labelCleanup = mcpOwnCleanup(ownScope);
+            if (!labelCleanup.ok) {
+                try {
+                    labelError.mcpCleanupFailures = [{
+                        stage: "addLabel", failed: labelCleanup.failed
+                    }];
+                } catch (attachError) { }
+            }
+        }
+        throw labelError;
     }
-    if (opts.font) {
-        ca.textFont = app.textFonts.getByName(opts.font);
-    }
-    if (opts.name) {
-        tf.name = opts.name;
-    }
+    if (!scope) mcpOwnRelease(ownScope);
     return tf;
 }
 

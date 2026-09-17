@@ -3,13 +3,13 @@
  * Part of Illustrator MCP SOC Framework
  * 
  * AUTO-GENERATED - DO NOT EDIT MANUALLY
- * Generated: 2026-02-27T15:31:37Z
+ * Generated: 2026-09-13T09:51:57Z
  * Source: illustrator_mcp/schemas/contracts.py
  * 
  * To regenerate: python -m illustrator_mcp.tools.compile_contracts
  */
 
-var CONTRACTS_CHECKSUM = "85bb1b243d2ec4a5";
+var CONTRACTS_CHECKSUM = "996eab5b7f534054";
 
 // ==================== Protocol Version ====================
 var TASK_PROTOCOL_VERSION = "3.0.0";
@@ -27,6 +27,12 @@ var ErrorCodes = {
     C_PREV_UNAVAILABLE: "C007",
     C_INVALID_TOKEN_POSITION: "C008",
     C_UNKNOWN_TOKEN: "C009",
+    C_RESPONSE_TRUNCATED: "C010",
+    C_RESPONSE_OVERLONG: "C011",
+    C_RESPONSE_DIGEST: "C012",
+    C_RESPONSE_IDENTITY: "C013",
+    C_RESPONSE_DESCRIPTOR: "C014",
+    C_PAYLOAD_EXPIRED: "C015",
     // === VALIDATION (V) - fail before execution ===
     V_NO_DOCUMENT: "V001",
     V_NO_SELECTION: "V002",
@@ -39,6 +45,13 @@ var ErrorCodes = {
     V_LIBRARY_NOT_FOUND: "V009",
     V_LIBRARY_CONFLICT: "V010",
     V_INVALID_PARAM_VALUE: "V011",
+    V_AMBIGUOUS_ID: "V012",
+    V_INCOMPLETE_SCAN: "V013",
+    V_EMPTY_TARGETS: "V014",
+    V_TARGET_COUNT_MISMATCH: "V015",
+    V_INVALID_COORDINATE_SPACE: "V016",
+    V_CAPTURE_EMPTY_REGION: "V017",
+    V_CAPTURE_MINIMUM_BUDGET_EXCEEDED: "V018",
     // === RUNTIME (R) - fail during execution ===
     R_COLLECT_FAILED: "R001",
     R_COMPUTE_FAILED: "R002",
@@ -55,6 +68,7 @@ var ErrorCodes = {
     R_PREFLIGHT_FAILED: "R013",
     // === EXECUTION (E) - infrastructure/dependency issues ===
     E_EXECUTION: "E001",
+    E_UNSUPPORTED_RECOVERY: "E002",
     // === SYSTEM (S) - Illustrator/environment issues ===
     S_APP_ERROR: "S001",
     S_SCRIPT_ERROR: "S002",
@@ -90,6 +104,9 @@ var RETRYABLE_CODES = [ErrorCodes.R_COLLECT_FAILED, ErrorCodes.R_COMPUTE_FAILED]
 
 var OP_PARAM_SCHEMAS = {
     "element_create": {
+        "route": "typed_batch",
+        "backend": "jsx",
+        "requiresTargets": false,
         "required": ["type"],
         "optional": [
             "id",
@@ -101,6 +118,10 @@ var OP_PARAM_SCHEMAS = {
             "name",
             "fill",
             "stroke",
+            "opacity",
+            "strokeWidth",
+            "noFill",
+            "noStroke",
             "points",
             "geometry",
             "sides",
@@ -120,7 +141,8 @@ var OP_PARAM_SCHEMAS = {
             "contents",
             "text",
             "fontSize",
-            "fontName"
+            "fontName",
+            "clipTo"
         ],
         "types": {
             "type": "string",
@@ -133,6 +155,10 @@ var OP_PARAM_SCHEMAS = {
             "name": "string",
             "fill": "object",
             "stroke": "object",
+            "opacity": "number",
+            "strokeWidth": "number",
+            "noFill": "boolean",
+            "noStroke": "boolean",
             "points": "array",
             "geometry": "object",
             "sides": "number",
@@ -152,7 +178,8 @@ var OP_PARAM_SCHEMAS = {
             "contents": "string",
             "text": "string",
             "fontSize": "number",
-            "fontName": "string"
+            "fontName": "string",
+            "clipTo": "string"
         },
         "enumValues": {
             "type": [
@@ -175,6 +202,9 @@ var OP_PARAM_SCHEMAS = {
         }
     },
     "element_modify": {
+        "route": "typed_batch",
+        "backend": "jsx",
+        "requiresTargets": true,
         "required": [],
         "optional": [
             "x",
@@ -184,7 +214,12 @@ var OP_PARAM_SCHEMAS = {
             "rotation",
             "scaleX",
             "scaleY",
-            "name"
+            "scale",
+            "name",
+            "fill",
+            "stroke",
+            "opacity",
+            "layer"
         ],
         "types": {
             "x": "number",
@@ -194,15 +229,26 @@ var OP_PARAM_SCHEMAS = {
             "rotation": "number",
             "scaleX": "number",
             "scaleY": "number",
-            "name": "string"
+            "scale": "number",
+            "name": "string",
+            "fill": "object",
+            "stroke": "object",
+            "opacity": "number",
+            "layer": "string"
         }
     },
     "element_delete": {
+        "route": "typed_batch",
+        "backend": "jsx",
+        "requiresTargets": true,
         "required": [],
         "optional": [],
         "types": {}
     },
     "element_create_multi": {
+        "route": "typed_batch",
+        "backend": "jsx",
+        "requiresTargets": false,
         "required": ["geometry"],
         "optional": [
             "layer",
@@ -229,6 +275,9 @@ var OP_PARAM_SCHEMAS = {
         }
     },
     "element_replace": {
+        "route": "typed_batch",
+        "backend": "jsx",
+        "requiresTargets": true,
         "required": ["type"],
         "optional": [
             "id",
@@ -240,6 +289,7 @@ var OP_PARAM_SCHEMAS = {
             "fill",
             "stroke",
             "points",
+            "geometry",
             "sides",
             "radius",
             "outerRadius",
@@ -247,6 +297,9 @@ var OP_PARAM_SCHEMAS = {
             "numPoints",
             "cornerRadius",
             "closed",
+            "smooth",
+            "tension",
+            "handles",
             "x2",
             "y2",
             "contents",
@@ -267,6 +320,7 @@ var OP_PARAM_SCHEMAS = {
             "fill": "object",
             "stroke": "object",
             "points": "array",
+            "geometry": "object",
             "sides": "number",
             "radius": "number",
             "outerRadius": "number",
@@ -274,6 +328,9 @@ var OP_PARAM_SCHEMAS = {
             "numPoints": "number",
             "cornerRadius": "number",
             "closed": "boolean",
+            "smooth": "boolean",
+            "tension": "number",
+            "handles": "array",
             "x2": "number",
             "y2": "number",
             "contents": "string",
@@ -298,6 +355,9 @@ var OP_PARAM_SCHEMAS = {
         }
     },
     "element_create_multi_by_ref": {
+        "route": "typed_batch",
+        "backend": "jsx",
+        "requiresTargets": false,
         "required": ["irKey"],
         "optional": [
             "offset",
@@ -324,6 +384,9 @@ var OP_PARAM_SCHEMAS = {
         }
     },
     "element_create_batch": {
+        "route": "typed_batch",
+        "backend": "jsx",
+        "requiresTargets": false,
         "required": [],
         "optional": [
             "template",
@@ -345,6 +408,9 @@ var OP_PARAM_SCHEMAS = {
         }
     },
     "layer_create": {
+        "route": "typed_batch",
+        "backend": "jsx",
+        "requiresTargets": false,
         "required": ["name"],
         "optional": ["color", "visible", "locked", "above", "below", "placement"],
         "types": {
@@ -360,7 +426,26 @@ var OP_PARAM_SCHEMAS = {
             "placement": ["top", "bottom"]
         }
     },
+    "layer_reorder": {
+        "route": "typed_batch",
+        "backend": "jsx",
+        "requiresTargets": false,
+        "required": ["name"],
+        "optional": ["placement", "above", "below"],
+        "types": {
+            "name": "string",
+            "placement": "string",
+            "above": "string",
+            "below": "string"
+        },
+        "enumValues": {
+            "placement": ["top", "bottom"]
+        }
+    },
     "layer_activate": {
+        "route": "typed_batch",
+        "backend": "jsx",
+        "requiresTargets": false,
         "required": ["name"],
         "optional": [],
         "types": {
@@ -368,6 +453,9 @@ var OP_PARAM_SCHEMAS = {
         }
     },
     "layer_lock": {
+        "route": "typed_batch",
+        "backend": "jsx",
+        "requiresTargets": false,
         "required": ["name", "locked"],
         "optional": [],
         "types": {
@@ -376,6 +464,9 @@ var OP_PARAM_SCHEMAS = {
         }
     },
     "layer_visible": {
+        "route": "typed_batch",
+        "backend": "jsx",
+        "requiresTargets": false,
         "required": ["name", "visible"],
         "optional": [],
         "types": {
@@ -384,6 +475,9 @@ var OP_PARAM_SCHEMAS = {
         }
     },
     "layer_delete": {
+        "route": "typed_batch",
+        "backend": "jsx",
+        "requiresTargets": false,
         "required": ["name"],
         "optional": [],
         "types": {
@@ -391,23 +485,34 @@ var OP_PARAM_SCHEMAS = {
         }
     },
     "layer_list": {
+        "route": "typed_batch",
+        "backend": "jsx",
+        "requiresTargets": false,
         "required": [],
         "optional": [],
         "types": {}
     },
     "style_set_fill": {
-        "required": ["r", "g", "b"],
-        "optional": [],
+        "route": "typed_batch",
+        "backend": "jsx",
+        "requiresTargets": true,
+        "required": [],
+        "optional": ["fill", "r", "g", "b"],
         "types": {
+            "fill": "object",
             "r": "number",
             "g": "number",
             "b": "number"
         }
     },
     "style_set_stroke": {
+        "route": "typed_batch",
+        "backend": "jsx",
+        "requiresTargets": true,
         "required": [],
-        "optional": ["r", "g", "b", "width"],
+        "optional": ["stroke", "r", "g", "b", "width"],
         "types": {
+            "stroke": "object",
             "r": "number",
             "g": "number",
             "b": "number",
@@ -415,6 +520,9 @@ var OP_PARAM_SCHEMAS = {
         }
     },
     "style_set_opacity": {
+        "route": "typed_batch",
+        "backend": "jsx",
+        "requiresTargets": true,
         "required": ["opacity"],
         "optional": [],
         "types": {
@@ -422,21 +530,33 @@ var OP_PARAM_SCHEMAS = {
         }
     },
     "style_remove_fill": {
+        "route": "typed_batch",
+        "backend": "jsx",
+        "requiresTargets": true,
         "required": [],
         "optional": [],
         "types": {}
     },
     "style_remove_stroke": {
+        "route": "typed_batch",
+        "backend": "jsx",
+        "requiresTargets": true,
         "required": [],
         "optional": [],
         "types": {}
     },
     "style_snapshot": {
+        "route": "typed_batch",
+        "backend": "jsx",
+        "requiresTargets": false,
         "required": [],
         "optional": [],
         "types": {}
     },
     "style_clone": {
+        "route": "typed_batch",
+        "backend": "jsx",
+        "requiresTargets": true,
         "required": ["from"],
         "optional": ["properties"],
         "types": {
@@ -445,6 +565,9 @@ var OP_PARAM_SCHEMAS = {
         }
     },
     "style_set_gradient": {
+        "route": "typed_batch",
+        "backend": "jsx",
+        "requiresTargets": true,
         "required": ["stops"],
         "optional": ["type", "angle", "origin", "length", "name"],
         "types": {
@@ -457,6 +580,9 @@ var OP_PARAM_SCHEMAS = {
         }
     },
     "group_create": {
+        "route": "typed_batch",
+        "backend": "jsx",
+        "requiresTargets": true,
         "required": [],
         "optional": ["name"],
         "types": {
@@ -464,44 +590,68 @@ var OP_PARAM_SCHEMAS = {
         }
     },
     "group_ungroup": {
+        "route": "typed_batch",
+        "backend": "jsx",
+        "requiresTargets": true,
         "required": [],
         "optional": [],
         "types": {}
     },
     "clip_create": {
+        "route": "typed_batch",
+        "backend": "jsx",
+        "requiresTargets": false,
         "required": ["mask", "contents"],
-        "optional": ["id", "name", "dryRun"],
+        "optional": ["id", "name", "dryRun", "duplicate_mask"],
         "types": {
             "mask": "string",
             "contents": "array",
             "id": "string",
             "name": "string",
-            "dryRun": "boolean"
+            "dryRun": "boolean",
+            "duplicate_mask": "boolean"
         }
     },
     "zorder_front": {
+        "route": "typed_batch",
+        "backend": "jsx",
+        "requiresTargets": true,
         "required": [],
         "optional": [],
         "types": {}
     },
     "zorder_back": {
+        "route": "typed_batch",
+        "backend": "jsx",
+        "requiresTargets": true,
         "required": [],
         "optional": [],
         "types": {}
     },
     "zorder_forward": {
+        "route": "typed_batch",
+        "backend": "jsx",
+        "requiresTargets": true,
         "required": [],
         "optional": [],
         "types": {}
     },
     "zorder_backward": {
+        "route": "typed_batch",
+        "backend": "jsx",
+        "requiresTargets": true,
         "required": [],
         "optional": [],
         "types": {}
     },
     "text_create": {
-        "required": ["contents"],
+        "route": "typed_batch",
+        "backend": "jsx",
+        "requiresTargets": false,
+        "required": [],
         "optional": [
+            "contents",
+            "runs",
             "id",
             "x",
             "y",
@@ -509,12 +659,16 @@ var OP_PARAM_SCHEMAS = {
             "name",
             "fontSize",
             "fontName",
+            "fontFamily",
+            "fontStyle",
+            "fill",
             "r",
             "g",
             "b"
         ],
         "types": {
             "contents": "string",
+            "runs": "array",
             "id": "string",
             "x": "number",
             "y": "number",
@@ -522,30 +676,59 @@ var OP_PARAM_SCHEMAS = {
             "name": "string",
             "fontSize": "number",
             "fontName": "string",
+            "fontFamily": "string",
+            "fontStyle": "string",
+            "fill": "object",
             "r": "number",
             "g": "number",
             "b": "number"
         }
     },
     "text_set_content": {
-        "required": ["contents"],
-        "optional": [],
+        "route": "typed_batch",
+        "backend": "jsx",
+        "requiresTargets": true,
+        "required": [],
+        "optional": ["contents", "runs"],
         "types": {
-            "contents": "string"
+            "contents": "string",
+            "runs": "array"
         }
     },
     "text_set_style": {
+        "route": "typed_batch",
+        "backend": "jsx",
+        "requiresTargets": true,
         "required": [],
-        "optional": ["fontSize", "fontName", "r", "g", "b"],
+        "optional": [
+            "fontSize",
+            "fontName",
+            "fontFamily",
+            "fontStyle",
+            "runs",
+            "tracking",
+            "fill",
+            "r",
+            "g",
+            "b"
+        ],
         "types": {
             "fontSize": "number",
             "fontName": "string",
+            "fontFamily": "string",
+            "fontStyle": "string",
+            "runs": "array",
+            "tracking": "number",
+            "fill": "object",
             "r": "number",
             "g": "number",
             "b": "number"
         }
     },
     "align_horizontal": {
+        "route": "typed_batch",
+        "backend": "jsx",
+        "requiresTargets": true,
         "required": [],
         "optional": ["mode", "reference", "key_id", "coordinate"],
         "types": {
@@ -560,6 +743,9 @@ var OP_PARAM_SCHEMAS = {
         }
     },
     "align_vertical": {
+        "route": "typed_batch",
+        "backend": "jsx",
+        "requiresTargets": true,
         "required": [],
         "optional": ["mode", "reference", "key_id", "coordinate"],
         "types": {
@@ -574,6 +760,9 @@ var OP_PARAM_SCHEMAS = {
         }
     },
     "distribute_horizontal": {
+        "route": "typed_batch",
+        "backend": "jsx",
+        "requiresTargets": true,
         "required": [],
         "optional": ["mode", "spacing"],
         "types": {
@@ -585,6 +774,9 @@ var OP_PARAM_SCHEMAS = {
         }
     },
     "distribute_vertical": {
+        "route": "typed_batch",
+        "backend": "jsx",
+        "requiresTargets": true,
         "required": [],
         "optional": ["mode", "spacing"],
         "types": {
@@ -596,6 +788,9 @@ var OP_PARAM_SCHEMAS = {
         }
     },
     "assert_count": {
+        "route": "typed_batch",
+        "backend": "jsx",
+        "requiresTargets": false,
         "required": ["expected"],
         "optional": ["operator"],
         "types": {
@@ -607,6 +802,9 @@ var OP_PARAM_SCHEMAS = {
         }
     },
     "assert_bounds": {
+        "route": "typed_batch",
+        "backend": "jsx",
+        "requiresTargets": false,
         "required": [],
         "optional": ["artboardIndex"],
         "types": {
@@ -614,6 +812,9 @@ var OP_PARAM_SCHEMAS = {
         }
     },
     "assert_exists": {
+        "route": "typed_batch",
+        "backend": "jsx",
+        "requiresTargets": false,
         "required": ["ids"],
         "optional": [],
         "types": {
@@ -621,6 +822,9 @@ var OP_PARAM_SCHEMAS = {
         }
     },
     "assert_style": {
+        "route": "typed_batch",
+        "backend": "jsx",
+        "requiresTargets": false,
         "required": [],
         "optional": [
             "fill",
@@ -640,6 +844,9 @@ var OP_PARAM_SCHEMAS = {
         }
     },
     "assert_text": {
+        "route": "typed_batch",
+        "backend": "jsx",
+        "requiresTargets": false,
         "required": ["contents"],
         "optional": ["matchMode", "caseSensitive"],
         "types": {
@@ -652,6 +859,9 @@ var OP_PARAM_SCHEMAS = {
         }
     },
     "assert_alignment": {
+        "route": "typed_batch",
+        "backend": "jsx",
+        "requiresTargets": false,
         "required": ["mode"],
         "optional": ["tolerance", "spacing", "repair"],
         "types": {
@@ -665,6 +875,9 @@ var OP_PARAM_SCHEMAS = {
         }
     },
     "assert_z_order": {
+        "route": "typed_batch",
+        "backend": "jsx",
+        "requiresTargets": false,
         "required": [],
         "optional": ["above", "below", "pairs"],
         "types": {
@@ -674,6 +887,9 @@ var OP_PARAM_SCHEMAS = {
         }
     },
     "assert_layer_order": {
+        "route": "typed_batch",
+        "backend": "jsx",
+        "requiresTargets": false,
         "required": ["order"],
         "optional": ["strict"],
         "types": {
@@ -682,11 +898,17 @@ var OP_PARAM_SCHEMAS = {
         }
     },
     "measure_bounds": {
+        "route": "typed_batch",
+        "backend": "jsx",
+        "requiresTargets": false,
         "required": [],
         "optional": [],
         "types": {}
     },
     "snapshot_structure": {
+        "route": "typed_batch",
+        "backend": "jsx",
+        "requiresTargets": false,
         "required": [],
         "optional": ["includeItems"],
         "types": {
@@ -694,11 +916,17 @@ var OP_PARAM_SCHEMAS = {
         }
     },
     "hash_structure": {
+        "route": "typed_batch",
+        "backend": "jsx",
+        "requiresTargets": false,
         "required": [],
         "optional": [],
         "types": {}
     },
     "compound": {
+        "route": "typed_batch",
+        "backend": "jsx",
+        "requiresTargets": false,
         "required": ["ops"],
         "optional": ["atomic"],
         "types": {
@@ -707,6 +935,9 @@ var OP_PARAM_SCHEMAS = {
         }
     },
     "path_boolean": {
+        "route": "python_tool",
+        "backend": "python",
+        "requiresTargets": false,
         "required": ["operation", "subject", "clip"],
         "optional": [
             "flatten_tolerance",
@@ -733,6 +964,31 @@ var OP_PARAM_SCHEMAS = {
     }
 };
 
+var TARGET_REQUIRED_OP = {
+    "element_modify": true,
+    "element_delete": true,
+    "element_replace": true,
+    "style_set_fill": true,
+    "style_set_stroke": true,
+    "style_set_opacity": true,
+    "style_remove_fill": true,
+    "style_remove_stroke": true,
+    "style_clone": true,
+    "style_set_gradient": true,
+    "group_create": true,
+    "group_ungroup": true,
+    "zorder_front": true,
+    "zorder_back": true,
+    "zorder_forward": true,
+    "zorder_backward": true,
+    "text_set_content": true,
+    "text_set_style": true,
+    "align_horizontal": true,
+    "align_vertical": true,
+    "distribute_horizontal": true,
+    "distribute_vertical": true
+};
+
 // ==================== Validation Functions ====================
 
 /**
@@ -751,68 +1007,49 @@ function getValueType(val) {
  * @returns {{ok: boolean, errors: Array}}
  */
 function validateOpParams(task, params) {
-    var schema = OP_PARAM_SCHEMAS[task];
-    if (!schema) {
-        return { ok: true, errors: [] }; // Unknown task - skip validation
-    }
-
     var errors = [];
+    function fail(code, field, message) {
+        errors.push({code:code, operation:task, field:field,
+            message:task + "." + field + ": " + message, stage:"validate"});
+    }
+    var schema = Object.prototype.hasOwnProperty.call(OP_PARAM_SCHEMAS, task) ? OP_PARAM_SCHEMAS[task] : null;
+    if (!schema || schema.backend !== "jsx") {
+        fail("V008", "task", "Expected a supported JSX operation; read illustrator://ops");
+        return {ok:false, errors:errors};
+    }
+    if (params != null && (typeof params !== "object" || params instanceof Array)) {
+        fail("V007", "params", "Expected object");
+        return {ok:false, errors:errors};
+    }
     params = params || {};
-
-    // Check required parameters
-    if (schema.required) {
-        for (var i = 0; i < schema.required.length; i++) {
-            var key = schema.required[i];
-            if (params[key] === undefined || params[key] === null) {
-                errors.push({
-                    code: ErrorCodes.V_MISSING_REQUIRED_PARAM || "V006",
-                    message: "Missing required parameter: " + key,
-                    stage: "validate"
-                });
-            }
+    var i, key;
+    for (i = 0; i < schema.required.length; i++) {
+        key = schema.required[i];
+        if (params[key] == null) fail("V006", key, "Missing required parameter");
+    }
+    var known = [];
+    for (key in schema.types) {
+        if (Object.prototype.hasOwnProperty.call(schema.types, key)) known.push(key);
+    }
+    for (key in params) {
+        if (!Object.prototype.hasOwnProperty.call(params, key)) continue;
+        if (!Object.prototype.hasOwnProperty.call(schema.types, key)) {
+            fail("V008", key, "Unknown parameter '" + key + "'. Allowed: " + known.join(", "));
+            continue;
+        }
+        var value = params[key];
+        if (value == null || (typeof value === "object" && typeof value.$field === "string")) continue;
+        var expected = schema.types[key], actual = getValueType(value);
+        if (expected === "object" && value === false) continue;
+        if (actual !== expected || (actual === "number" && !isFinite(value))) {
+            fail("V007", key, "Expected finite " + expected + ", got " + actual);
+        } else if (schema.enumValues && schema.enumValues[key]) {
+            var allowed = schema.enumValues[key], found = false;
+            for (i = 0; i < allowed.length; i++) if (allowed[i] === value) found = true;
+            if (!found) fail("V008", key, "Expected one of: " + allowed.join(", "));
         }
     }
-
-    // Check parameter types
-    if (schema.types) {
-        for (var key in params) {
-            if (params.hasOwnProperty(key) && schema.types[key]) {
-                // Skip type check for $field descriptors
-                if (typeof isField === "function" && isField(params[key])) continue;
-                var expected = schema.types[key];
-                var actual = getValueType(params[key]);
-                if (actual !== "null" && actual !== expected) {
-                    errors.push({
-                        code: ErrorCodes.V_INVALID_PARAM_TYPE || "V007",
-                        message: "Parameter '" + key + "' expected " + expected + ", got " + actual,
-                        stage: "validate"
-                    });
-                }
-            }
-        }
-    }
-
-    // Check enum values
-    if (schema.enumValues) {
-        for (var key in schema.enumValues) {
-            if (params[key] !== undefined) {
-                var allowed = schema.enumValues[key];
-                var found = false;
-                for (var i = 0; i < allowed.length; i++) {
-                    if (allowed[i] === params[key]) { found = true; break; }
-                }
-                if (!found) {
-                    errors.push({
-                        code: ErrorCodes.V_SCHEMA_MISMATCH || "V008",
-                        message: "Parameter '" + key + "' must be one of: " + allowed.join(", "),
-                        stage: "validate"
-                    });
-                }
-            }
-        }
-    }
-
-    return { ok: errors.length === 0, errors: errors };
+    return {ok:errors.length === 0, errors:errors};
 }
 
 /**

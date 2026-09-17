@@ -179,6 +179,107 @@ function _createPathWithHandles(item, points, abLeft, abTop) {
     return true;
 }
 
+/**
+ * Close a failed element-creation scope without losing the primary result.
+ *
+ * Ownership removes DOM objects; the heap is updated only for identified
+ * objects whose removal actually succeeded.  A removal failure means the
+ * artwork is still present and its heap entry must remain resolvable.
+ * Existing cleanup evidence from a delegated handler is preserved and the
+ * failures from this scope are appended to it.
+ */
+function _elementCleanupFailure(scope, result) {
+    var cleanup = mcpOwnCleanup(scope);
+    var records = cleanup.records || [];
+    for (var i = 0; i < records.length; i++) {
+        if (records[i].outcome === "removed" && records[i].mcpId &&
+                typeof heapTombstone === "function") {
+            heapTombstone(records[i].mcpId);
+        }
+    }
+    var failures = mcpCleanupFailures(result).slice(0);
+    for (var f = 0; f < cleanup.failed.length; f++) {
+        failures.push(cleanup.failed[f]);
+    }
+    mcpSetCleanupFailures(result, failures);
+    return result;
+}
+
+/** Roll back element_replace and publish whether its replacement still exists. */
+function _elementReplaceRollback(scope, result, newItem) {
+    if (typeof mcpOwnReconcileDetach === "function") {
+        mcpOwnReconcileDetach(scope, newItem);
+    }
+    _elementCleanupFailure(scope, result);
+
+    var replacementRemains = false;
+    var establishedId = null;
+    var entries = scope ? scope.entries : [];
+    for (var i = 0; i < entries.length; i++) {
+        var entry = entries[i];
+        if (entry.item !== newItem) continue;
+        establishedId = entry.mcpId || null;
+        if (entry.outcome === "owned" || entry.outcome === "removal_failed" ||
+                entry.outcome === "committed" || entry.outcome === "released") {
+            replacementRemains = true;
+        } else if (entry.outcome === "absorbed") {
+            // An absorbed child remains exactly when the sandbox that owns its
+            // lifetime remains. Read the final container record, not the first
+            // removal attempt.
+            replacementRemains = true;
+            for (var c = 0; c < entries.length; c++) {
+                if (entries[c].item === entry.absorbedBy &&
+                        (entries[c].outcome === "removed" ||
+                         entries[c].outcome === "disposed")) {
+                    replacementRemains = false;
+                    break;
+                }
+            }
+        }
+        break;
+    }
+
+    // `newId` is only the requested/planned identity until stampMcpId and
+    // mcpOwnIdentify succeed. Publish and tombstone only the identity recorded
+    // by ownership, never a name that no surviving object actually carries.
+    if (establishedId) {
+        if (replacementRemains) {
+            result.data = result.data || {};
+            result.data.ids = result.data.ids || [];
+            if (result.data.ids.indexOf(establishedId) < 0) {
+                result.data.ids.push(establishedId);
+            }
+        } else if (typeof heapTombstone === "function") {
+            // When the sandbox removed an absorbed child, that child's record
+            // remains "absorbed" by design, so the generic cleanup helper does
+            // not see an individual removal to tombstone.
+            heapTombstone(establishedId);
+        }
+    }
+    return result;
+}
+
+/** Restore a temporarily unlocked original and disclose a failed restoration. */
+function _elementReplaceRestoreLock(oldItem, restoreNeeded, oldId, result) {
+    if (!restoreNeeded || !oldItem) return result;
+    try {
+        oldItem.locked = true;
+    } catch (lockError) {
+        result.data = result.data || {};
+        if (oldId) result.data.modifiedIds = [oldId];
+        else result.data.unnamedModification = true;
+        result.warnings = result.warnings || [];
+        result.warnings.push(
+            "Original item remains unlocked after replacement rollback: " +
+            lockError.message
+        );
+        result.error = result.error || {};
+        result.error.details = result.error.details || {};
+        result.error.details.lockRestoreFailure = String(lockError.message || lockError);
+    }
+    return result;
+}
+
 // ==================== Element Create ====================
 
 registerOpHandler("element_create", function (params, targets, ctx) {
@@ -207,6 +308,29 @@ registerOpHandler("element_create", function (params, targets, ctx) {
     var targetLayer = layerResult.layer;
 
     var item = null;
+    var clipGroupId = null;
+    var delegatedClipResult = null;
+
+    // ── Early validation: clipTo target must exist and be valid type ──
+    var clipTarget = null;  // declared once, reused in post-creation block
+    if (params.clipTo) {
+        clipTarget = resolveIdCompat(params.clipTo, doc, { freshScan: true });
+        if (!clipTarget) {
+            return makeError(ErrorCodes.V_INVALID_PARAM_VALUE || "V009",
+                "clipTo target not found: '" + params.clipTo + "'", "validate");
+        }
+        var ctType = clipTarget.typename;
+        // Valid targets: free path, clipping group, or consumed mask (clipping item inside clip group)
+        var isPath = (ctType === "PathItem" || ctType === "CompoundPathItem");
+        var isClipGroup = (ctType === "GroupItem" && clipTarget.clipped);
+        var isConsumedMask = (clipTarget.clipping && clipTarget.parent &&
+            clipTarget.parent.typename === "GroupItem" && clipTarget.parent.clipped);
+        if (!isPath && !isClipGroup && !isConsumedMask) {
+            return makeError(ErrorCodes.V_INVALID_PARAM_TYPE || "V010",
+                "clipTo must be PathItem, CompoundPathItem, or clipping GroupItem, got " + ctType,
+                "validate");
+        }
+    }
 
     // Convert to Illustrator coordinates:
     // User coords: (0,0) = artboard top-left, Y increases downward
@@ -216,15 +340,24 @@ registerOpHandler("element_create", function (params, targets, ctx) {
     var aiTop = abTop - y;          // e.g. y=50 on 400pt artboard → aiY=350
     var aiLeft = abLeft + x;
 
-    switch (type) {
+    // OR05. The item belongs to this operation from the instant it exists
+    // until every requested operation against it has succeeded.  In
+    // particular, registration is before setEntirePath, areaText conversion,
+    // stamping, naming, styling, bounds reads and clip-group moves: each of
+    // those can throw after Illustrator has already put artwork on the page.
+    var createScope = mcpOwnBegin("element_create");
+    try {
+      switch (type) {
         case "rect":
             // rectangle(top, left, width, height)
-            item = targetLayer.pathItems.rectangle(aiTop, aiLeft, width, height);
+            item = mcpOwnAllocate(createScope,
+                targetLayer.pathItems.rectangle(aiTop, aiLeft, width, height), "rect");
             break;
 
         case "ellipse":
             // ellipse(top, left, width, height)
-            item = targetLayer.pathItems.ellipse(aiTop, aiLeft, width, height);
+            item = mcpOwnAllocate(createScope,
+                targetLayer.pathItems.ellipse(aiTop, aiLeft, width, height), "ellipse");
             break;
 
         case "line":
@@ -233,7 +366,7 @@ registerOpHandler("element_create", function (params, targets, ctx) {
             var ly1 = params.y1 !== undefined ? params.y1 : y;
             var lx2 = params.x2 !== undefined ? params.x2 : lx1 + 100;
             var ly2 = params.y2 !== undefined ? params.y2 : ly1;
-            item = targetLayer.pathItems.add();
+            item = mcpOwnAllocate(createScope, targetLayer.pathItems.add(), "line");
             item.setEntirePath([[abLeft + lx1, abTop - ly1], [abLeft + lx2, abTop - ly2]]);
             item.closed = false;
             item.filled = false;
@@ -241,22 +374,25 @@ registerOpHandler("element_create", function (params, targets, ctx) {
 
         case "roundedRect":
             var cornerRadius = params.cornerRadius || 10;
-            item = targetLayer.pathItems.roundedRectangle(
-                aiTop, aiLeft, width, height, cornerRadius, cornerRadius
-            );
+            item = mcpOwnAllocate(createScope,
+                targetLayer.pathItems.roundedRectangle(
+                    aiTop, aiLeft, width, height, cornerRadius, cornerRadius
+                ), "roundedRect");
             break;
 
         case "polygon":
             var sides = params.sides || 6;
             var radius = params.radius || 50;
-            item = targetLayer.pathItems.polygon(abLeft + x, abTop - y, radius, sides);
+            item = mcpOwnAllocate(createScope,
+                targetLayer.pathItems.polygon(abLeft + x, abTop - y, radius, sides), "polygon");
             break;
 
         case "star":
             var points = params.numPoints || params.points || 5;
             var outerRadius = params.outerRadius || 50;
             var innerRadius = params.innerRadius || 25;
-            item = targetLayer.pathItems.star(abLeft + x, abTop - y, outerRadius, innerRadius, points);
+            item = mcpOwnAllocate(createScope,
+                targetLayer.pathItems.star(abLeft + x, abTop - y, outerRadius, innerRadius, points), "star");
             break;
 
         case "text":
@@ -264,13 +400,16 @@ registerOpHandler("element_create", function (params, targets, ctx) {
             var fontSize = params.fontSize || 12;
             if (params.width != null && params.height != null) {
                 // Area text: create container rect, then use areaText()
-                var container = targetLayer.pathItems.rectangle(aiTop, aiLeft, width, height);
+                var container = mcpOwnAllocate(createScope,
+                    targetLayer.pathItems.rectangle(aiTop, aiLeft, width, height), "areaTextPath");
                 container.filled = false;
                 container.stroked = false;
-                item = targetLayer.textFrames.areaText(container);
+                item = mcpOwnAllocate(createScope,
+                    targetLayer.textFrames.areaText(container), "areaText");
+                mcpOwnAbsorb(createScope, [container], item);
             } else {
                 // Point text
-                item = targetLayer.textFrames.add();
+                item = mcpOwnAllocate(createScope, targetLayer.textFrames.add(), "pointText");
                 item.position = [aiLeft, aiTop];
             }
             item.contents = contents;
@@ -295,23 +434,26 @@ registerOpHandler("element_create", function (params, targets, ctx) {
             var pathWarnings = [];
             var geoInput = params.geometry || params.points;
             if (!geoInput) {
-                return makeError(ErrorCodes.V_MISSING_REQUIRED_PARAM, "Path requires 'geometry' (IR) or 'points' array", "apply");
+                return _elementCleanupFailure(createScope,
+                    makeError(ErrorCodes.V_MISSING_REQUIRED_PARAM, "Path requires 'geometry' (IR) or 'points' array", "apply"));
             }
             if (isIR(geoInput)) {
                 // Geometry IR object — validate before consuming
                 if (geoInput.ir === "multi") {
-                    return makeError(
+                    return _elementCleanupFailure(createScope, makeError(
                         ErrorCodes.V_INVALID_PARAM_TYPE,
                         "multi IR not supported in element_create; use element_create_multi",
                         "apply"
-                    );
+                    ));
                 }
                 var irVal = irValidate(geoInput);
                 if (!irVal.ok) {
-                    return makeError(ErrorCodes.V_INVALID_PARAM_TYPE, "IR validation failed: " + irVal.errors.join("; "), "apply");
+                    return _elementCleanupFailure(createScope,
+                        makeError(ErrorCodes.V_INVALID_PARAM_TYPE, "IR validation failed: " + irVal.errors.join("; "), "apply"));
                 }
                 if (geoInput.ir !== "path") {
-                    return makeError(ErrorCodes.V_INVALID_PARAM_TYPE, "Expected ir:'path', got ir:'" + geoInput.ir + "'", "apply");
+                    return _elementCleanupFailure(createScope,
+                        makeError(ErrorCodes.V_INVALID_PARAM_TYPE, "Expected ir:'path', got ir:'" + geoInput.ir + "'", "apply"));
                 }
                 pathPoints = geoInput.points || [];
                 if (params.closed === undefined) params.closed = geoInput.closed;
@@ -338,7 +480,8 @@ registerOpHandler("element_create", function (params, targets, ctx) {
             }
 
             if (pathPoints.length < 2) {
-                return makeError(ErrorCodes.V_MISSING_REQUIRED_PARAM, "Path requires >= 2 points", "apply");
+                return _elementCleanupFailure(createScope,
+                    makeError(ErrorCodes.V_MISSING_REQUIRED_PARAM, "Path requires >= 2 points", "apply"));
             }
             // Guard: Illustrator crashes with 'Illegal Argument' above ~8000 points.
             // Monotonic decimation: enforce strictly increasing indices to avoid duplicates.
@@ -358,7 +501,7 @@ registerOpHandler("element_create", function (params, targets, ctx) {
                 pathWarnings.push("Path decimated from " + origLen + " to " + pathPoints.length + " points");
             }
             // Y-flip via irMapPoints if IR, otherwise use Bézier-aware helper
-            item = targetLayer.pathItems.add();
+            item = mcpOwnAllocate(createScope, targetLayer.pathItems.add(), "path");
             if (isIR(geoInput)) {
                 var abT = abTop, abL = abLeft;
                 var flipped = irMapPoints(geoInput, function (pt) { return [abL + pt[0], abT - pt[1]]; });
@@ -419,15 +562,16 @@ registerOpHandler("element_create", function (params, targets, ctx) {
             break;
 
         default:
-            return makeError(
+            return _elementCleanupFailure(createScope, makeError(
                 ErrorCodes.V_INVALID_PARAM_TYPE,
                 "Unknown element type: " + type,
                 "apply"
-            );
-    }
+            ));
+      }
 
-    // Assign ID via note
-    item.note = "@mcp:id=" + id;
+    // Assign ID via note + register in heap (H1 invariant)
+    stampMcpId(item, id);
+    mcpOwnIdentify(createScope, item, id);
 
     // Set name if provided
     if (name) {
@@ -479,14 +623,135 @@ registerOpHandler("element_create", function (params, targets, ctx) {
         item.opacity = params.opacity;
     }
 
-    return {
+    // Capture bounds BEFORE clipTo (clip may change item's coordinate context)
+    var preBounds = [item.left, item.top, item.width, item.height];
+
+    // clipTo: clip element to target (v2: append to existing, create new, rollback)
+    if (params.clipTo) {
+        // Reuse early-validated clipTarget (already freshScan'd in this eval context).
+        // Only re-resolve if clipTarget was somehow invalidated (e.g., removed by another op).
+        if (!clipTarget) {
+            clipTarget = resolveIdCompat(params.clipTo, ctx.doc, { freshScan: true });
+        }
+        if (!clipTarget) {
+            return _elementCleanupFailure(createScope,
+                makeError(ErrorCodes.V_INVALID_PARAM_VALUE || "V009",
+                    "clipTo target not found: '" + params.clipTo + "'", "resolve"));
+        }
+
+        // Determine clip mode:
+        // (a) Target is already a clipping group → append
+        // (b) Target is a consumed mask (clipping:true inside a clipped group) → append to parent group
+        // (c) Target is a free PathItem/CompoundPathItem → create new clip group
+        var appendGroup = null;
+        if (clipTarget.typename === "GroupItem" && clipTarget.clipped) {
+            // (a) Direct clip group reference
+            appendGroup = clipTarget;
+        } else if (clipTarget.clipping && clipTarget.parent &&
+            clipTarget.parent.typename === "GroupItem" && clipTarget.parent.clipped) {
+            // (b) Consumed mask — append to its parent clip group
+            appendGroup = clipTarget.parent;
+        }
+
+        if (appendGroup) {
+            // Append to existing clip group
+            var preMoveParent = item.parent;
+            item.move(appendGroup, ElementPlacement.PLACEATEND);
+            // Verify move succeeded (parent should now be the clip group)
+            if (item.parent === preMoveParent) {
+                return _elementCleanupFailure(createScope,
+                    makeError(ErrorCodes.E_EXECUTION || "E001",
+                        "Failed to move item into clip group (target may be locked)", "apply"));
+            }
+            // Return the clip group's MCP ID if it has one
+            try {
+                var gpNote = appendGroup.note || "";
+                // T02: canonical exact parser (see mcp_id.jsx)
+                clipGroupId = extractMcpId(gpNote) || params.clipTo;
+            } catch (e) { clipGroupId = params.clipTo; }
+        } else {
+            // Delegate to clip_create for PathItem/CompoundPathItem
+            // duplicate_mask=false: mask consumed into group (clean for inline clipTo)
+            var clipHandler = OP_HANDLERS["clip_create"];
+            if (!clipHandler) {
+                return _elementCleanupFailure(createScope,
+                    makeError(ErrorCodes.E_EXECUTION || "E001",
+                        "clip_create handler not registered (required for clipTo)", "apply"));
+            }
+            var clipResult = clipHandler({
+                mask: params.clipTo,
+                contents: [id],
+                duplicate_mask: false
+            }, [], ctx);
+            // Normalize to ensure .ok exists
+            if (typeof normalizeHandlerResult === "function") {
+                clipResult = normalizeHandlerResult("clip_create", clipResult);
+            }
+            // At this level the content item is a creation, not a modification.
+            // Preserve every delegated move except that one so the borrowed
+            // mask remains visible in the canonical effect record without
+            // double-classifying the new item.
+            var clipData = clipResult.data || {};
+            var delegatedMoves = [];
+            if (clipData.movedIds instanceof Array) {
+                for (var dmi = 0; dmi < clipData.movedIds.length; dmi++) {
+                    var delegatedMoveId = clipData.movedIds[dmi];
+                    if (delegatedMoveId !== id &&
+                            typeof delegatedMoveId === "string" &&
+                            delegatedMoveId.length &&
+                            delegatedMoves.indexOf(delegatedMoveId) < 0) {
+                        delegatedMoves.push(delegatedMoveId);
+                    }
+                }
+            }
+            clipData.movedIds = delegatedMoves;
+            clipResult.data = clipData;
+            if (!clipResult.ok) {
+                // The delegated handler keeps its primary error and cleanup
+                // evidence; this scope adds only the item it created. Its
+                // retained group and borrowed-mask move stay in `data`, where
+                // the outer task's canonical reducer can still see them.
+                return _elementCleanupFailure(createScope, clipResult);
+            }
+            delegatedClipResult = clipResult;
+            clipGroupId = clipResult.id || null;
+        }
+    }
+
+    mcpOwnCommit(createScope);
+    var resultData = {
+        typename: item.typename,
+        bounds: preBounds,
+        clippedTo: params.clipTo || null,
+        clipGroupId: clipGroupId
+    };
+    var resultWarnings = [];
+    if (delegatedClipResult) {
+        // The outer operation made both objects. `id` remains the primary
+        // element identity for compatibility; `ids` is the exhaustive list
+        // consumed by the effect reducer.
+        resultData.ids = [id];
+        if (clipGroupId && clipGroupId !== id) resultData.ids.push(clipGroupId);
+        resultData.movedIds = delegatedClipResult.data.movedIds || [];
+        if (typeof delegatedClipResult.data.unnamedMoves === "number") {
+            resultData.unnamedMoves = delegatedClipResult.data.unnamedMoves;
+        }
+        if (delegatedClipResult.warnings instanceof Array) {
+            resultWarnings = delegatedClipResult.warnings.slice();
+        }
+    }
+    var createResult = {
         ok: true,
         id: id,
-        data: {
-            typename: item.typename,
-            bounds: [item.left, item.top, item.width, item.height]
-        }
+        data: resultData
     };
+    if (resultWarnings.length) createResult.warnings = resultWarnings;
+    return createResult;
+    } catch (createError) {
+        return _elementCleanupFailure(createScope,
+            makeError(ErrorCodes.R_APPLY_FAILED,
+                "element_create failed: " + createError.message, "apply"));
+    }
 });
 
 // ==================== Element Create Multi ====================
@@ -621,13 +886,31 @@ registerOpHandler("element_create_multi", function (params, targets, ctx) {
         // Y-flip via irMapPoints — artboard-relative coord transform
         var _abT = abTop, _abL = abLeft;
         var flipped = irMapPoints(subPath, function (pt) { return [_abL + pt[0], _abT - pt[1]]; });
-        var item = targetLayer.pathItems.add();
+        // Each finished subpath is independent, matching the handler's prior
+        // partial behavior: if a later path fails, earlier completed paths
+        // remain. Only the subpath still under construction is rolled back.
+        var pathScope = mcpOwnBegin("element_create_multi:path[" + i + "]");
+        try {
+        var item = mcpOwnAllocate(pathScope, targetLayer.pathItems.add(), "path");
         item.setEntirePath(flipped.points);
+        if (flipped.kind === "bezier" && flipped.handles) {
+            for (var bhi = 0; bhi < flipped.points.length; bhi++) {
+                var bpp = item.pathPoints[bhi];
+                var bh = flipped.handles[bhi] || {};
+                var bin = bh.left !== undefined ? bh.left : bh["in"];
+                var bout = bh.right !== undefined ? bh.right : bh.out;
+                bpp.leftDirection = bin || flipped.points[bhi];
+                bpp.rightDirection = bout || flipped.points[bhi];
+                bpp.pointType = (bh.pointType || bh.type) === "corner" ?
+                    PointType.CORNER : PointType.SMOOTH;
+            }
+        }
         item.closed = subPath.closed === true;
 
         // Assign MCP ID inline (confirmed: IDs in creation order)
         var subId = generateUUID();
-        item.note = "@mcp:id=" + subId;
+        stampMcpId(item, subId);
+        mcpOwnIdentify(pathScope, item, subId);
         if (params.name) {
             item.name = params.name + "_" + i;
         }
@@ -695,6 +978,31 @@ registerOpHandler("element_create_multi", function (params, targets, ctx) {
 
         ids.push(subId);
         created++;
+        mcpOwnCommit(pathScope);
+        } catch (pathError) {
+            var pathFailure = {
+                ok: false,
+                data: {
+                    created: created,
+                    skipped: skipped,
+                    failed: skipped + 1,
+                    ids: ids,
+                    totalPoints: irPointCount(geo),
+                    stylingMode: scalars ? "scalars" : (styles ? "explicit" : "shared"),
+                    pagination: {
+                        offset: offset,
+                        limit: limit,
+                        total: totalPaths,
+                        hasMore: end < totalPaths
+                    }
+                },
+                warnings: warnings,
+                error: makeError(ErrorCodes.R_APPLY_FAILED,
+                    "element_create_multi failed at path[" + i + "]: " + pathError.message,
+                    "apply").error
+            };
+            return _elementCleanupFailure(pathScope, pathFailure);
+        }
     }
 
     // Emit warnings
@@ -859,11 +1167,121 @@ function _createFromTemplate(params, doc, abTop, abLeft, ctx) {
     }
 
     var master = null;
-    var createdItems = [];
+    // OR03: the batch scope inherits each committed instance, so a fatal
+    // failure still cleans clones that individually succeeded. Replaces a
+    // hand-rolled list whose per-instance rollback popped the shared array
+    // and deleted the previous instance's clone.
+    var batchScope = mcpOwnBegin("template:batch");
+    // Per-instance identity and measured bounds, for the caller.
+    var instanceRecords = [];
+    // Removals that failed during rollback, reported rather than swallowed.
+    var cleanupFailures = [];
     var ids = [];
     var created = 0;
     var skipped = 0;
     var warnings = [];
+
+    /**
+     * The one way out of this function.
+     *
+     * Every exit has to dispose of the master, close the batch scope, and
+     * carry the cleanup record — and the previous shape did none of that
+     * uniformly. The master was removed in a `finally`, which runs after a
+     * `return` has already evaluated its object, so the disclosure reached
+     * the caller on the success path only because that object happened to
+     * hold the same arrays. `makeError` builds a different shape entirely,
+     * so on a fatal exit the warning and the cleanup failure were written
+     * into arrays nothing referenced and then dropped. The three validation
+     * returns skipped the scope disposition altogether, leaving an open
+     * `template:batch` on the stack for the next scope to inherit.
+     *
+     * Routing every exit through here is what makes those three cases the
+     * same case.
+     *
+     * @param {Object} result   the handler result being returned
+     * @param {boolean} succeeded whether the batch's work stands
+     */
+    function _closeOut(result, succeeded) {
+        if (master) {
+            // Disposed through the scope that owns it, so a removal that
+            // fails is recorded the same way any other is. Removing it by
+            // hand is what let a stranded master hide behind a swallowed
+            // catch, and it is why this site needed an audit exception in
+            // the allocation gate. There is no exception now.
+            mcpOwnDispose(batchScope, master);
+            master = null;
+        }
+
+        if (succeeded) {
+            mcpOwnCommit(batchScope);
+        } else {
+            mcpOwnCleanup(batchScope);
+        }
+
+        // What is still on the page, read from the scope's final records
+        // rather than accumulated one push per attempt.
+        //
+        // Recording each failure as it happened produced two wrong reports.
+        // A disposal that failed and was then retried successfully by the
+        // scope's cleanup still claimed the artwork remained, because the
+        // first push was never revisited. And when both attempts failed, the
+        // disposal and the cleanup each pushed an entry, so one stuck master
+        // was reported as two stranded items. Events are not state; the
+        // records hold the outcome, so the report is derived from them.
+        var finalRecords = mcpOwnRecords(batchScope);
+        for (var fr = 0; fr < finalRecords.length; fr++) {
+            var record = finalRecords[fr];
+            if (record.outcome !== "removal_failed") continue;
+            cleanupFailures.push({
+                stage: record.kind === "master" ? "master" : "batch",
+                allocId: record.allocId,
+                kind: record.kind,
+                mcpId: record.mcpId,
+                error: record.cleanupError || null,
+                attempts: record.removalAttempts || 1
+            });
+        }
+        if (cleanupFailures.length) {
+            // Name what is left. "1 object(s) could not be removed" sends a
+            // reader hunting; "the template master" tells them what to look
+            // for on the page.
+            var kinds = [];
+            var tagged = [];
+            for (var ci = 0; ci < cleanupFailures.length; ci++) {
+                var kind = cleanupFailures[ci].kind || "object";
+                var seen = false;
+                for (var ki = 0; ki < kinds.length; ki++) {
+                    if (kinds[ki] === kind) seen = true;
+                }
+                if (!seen) kinds.push(kind);
+                if (cleanupFailures[ci].mcpId) tagged.push(cleanupFailures[ci].mcpId);
+            }
+            var note = cleanupFailures.length + " object(s) could not be removed " +
+                "and remain on the page (" + kinds.join(", ") + ").";
+            // Whether an id-based tool can find it is a fact about the object,
+            // not a fixed sentence. Saying "carries no MCP id" over a stamped
+            // clone sends the reader hunting by hand for something they could
+            // have selected by id.
+            if (tagged.length === cleanupFailures.length) {
+                note += " They are tagged: " + tagged.join(", ") + ".";
+            } else if (tagged.length) {
+                note += " " + tagged.length + " are tagged (" + tagged.join(", ") +
+                    "); the rest carry no MCP id and must be found by hand.";
+            } else {
+                note += " They carry no MCP id, so no id-based tool can find them.";
+            }
+            warnings.push(note);
+        }
+
+        // One writer, matching the one reader in the effects reducer. Doing
+        // this by hand here is how the two shapes came to disagree about
+        // where the record lived.
+        mcpSetCleanupFailures(result, cleanupFailures);
+        if (warnings.length) {
+            result.warnings = (result.warnings || []).concat(warnings);
+        }
+        return result;
+    }
 
     try {
         // --- Create master item ---
@@ -872,17 +1290,21 @@ function _createFromTemplate(params, doc, abTop, abLeft, ctx) {
             case "ellipse":
                 var rx = tmpl.rx || tmpl.r || 5, ry = tmpl.ry || tmpl.r || 5;
                 master = targetLayer.pathItems.ellipse(abTop + ry, abLeft - rx, rx * 2, ry * 2);
+                mcpOwnAllocate(batchScope, master, "master");
                 break;
             case "rect":
                 var bw = tmpl.w || 50, bh = tmpl.h || 50;
                 master = targetLayer.pathItems.rectangle(abTop, abLeft, bw, bh);
+                mcpOwnAllocate(batchScope, master, "master");
                 break;
             case "line":
                 var lp = tmpl.points;
                 if (!lp || lp.length < 2) {
-                    return makeError(ErrorCodes.V_INVALID_PARAM_TYPE, "template line needs 2 points", "validate");
+                    return _closeOut(makeError(ErrorCodes.V_INVALID_PARAM_TYPE,
+                        "template line needs 2 points", "validate"), false);
                 }
                 master = targetLayer.pathItems.add();
+                mcpOwnAllocate(batchScope, master, "master");
                 master.setEntirePath([[abLeft + lp[0][0], abTop - lp[0][1]], [abLeft + lp[1][0], abTop - lp[1][1]]]);
                 master.closed = false;
                 master.filled = false;
@@ -891,9 +1313,11 @@ function _createFromTemplate(params, doc, abTop, abLeft, ctx) {
             case "path":
                 var pp = tmpl.points;
                 if (!pp || pp.length < 2) {
-                    return makeError(ErrorCodes.V_INVALID_PARAM_TYPE, "template path needs >=2 points", "validate");
+                    return _closeOut(makeError(ErrorCodes.V_INVALID_PARAM_TYPE,
+                        "template path needs >=2 points", "validate"), false);
                 }
                 master = targetLayer.pathItems.add();
+                mcpOwnAllocate(batchScope, master, "master");
                 _createPathWithHandles(master, pp, abLeft, abTop);
                 master.closed = tmpl.closed === true;
                 if (!tmpl.closed) master.filled = false;
@@ -902,15 +1326,18 @@ function _createFromTemplate(params, doc, abTop, abLeft, ctx) {
                 var bSides = tmpl.sides || 6;
                 var bRadius = tmpl.radius || 50;
                 master = targetLayer.pathItems.polygon(abLeft, abTop, bRadius, bSides);
+                mcpOwnAllocate(batchScope, master, "master");
                 break;
             case "star":
                 var bNumPoints = tmpl.numPoints || tmpl.points || 5;
                 var bOuterR = tmpl.outerRadius || 50;
                 var bInnerR = tmpl.innerRadius || 25;
                 master = targetLayer.pathItems.star(abLeft, abTop, bOuterR, bInnerR, bNumPoints);
+                mcpOwnAllocate(batchScope, master, "master");
                 break;
             default:
-                return makeError(ErrorCodes.V_INVALID_PARAM_TYPE, "unknown template type: " + type, "validate");
+                return _closeOut(makeError(ErrorCodes.V_INVALID_PARAM_TYPE,
+                    "unknown template type: " + type, "validate"), false);
         }
 
         // Apply template styling
@@ -938,12 +1365,18 @@ function _createFromTemplate(params, doc, abTop, abLeft, ctx) {
         for (var i = 0; i < instances.length; i++) {
             var inst = instances[i];
             try {
+                // A scope per instance: it owns only this clone, so a
+                // failure here cannot reach a sibling. duplicate() throwing
+                // leaves an empty scope, which cleans up to nothing.
+                var instScope = mcpOwnBegin("template:instance[" + i + "]");
                 var clone = master.duplicate();
+                // Registered the moment it exists, before anything that can
+                // throw touches it.
+                mcpOwnAllocate(instScope, clone, "clone");
 
                 // Position: absolute artboard-relative coordinates
                 if (inst.x !== undefined && inst.y !== undefined) {
                     clone.position = [abLeft + inst.x, abTop - inst.y];
-                    trackBounds(inst.x, inst.y);
                 }
 
                 // Per-instance scale (percentage, about center)
@@ -976,36 +1409,92 @@ function _createFromTemplate(params, doc, abTop, abLeft, ctx) {
                     clone.opacity = Math.max(0, Math.min(100, inst.opacity));
                 }
 
-                // Assign MCP ID
+                // Assign MCP ID + register in heap (H1 invariant)
                 var id = generateUUID();
-                clone.note = "@mcp:id=" + id;
+                stampMcpId(clone, id);
+                // Tell the scope which object this is, now that it has an
+                // identity. Ownership never depended on the id — that is the
+                // point of registering before the stamp — but the records
+                // did carry `mcpId: null` for every object ever allocated,
+                // because nothing called this. A clone that survived a failed
+                // cleanup was then reported as untagged, with advice that no
+                // id-based tool could find it, when it was tagged all along.
+                mcpOwnIdentify(instScope, clone, id);
 
                 // Name
                 if (params.name) {
                     clone.name = params.name + "_" + i;
                 }
 
-                createdItems.push(clone);
+                // Record what was actually made, per instance, so a caller
+                // can see that one landed at a default rather than only an
+                // aggregate bound for the whole run.
+                var instBounds = null;
+                try {
+                    var ivb = clone.visibleBounds;
+                    instBounds = [ivb[0], ivb[1], ivb[2] - ivb[0],
+                                  Math.abs(ivb[3] - ivb[1])];
+                } catch (be) {}
+                instanceRecords.push({
+                    index: i,
+                    id: id,
+                    typename: clone.typename,
+                    bounds: instBounds
+                });
+                if (instBounds) {
+                    // trackBounds works in artboard-relative screen space
+                    // (Y-down), while visibleBounds is absolute and Y-up, so
+                    // convert before feeding it. Both corners are tracked so
+                    // the aggregate spans the artwork rather than the anchor
+                    // points: one instance used to collapse it to zero size.
+                    var sx = instBounds[0] - abLeft;
+                    var sy = abTop - instBounds[1];
+                    trackBounds(sx, sy);
+                    trackBounds(sx + instBounds[2], sy + instBounds[3]);
+                }
+
                 ids.push(id);
                 created++;
+                // Success: the batch scope inherits it, so a later fatal
+                // failure still cleans it.
+                mcpOwnCommit(instScope);
             } catch (e) {
-                // Non-fatal per-instance error: null placeholder for index alignment
+                // Non-fatal per-instance error: null placeholder for index
+                // alignment, and cleanup scoped to this instance alone.
+                // An instance scope is cleaned once and never revisited by
+                // the batch, so this record is already final for its objects.
+                var instCleanup = mcpOwnCleanup(instScope);
+                if (!instCleanup.ok) {
+                    for (var fi = 0; fi < instCleanup.failed.length; fi++) {
+                        var failure = instCleanup.failed[fi];
+                        cleanupFailures.push({
+                            stage: "instance",
+                            index: i,
+                            allocId: failure.allocId,
+                            kind: failure.kind,
+                            mcpId: failure.mcpId,
+                            error: failure.error
+                        });
+                    }
+                }
                 ids.push(null);
                 skipped++;
                 warnings.push("instances[" + i + "] error: " + e.message);
             }
         }
     } catch (e) {
-        // Fatal error: cleanup all created clones
-        for (var k = createdItems.length - 1; k >= 0; k--) {
-            try { createdItems[k].remove(); } catch (ex) { }
+        // Fatal error. The primary failure is preserved as the error; what
+        // cleanup could not undo rides alongside it in details, rather than
+        // being written into arrays this return does not carry.
+        var failure = _closeOut(
+            makeError(ErrorCodes.R_APPLY_FAILED,
+                      "template instancing failed: " + e.message, "apply"),
+            false);
+        if (cleanupFailures.length) {
+            failure.error.message += " (cleanup incomplete: " +
+                cleanupFailures.length + " item(s) remain on the page)";
         }
-        return makeError(ErrorCodes.R_APPLY_FAILED, "template instancing failed: " + e.message, "apply");
-    } finally {
-        // Always remove the master template
-        if (master) {
-            try { master.remove(); } catch (ex) { }
-        }
+        return failure;
     }
 
     var boundsResult = null;
@@ -1013,7 +1502,7 @@ function _createFromTemplate(params, doc, abTop, abLeft, ctx) {
         boundsResult = [bMinX, bMinY, bMaxX - bMinX, bMaxY - bMinY];
     }
 
-    return {
+    return _closeOut({
         ok: true,
         data: {
             created: created,
@@ -1021,10 +1510,12 @@ function _createFromTemplate(params, doc, abTop, abLeft, ctx) {
             failed: skipped,
             ids: ids,
             bounds: boundsResult,
+            // Per-instance identity and measured bounds, in request order,
+            // matching what the heterogeneous items path returns.
+            items: instanceRecords,
             mode: "template"
-        },
-        warnings: warnings
-    };
+        }
+    }, true);
 }
 
 // ==================== Element Create Batch ====================
@@ -1185,9 +1676,11 @@ registerOpHandler("element_create_batch", function (params, targets, ctx) {
     }
 
     var ids = [];
+    var createdItems = [];
     var created = 0;
     var skipped = 0;
     var warnings = [];
+    var cleanupFailures = [];
 
     // Bounds tracking (input-geometry based, no DOM reads)
     var bMinX = Infinity, bMinY = Infinity, bMaxX = -Infinity, bMaxY = -Infinity;
@@ -1208,33 +1701,43 @@ registerOpHandler("element_create_batch", function (params, targets, ctx) {
         }
 
         var item = null;
+        var itemScope = null;
+        // Bounds are provisional until every post-creation step succeeds.
+        // Publishing them straight into the aggregate here made rolled-back
+        // geometry survive in the report after its artwork was removed.
+        var pendingBounds = [];
         try {
             switch (type) {
                 case "line":
                     var lp = spec.points;
                     if (!lp || lp.length < 2) { skipped++; warnings.push("items[" + i + "] skipped: line needs 2 points"); continue; }
-                    item = targetLayer.pathItems.add();
+                    itemScope = mcpOwnBegin("element_create_batch:item[" + i + "]");
+                    item = mcpOwnAllocate(itemScope, targetLayer.pathItems.add(), "line");
                     item.setEntirePath([[abLeft + lp[0][0], abTop - lp[0][1]], [abLeft + lp[1][0], abTop - lp[1][1]]]);
                     item.closed = false;
                     item.filled = false;
-                    trackBounds(lp[0][0], lp[0][1]);
-                    trackBounds(lp[1][0], lp[1][1]);
+                    pendingBounds.push([lp[0][0], lp[0][1]]);
+                    pendingBounds.push([lp[1][0], lp[1][1]]);
                     break;
 
                 case "ellipse":
                     var cx = spec.cx || 0, cy = spec.cy || 0;
                     var rx = spec.rx || spec.r || 5, ry = spec.ry || spec.r || 5;
-                    item = targetLayer.pathItems.ellipse(abTop - cy + ry, abLeft + cx - rx, rx * 2, ry * 2);
-                    trackBounds(cx - rx, cy - ry);
-                    trackBounds(cx + rx, cy + ry);
+                    itemScope = mcpOwnBegin("element_create_batch:item[" + i + "]");
+                    item = mcpOwnAllocate(itemScope,
+                        targetLayer.pathItems.ellipse(abTop - cy + ry, abLeft + cx - rx, rx * 2, ry * 2), "ellipse");
+                    pendingBounds.push([cx - rx, cy - ry]);
+                    pendingBounds.push([cx + rx, cy + ry]);
                     break;
 
                 case "rect":
                     var bx = spec.x || 0, by = spec.y || 0;
                     var bw = spec.w || 50, bh = spec.h || 50;
-                    item = targetLayer.pathItems.rectangle(abTop - by, abLeft + bx, bw, bh);
-                    trackBounds(bx, by);
-                    trackBounds(bx + bw, by + bh);
+                    itemScope = mcpOwnBegin("element_create_batch:item[" + i + "]");
+                    item = mcpOwnAllocate(itemScope,
+                        targetLayer.pathItems.rectangle(abTop - by, abLeft + bx, bw, bh), "rect");
+                    pendingBounds.push([bx, by]);
+                    pendingBounds.push([bx + bw, by + bh]);
                     break;
 
                 case "polyline":
@@ -1242,12 +1745,13 @@ registerOpHandler("element_create_batch", function (params, targets, ctx) {
                     var pp = spec.points;
                     if (!pp || pp.length < 2) { skipped++; warnings.push("items[" + i + "] skipped: path needs >=2 points"); continue; }
                     if (pp.length > 8000) { skipped++; warnings.push("items[" + i + "] skipped: >8000 points"); continue; }
-                    item = targetLayer.pathItems.add();
+                    itemScope = mcpOwnBegin("element_create_batch:item[" + i + "]");
+                    item = mcpOwnAllocate(itemScope, targetLayer.pathItems.add(), "path");
                     _createPathWithHandles(item, pp, abLeft, abTop);
                     // Track bounds using anchor coordinates
                     for (var pi = 0; pi < pp.length; pi++) {
                         var bpt = (pp[pi].length === 3 && pp[pi][0] instanceof Array) ? pp[pi][0] : pp[pi];
-                        trackBounds(bpt[0], bpt[1]);
+                        pendingBounds.push([bpt[0], bpt[1]]);
                     }
                     item.closed = spec.closed === true;
                     if (!spec.closed) item.filled = false;
@@ -1259,10 +1763,10 @@ registerOpHandler("element_create_batch", function (params, targets, ctx) {
                     continue;
             }
 
-            // Assign ID
+            // Assign ID + register in heap (H1 invariant)
             var id = generateUUID();
-            item.note = "@mcp:id=" + id;
-            ids.push(id);
+            stampMcpId(item, id);
+            mcpOwnIdentify(itemScope, item, id);
 
             // Name
             if (params.name) {
@@ -1303,10 +1807,42 @@ registerOpHandler("element_create_batch", function (params, targets, ctx) {
                 item.opacity = Math.max(0, Math.min(100, opacityDef));
             }
 
+            // Record what was actually made, per item. The aggregate bounds
+            // below cannot show that one shape landed at a default size, so a
+            // caller who mis-spelled a geometry field had nothing to compare
+            // against their intent.
+            var actual = null;
+            try {
+                var vb = item.visibleBounds;
+                actual = [vb[0], vb[1], vb[2] - vb[0], Math.abs(vb[3] - vb[1])];
+            } catch (be) {}
+            mcpOwnCommit(itemScope);
+            // Publish identity, per-item data and aggregate geometry together,
+            // only after the item is no longer eligible for rollback.
+            for (var pbi = 0; pbi < pendingBounds.length; pbi++) {
+                trackBounds(pendingBounds[pbi][0], pendingBounds[pbi][1]);
+            }
+            createdItems.push({
+                index: i,
+                id: id,
+                typename: item.typename,
+                bounds: actual
+            });
+            ids.push(id);
             created++;
         } catch (e) {
             skipped++;
             warnings.push("items[" + i + "] error: " + e.message);
+            if (itemScope) {
+                var itemFailure = makeError(ErrorCodes.R_APPLY_FAILED,
+                    "element_create_batch item[" + i + "] failed: " + e.message,
+                    "apply");
+                _elementCleanupFailure(itemScope, itemFailure);
+                var itemCleanupFailures = mcpCleanupFailures(itemFailure);
+                for (var cfi = 0; cfi < itemCleanupFailures.length; cfi++) {
+                    cleanupFailures.push(itemCleanupFailures[cfi]);
+                }
+            }
         }
     }
 
@@ -1316,17 +1852,21 @@ registerOpHandler("element_create_batch", function (params, targets, ctx) {
         boundsResult = [bMinX, bMinY, bMaxX - bMinX, bMaxY - bMinY];
     }
 
-    return {
+    var batchResult = {
         ok: true,
         data: {
             created: created,
             skipped: skipped,
             failed: skipped,
             ids: ids,
-            bounds: boundsResult
+            bounds: boundsResult,
+            // Per-item identity and measured bounds, in request order.
+            items: createdItems
         },
         warnings: warnings
     };
+    mcpSetCleanupFailures(batchResult, cleanupFailures);
+    return batchResult;
 });
 
 // ==================== Element Modify ====================
@@ -1438,10 +1978,16 @@ registerOpHandler("element_modify", function (params, targets, ctx) {
             height: Math.round(firstModifiedItem.height * 100) / 100
         };
     }
+    var modifyOk = modified === targets.length;
     return {
-        ok: true,
+        ok: modifyOk,
         data: { modified: modified, total: targets.length, failed: targets.length - modified, position: posEcho },
-        warnings: warnings
+        warnings: warnings,
+        error: modifyOk ? null : makeError(
+            ErrorCodes.R_APPLY_FAILED,
+            "Modified " + modified + " of " + targets.length + " targets",
+            "apply"
+        ).error
     };
 });
 
@@ -1473,17 +2019,23 @@ registerOpHandler("element_delete", function (params, targets, ctx) {
         }
     }
 
+    var deleteOk = deleted === targets.length;
     return {
-        ok: deleted > 0 || targets.length === 0,
+        ok: deleteOk,
         data: { deleted: deleted, total: targets.length, failed: targets.length - deleted },
-        warnings: warnings
+        warnings: warnings,
+        error: deleteOk ? null : makeError(
+            ErrorCodes.R_APPLY_FAILED,
+            "Deleted " + deleted + " of " + targets.length + " targets",
+            "apply"
+        ).error
     };
 });
 
-// ==================== Element Replace (Atomic Swap) ====================
+// ==================== Element Replace (Verified Swap) ====================
 
 /**
- * Atomically replace a single element with new content.
+ * Replace a single element with new content while preserving known effects.
  * Uses a sandbox group pattern:
  *   1. Capture old item metadata (bounds, layer, z-order, visibility, locked)
  *   2. Create new content inside a temporary sandbox group
@@ -1518,23 +2070,48 @@ registerOpHandler("element_replace", function (params, targets, ctx) {
     if (typeof extractMcpId === "function") {
         oldId = extractMcpId(oldItem.note);
     }
-
-    // Unlock old item if locked (required for removal)
-    if (oldLocked) {
-        oldItem.locked = false;
+    if (!oldId && typeof mcpIssueHandle === "function") {
+        try {
+            var oldHandle = mcpIssueHandle(oldItem);
+            if (oldHandle.ok) oldId = oldHandle.record.handle;
+        } catch (e) { }
     }
 
-    // --- Create sandbox group on same layer ---
+    // Validate before creating the sandbox. These were formerly early returns
+    // from inside the ownership window, each with its own hand-written remove.
+    var type = params.type || "rect";
+    var validTypes = {
+        rect: 1, ellipse: 1, line: 1, polygon: 1, star: 1,
+        roundedRect: 1, text: 1, path: 1, polyline: 1
+    };
+    if (!validTypes[type]) {
+        return makeError(ErrorCodes.V_INVALID_PARAM_TYPE,
+            "Unknown element type for replace: " + type, "apply");
+    }
+    var pathPoints = params.points;
+    if ((type === "path" || type === "polyline") &&
+            (!pathPoints || pathPoints.length < 2)) {
+        return makeError(ErrorCodes.V_MISSING_REQUIRED_PARAM,
+            "Path requires >= 2 points", "apply");
+    }
+
+    // The sandbox owns its children while they are being constructed. Once the
+    // replacement leaves it, direct ownership resumes until the original is
+    // successfully removed. That deletion is the irreversible hand-off.
+    var replaceScope = mcpOwnBegin("element_replace");
     var sandbox = null;
     var newItem = null;
+    var newId = null;
+    var oldRemoved = false;
+    var oldUnlocked = false;
 
     try {
-        sandbox = oldLayer.groupItems.add();
+        sandbox = mcpOwnAllocate(replaceScope,
+            oldLayer.groupItems.add(), "replaceSandbox");
         sandbox.name = "__mcp_replace_sandbox__";
 
         // --- Build replacement inside sandbox using element_create params ---
-        var type = params.type || "rect";
-        var newId = params.id || generateUUID();
+        newId = params.id || generateUUID();
         var width = params.width || params.w || 100;
         var height = params.height || params.h || 100;
 
@@ -1556,10 +2133,14 @@ registerOpHandler("element_replace", function (params, targets, ctx) {
         // Create element inside sandbox
         switch (type) {
             case "rect":
-                newItem = sandbox.pathItems.rectangle(aiTop, aiLeft, width, height);
+                newItem = mcpOwnAllocate(replaceScope,
+                    sandbox.pathItems.rectangle(aiTop, aiLeft, width, height), "rect");
+                mcpOwnAbsorb(replaceScope, [newItem], sandbox);
                 break;
             case "ellipse":
-                newItem = sandbox.pathItems.ellipse(aiTop, aiLeft, width, height);
+                newItem = mcpOwnAllocate(replaceScope,
+                    sandbox.pathItems.ellipse(aiTop, aiLeft, width, height), "ellipse");
+                mcpOwnAbsorb(replaceScope, [newItem], sandbox);
                 break;
             case "line":
                 // Accept x1/y1 as aliases for start point (x/y)
@@ -1567,7 +2148,9 @@ registerOpHandler("element_replace", function (params, targets, ctx) {
                 var rly1 = params.y1 !== undefined ? params.y1 : y;
                 var rlx2 = params.x2 !== undefined ? params.x2 : rlx1 + width;
                 var rly2 = params.y2 !== undefined ? params.y2 : rly1;
-                newItem = sandbox.pathItems.add();
+                newItem = mcpOwnAllocate(replaceScope,
+                    sandbox.pathItems.add(), "line");
+                mcpOwnAbsorb(replaceScope, [newItem], sandbox);
                 newItem.setEntirePath([[abLeft + rlx1, abTop - rly1], [abLeft + rlx2, abTop - rly2]]);
                 newItem.closed = false;
                 newItem.filled = false;
@@ -1575,50 +2158,53 @@ registerOpHandler("element_replace", function (params, targets, ctx) {
             case "polygon":
                 var sides = params.sides || 6;
                 var radius = params.radius || 50;
-                newItem = sandbox.pathItems.polygon(aiLeft, aiTop, radius, sides);
+                newItem = mcpOwnAllocate(replaceScope,
+                    sandbox.pathItems.polygon(aiLeft, aiTop, radius, sides), "polygon");
+                mcpOwnAbsorb(replaceScope, [newItem], sandbox);
                 break;
             case "star":
                 var points = params.numPoints || params.points || 5;
                 var outerRadius = params.outerRadius || 50;
                 var innerRadius = params.innerRadius || 25;
-                newItem = sandbox.pathItems.star(aiLeft, aiTop, outerRadius, innerRadius, points);
+                newItem = mcpOwnAllocate(replaceScope,
+                    sandbox.pathItems.star(aiLeft, aiTop, outerRadius, innerRadius, points), "star");
+                mcpOwnAbsorb(replaceScope, [newItem], sandbox);
                 break;
             case "roundedRect":
                 var cornerRadius = params.cornerRadius || 10;
-                newItem = sandbox.pathItems.roundedRectangle(aiTop, aiLeft, width, height, cornerRadius, cornerRadius);
+                newItem = mcpOwnAllocate(replaceScope,
+                    sandbox.pathItems.roundedRectangle(
+                        aiTop, aiLeft, width, height, cornerRadius, cornerRadius
+                    ), "roundedRect");
+                mcpOwnAbsorb(replaceScope, [newItem], sandbox);
                 break;
             case "text":
-                var tf = sandbox.textFrames.add();
-                tf.contents = params.contents || params.text || "";
-                tf.position = [aiLeft, aiTop];
-                if (params.fontSize) tf.textRange.characterAttributes.size = params.fontSize;
+                newItem = mcpOwnAllocate(replaceScope,
+                    sandbox.textFrames.add(), "text");
+                mcpOwnAbsorb(replaceScope, [newItem], sandbox);
+                newItem.contents = params.contents || params.text || "";
+                newItem.position = [aiLeft, aiTop];
+                if (params.fontSize) newItem.textRange.characterAttributes.size = params.fontSize;
                 if (params.fontName) {
                     try {
-                        tf.textRange.characterAttributes.textFont =
+                        newItem.textRange.characterAttributes.textFont =
                             app.textFonts.getByName(params.fontName);
                     } catch (e) { /* font not found, keep default */ }
                 }
-                newItem = tf;
                 break;
             case "path":
             case "polyline":
-                var pathPoints = params.points;
-                if (!pathPoints || pathPoints.length < 2) {
-                    sandbox.remove();
-                    return makeError(ErrorCodes.V_MISSING_REQUIRED_PARAM, "Path requires >= 2 points", "apply");
-                }
-                newItem = sandbox.pathItems.add();
+                newItem = mcpOwnAllocate(replaceScope,
+                    sandbox.pathItems.add(), "path");
+                mcpOwnAbsorb(replaceScope, [newItem], sandbox);
                 _createPathWithHandles(newItem, pathPoints, abLeft, abTop);
                 newItem.closed = (type === "path") ? (params.closed !== false) : (params.closed === true);
                 break;
-            default:
-                sandbox.remove();
-                return makeError(ErrorCodes.V_INVALID_PARAM_TYPE,
-                    "Unknown element type for replace: " + type, "apply");
         }
 
-        // Assign MCP ID
-        newItem.note = "@mcp:id=" + newId;
+        // Assign MCP ID + register in heap (H1 invariant)
+        stampMcpId(newItem, newId);
+        mcpOwnIdentify(replaceScope, newItem, newId);
 
         // Set name if provided
         if (params.name) {
@@ -1663,22 +2249,43 @@ registerOpHandler("element_replace", function (params, targets, ctx) {
         sandbox.move(oldItem, ElementPlacement.PLACEAFTER);
 
         // 2. Move new item out of sandbox to the layer
-        newItem.move(oldLayer, ElementPlacement.PLACEBEFORE);
+        // Ownership changes before the move so either a thrown-before-move or
+        // a thrown-after-move host behavior still leaves the child removable.
+        mcpOwnDetach(replaceScope, newItem, sandbox);
+        // PLACEBEFORE/PLACEAFTER require an artwork anchor in Illustrator;
+        // a Layer is a container and rejects that placement form. Anchor the
+        // replacement to the original, whose removal then leaves it in the
+        // original's z-order slot.
+        newItem.move(oldItem, ElementPlacement.PLACEAFTER);
+        mcpOwnReconcileDetach(replaceScope, newItem);
 
         // 3. Inherit visibility from old item
         newItem.hidden = !oldVisible;
 
-        // 4. Tombstone old MCP ID, then remove old item
+        // 4. Dispose the empty sandbox before crossing the irreversible point.
+        var sandboxDisposal = mcpOwnDispose(replaceScope, sandbox);
+        if (!sandboxDisposal.ok) {
+            throw new Error("Could not remove replacement sandbox: " +
+                sandboxDisposal.failed[0].error);
+        }
+        sandbox = null;
+
+        // 5. Unlock only for the removal itself, then remove. Tombstoning is
+        // after DOM success: a failed removal must remain resolvable.
+        if (oldLocked) {
+            oldItem.locked = false;
+            oldUnlocked = true;
+        }
+        oldItem.remove();
+        oldRemoved = true;
+        mcpOwnRelease(replaceScope);
         if (oldId && typeof heapTombstone === "function") {
             heapTombstone(oldId);
         }
-        oldItem.remove();
 
-        // 5. Remove the now-empty sandbox
-        sandbox.remove();
-        sandbox = null;
-
-        // 6. Apply locked state from old item
+        // 6. Apply locked state from old item. The replacement has been
+        // released already, so a late failure cannot delete it after the
+        // original is gone.
         if (oldLocked) {
             newItem.locked = true;
         }
@@ -1689,20 +2296,37 @@ registerOpHandler("element_replace", function (params, targets, ctx) {
             data: {
                 typename: newItem.typename,
                 bounds: [newItem.left, newItem.top, newItem.width, newItem.height],
-                oldId: oldId
+                oldId: oldId,
+                ids: [newId],
+                deletedIds: oldId ? [oldId] : []
             }
         };
 
     } catch (e) {
-        // --- Failure path: clean up sandbox, old item untouched ---
-        if (sandbox) {
-            try { sandbox.remove(); } catch (ex) { }
+        // If removal already happened, the verified replacement is useful
+        // artwork and must survive. Report the exact partial effects.
+        if (oldRemoved) {
+            return {
+                ok: false,
+                id: newId,
+                data: {
+                    ids: newId ? [newId] : [],
+                    oldId: oldId,
+                    deletedIds: oldId ? [oldId] : [],
+                    partial: true
+                },
+                warnings: ["Replacement exists after a later cleanup failure"],
+                error: makeError(ErrorCodes.R_APPLY_FAILED,
+                    "element_replace partially completed: " + e.message, "apply").error
+            };
         }
-        // Restore locked state if we unlocked it
-        if (oldLocked) {
-            try { oldItem.locked = true; } catch (ex) { }
-        }
-        return makeError(ErrorCodes.R_APPLY_FAILED,
+        // Failure before the irreversible hand-off: final-state cleanup owns
+        // the report, and the original remains. If it had been unlocked for a
+        // failed removal, restoring that borrowed state is reported too.
+        var replaceFailure = makeError(ErrorCodes.R_APPLY_FAILED,
             "element_replace failed: " + e.message, "apply");
+        _elementReplaceRollback(replaceScope, replaceFailure, newItem);
+        _elementReplaceRestoreLock(oldItem, oldUnlocked, oldId, replaceFailure);
+        return replaceFailure;
     }
 });

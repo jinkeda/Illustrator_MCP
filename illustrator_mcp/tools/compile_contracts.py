@@ -50,6 +50,9 @@ def compute_checksum(schemas_json: str, errors_json: str) -> str:
 def schema_to_dict(op: OpSchema) -> dict:
     """Convert OpSchema to the legacy OP_PARAM_SCHEMAS dict format."""
     d = {
+        "route": op.route,
+        "backend": op.backend,
+        "requiresTargets": op.requires_targets,
         "required": op.required_params,
         "optional": op.optional_params,
         "types": op.types_dict,
@@ -131,6 +134,10 @@ def render_jsx(schemas_dict: dict, errors_dict: dict, checksum: str) -> str:
     lines.append("")
     lines.append("var OP_PARAM_SCHEMAS = " + _format_obj(schemas_dict, indent=0) + ";")
     lines.append("")
+    target_required = {name: True for name, schema in schemas_dict.items()
+                       if schema["requiresTargets"]}
+    lines.append("var TARGET_REQUIRED_OP = " + _format_obj(target_required, indent=0) + ";")
+    lines.append("")
 
     # Validation functions
     lines.append("// ==================== Validation Functions ====================")
@@ -199,68 +206,49 @@ function getValueType(val) {
  * @returns {{ok: boolean, errors: Array}}
  */
 function validateOpParams(task, params) {
-    var schema = OP_PARAM_SCHEMAS[task];
-    if (!schema) {
-        return { ok: true, errors: [] }; // Unknown task - skip validation
-    }
-
     var errors = [];
+    function fail(code, field, message) {
+        errors.push({code:code, operation:task, field:field,
+            message:task + "." + field + ": " + message, stage:"validate"});
+    }
+    var schema = Object.prototype.hasOwnProperty.call(OP_PARAM_SCHEMAS, task) ? OP_PARAM_SCHEMAS[task] : null;
+    if (!schema || schema.backend !== "jsx") {
+        fail("V008", "task", "Expected a supported JSX operation; read illustrator://ops");
+        return {ok:false, errors:errors};
+    }
+    if (params != null && (typeof params !== "object" || params instanceof Array)) {
+        fail("V007", "params", "Expected object");
+        return {ok:false, errors:errors};
+    }
     params = params || {};
-
-    // Check required parameters
-    if (schema.required) {
-        for (var i = 0; i < schema.required.length; i++) {
-            var key = schema.required[i];
-            if (params[key] === undefined || params[key] === null) {
-                errors.push({
-                    code: ErrorCodes.V_MISSING_REQUIRED_PARAM || "V006",
-                    message: "Missing required parameter: " + key,
-                    stage: "validate"
-                });
-            }
+    var i, key;
+    for (i = 0; i < schema.required.length; i++) {
+        key = schema.required[i];
+        if (params[key] == null) fail("V006", key, "Missing required parameter");
+    }
+    var known = [];
+    for (key in schema.types) {
+        if (Object.prototype.hasOwnProperty.call(schema.types, key)) known.push(key);
+    }
+    for (key in params) {
+        if (!Object.prototype.hasOwnProperty.call(params, key)) continue;
+        if (!Object.prototype.hasOwnProperty.call(schema.types, key)) {
+            fail("V008", key, "Unknown parameter '" + key + "'. Allowed: " + known.join(", "));
+            continue;
+        }
+        var value = params[key];
+        if (value == null || (typeof value === "object" && typeof value.$field === "string")) continue;
+        var expected = schema.types[key], actual = getValueType(value);
+        if (expected === "object" && value === false) continue;
+        if (actual !== expected || (actual === "number" && !isFinite(value))) {
+            fail("V007", key, "Expected finite " + expected + ", got " + actual);
+        } else if (schema.enumValues && schema.enumValues[key]) {
+            var allowed = schema.enumValues[key], found = false;
+            for (i = 0; i < allowed.length; i++) if (allowed[i] === value) found = true;
+            if (!found) fail("V008", key, "Expected one of: " + allowed.join(", "));
         }
     }
-
-    // Check parameter types
-    if (schema.types) {
-        for (var key in params) {
-            if (params.hasOwnProperty(key) && schema.types[key]) {
-                // Skip type check for $field descriptors
-                if (typeof isField === "function" && isField(params[key])) continue;
-                var expected = schema.types[key];
-                var actual = getValueType(params[key]);
-                if (actual !== "null" && actual !== expected) {
-                    errors.push({
-                        code: ErrorCodes.V_INVALID_PARAM_TYPE || "V007",
-                        message: "Parameter '" + key + "' expected " + expected + ", got " + actual,
-                        stage: "validate"
-                    });
-                }
-            }
-        }
-    }
-
-    // Check enum values
-    if (schema.enumValues) {
-        for (var key in schema.enumValues) {
-            if (params[key] !== undefined) {
-                var allowed = schema.enumValues[key];
-                var found = false;
-                for (var i = 0; i < allowed.length; i++) {
-                    if (allowed[i] === params[key]) { found = true; break; }
-                }
-                if (!found) {
-                    errors.push({
-                        code: ErrorCodes.V_SCHEMA_MISMATCH || "V008",
-                        message: "Parameter '" + key + "' must be one of: " + allowed.join(", "),
-                        stage: "validate"
-                    });
-                }
-            }
-        }
-    }
-
-    return { ok: errors.length === 0, errors: errors };
+    return {ok:errors.length === 0, errors:errors};
 }
 
 /**

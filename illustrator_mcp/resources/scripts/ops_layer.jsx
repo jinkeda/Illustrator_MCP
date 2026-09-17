@@ -1,4 +1,95 @@
 /**
+ * layer_reorder — move an EXISTING layer within the stack.
+ *
+ * Separate from layer_create deliberately. Creation is idempotent and returns
+ * early when the layer is already there, so it is the wrong place to hang a
+ * move: an operation named "create" that silently restacks existing artwork
+ * is a surprise, and folding the two together is what produced F13's
+ * do-nothing repair.
+ *
+ * @param {Object} params - {name, placement?: "top"|"bottom", above?, below?}
+ */
+registerOpHandler("layer_reorder", function (params, targets, ctx) {
+    var doc = ctx.doc;
+    var name = params.name;
+    var placement = params.placement || null;
+    var above = params.above || null;
+    var below = params.below || null;
+
+    if (!name || typeof name !== "string") {
+        return makeError(ErrorCodes.V_MISSING_REQUIRED_PARAM,
+            "Missing 'name' param for layer_reorder", "validate");
+    }
+    var given = 0;
+    if (placement) given++;
+    if (above) given++;
+    if (below) given++;
+    if (given !== 1) {
+        return makeError(ErrorCodes.V_INVALID_PARAM_TYPE,
+            "layer_reorder requires exactly one of 'placement', 'above', or " +
+            "'below' (got " + given + ")", "validate");
+    }
+    if (placement && placement !== "top" && placement !== "bottom") {
+        return makeError(ErrorCodes.V_INVALID_PARAM_TYPE,
+            "Unknown placement value: '" + placement + "', expected 'top' or 'bottom'",
+            "validate");
+    }
+
+    var layer = null, i;
+    for (i = 0; i < doc.layers.length; i++) {
+        if (doc.layers[i].name === name) { layer = doc.layers[i]; break; }
+    }
+    if (!layer) {
+        return makeError(ErrorCodes.R_LAYER_NOT_FOUND || ErrorCodes.R_APPLY_FAILED,
+            "Layer not found: " + name, "apply",
+            null, { requested: name, available: _layerNames(doc) });
+    }
+
+    var beforeIndex = layer.zOrderPosition;
+
+    if (placement === "top") {
+        layer.zOrder(ZOrderMethod.BRINGTOFRONT);
+    } else if (placement === "bottom") {
+        layer.zOrder(ZOrderMethod.SENDTOBACK);
+    } else {
+        var refName = above || below;
+        var ref = null;
+        for (i = 0; i < doc.layers.length; i++) {
+            if (doc.layers[i].name === refName) { ref = doc.layers[i]; break; }
+        }
+        if (!ref) {
+            return makeError(ErrorCodes.R_APPLY_FAILED,
+                "Reference layer not found for '" + (above ? "above" : "below") +
+                "': " + refName, "apply",
+                null, { requested: refName, available: _layerNames(doc) });
+        }
+        if (ref === layer) {
+            return makeError(ErrorCodes.V_INVALID_PARAM_VALUE,
+                "A layer cannot be positioned relative to itself: " + name,
+                "validate");
+        }
+        layer.move(ref, above ? ElementPlacement.PLACEBEFORE : ElementPlacement.PLACEAFTER);
+    }
+
+    // Verify the move actually happened rather than trusting the call.
+    var afterIndex = null;
+    for (i = 0; i < doc.layers.length; i++) {
+        if (doc.layers[i].name === name) { afterIndex = doc.layers[i].zOrderPosition; break; }
+    }
+
+    return {
+        ok: true,
+        data: {
+            name: name,
+            movedFrom: beforeIndex,
+            movedTo: afterIndex,
+            moved: beforeIndex !== afterIndex,
+            order: _layerNames(doc)
+        }
+    };
+});
+
+/**
  * ops_layer.jsx - Layer Operations
  * Part of Illustrator MCP SOC Framework
  * 
@@ -56,62 +147,104 @@ registerOpHandler("layer_create", function (params, targets, ctx) {
     // Check if layer already exists (idempotent)
     for (var i = 0; i < doc.layers.length; i++) {
         if (doc.layers[i].name === name) {
+            // The layer exists, so nothing is created — and the positioning
+            // arguments below are never reached.
+            //
+            // They used to be dropped in silence: layer_create with
+            // {name: "Background", placement: "bottom"} on an existing layer
+            // returned a plain success while the layer stayed exactly where it
+            // was. That is why the documented "move the background to the
+            // back" repair did nothing (F13). An ignored input must be
+            // reported, and reordering has its own operation.
+            var ignored = [];
+            if (placement) ignored.push("placement");
+            if (above) ignored.push("above");
+            if (below) ignored.push("below");
+
+            var existingWarnings = ["Layer already exists: " + name];
+            if (ignored.length > 0) {
+                existingWarnings.push(
+                    "Positioning argument(s) ignored because no layer was " +
+                    "created: " + ignored.join(", ") +
+                    ". Use layer_reorder to move an existing layer.");
+            }
             return {
                 ok: true,
-                data: { name: name, existed: true, index: doc.layers[i].zOrderPosition },
-                warnings: ["Layer already exists: " + name]
+                data: {
+                    name: name, existed: true,
+                    index: doc.layers[i].zOrderPosition,
+                    positioningApplied: false,
+                    ignoredParams: ignored
+                },
+                warnings: existingWarnings
             };
         }
     }
 
+    // OR05. The catch reported the failure and left the layer: `layers.add()`
+    // succeeds, then the rename throws, and an unnamed layer stays in the
+    // document while the caller is told nothing was created.
+    //
+    // Placement is resolved first. A reference layer that does not exist is
+    // knowable without creating anything, and the first version of this
+    // migration committed straight after the rename — so a missing reference
+    // returned an error and kept the layer, which is the same retention in a
+    // different place.
+    var refLayer = null;
+    var refPlacement = null;
+    if (above || below) {
+        var wanted = above || below;
+        for (var ri = 0; ri < doc.layers.length; ri++) {
+            if (doc.layers[ri].name === wanted) {
+                refLayer = doc.layers[ri];
+                break;
+            }
+        }
+        if (!refLayer) {
+            // Both messages spelled out rather than assembled: the wording a
+            // caller sees should not change as a side effect of moving this
+            // lookup earlier, and two existing tests pin these exact strings.
+            if (above) {
+                return makeError(ErrorCodes.R_APPLY_FAILED,
+                    "Reference layer not found for 'above': " + wanted, "apply",
+                    null, { requested: wanted, available: _layerNames(doc) });
+            }
+            return makeError(ErrorCodes.R_APPLY_FAILED,
+                "Reference layer not found for 'below': " + wanted, "apply",
+                null, { requested: wanted, available: _layerNames(doc) });
+        }
+        refPlacement = above ? ElementPlacement.PLACEBEFORE
+                             : ElementPlacement.PLACEAFTER;
+    }
+
+    var layerScope = mcpOwnBegin("layer_create");
     var layer;
     try {
         layer = doc.layers.add();
+        mcpOwnAllocate(layerScope, layer, "layer");
         layer.name = name;
-    } catch (e) {
-        return makeError(ErrorCodes.R_APPLY_FAILED,
-            "Failed to create layer '" + name + "': " + e.message, "apply",
-            null, { layerCount: doc.layers.length, docName: doc.name });
-    }
 
-    // Position relative to another layer (fail loudly if ref not found)
-    if (above) {
-        var foundAbove = false;
-        for (var i = 0; i < doc.layers.length; i++) {
-            if (doc.layers[i].name === above) {
-                layer.move(doc.layers[i], ElementPlacement.PLACEBEFORE);
-                foundAbove = true;
-                break;
-            }
-        }
-        if (!foundAbove) {
-            return makeError(ErrorCodes.R_APPLY_FAILED,
-                "Reference layer not found for 'above': " + above, "apply",
-                null, { requested: above, available: _layerNames(doc) });
-        }
-    } else if (below) {
-        var foundBelow = false;
-        for (var i = 0; i < doc.layers.length; i++) {
-            if (doc.layers[i].name === below) {
-                layer.move(doc.layers[i], ElementPlacement.PLACEAFTER);
-                foundBelow = true;
-                break;
-            }
-        }
-        if (!foundBelow) {
-            return makeError(ErrorCodes.R_APPLY_FAILED,
-                "Reference layer not found for 'below': " + below, "apply",
-                null, { requested: below, available: _layerNames(doc) });
-        }
-    } else if (placement === "bottom") {
-        layer.move(doc.layers[doc.layers.length - 1], ElementPlacement.PLACEAFTER);
-    } else if (placement === "top") {
-        // Safer top move: use PLACEBEFORE on current topmost layer
-        if (doc.layers.length > 1) {
+        // Placement is part of what was asked for, so it is inside the scope:
+        // a move that throws leaves a layer in the wrong place, which is not
+        // the layer the caller requested.
+        if (refLayer) {
+            layer.move(refLayer, refPlacement);
+        } else if (placement === "bottom") {
+            layer.move(doc.layers[doc.layers.length - 1], ElementPlacement.PLACEAFTER);
+        } else if (placement === "top" && doc.layers.length > 1) {
+            // Safer top move: use PLACEBEFORE on current topmost layer.
+            // A single layer is already at the top — no-op.
             layer.move(doc.layers[0], ElementPlacement.PLACEBEFORE);
         }
-        // else: only layer, already at top — no-op
+    } catch (e) {
+        var layerCleanup = mcpOwnCleanup(layerScope);
+        var layerDetail = { layerCount: doc.layers.length, docName: doc.name };
+        if (!layerCleanup.ok) layerDetail.cleanupFailures = layerCleanup.failed;
+        return makeError(ErrorCodes.R_APPLY_FAILED,
+            "Failed to create layer '" + name + "': " + e.message, "apply",
+            null, layerDetail);
     }
+    mcpOwnCommit(layerScope);
 
     return {
         ok: true,

@@ -22,6 +22,7 @@
       "type": "string"
     },
     "RetryPolicy": {
+      "additionalProperties": false,
       "description": "Stage-specific retry configuration.",
       "properties": {
         "maxAttempts": {
@@ -73,13 +74,64 @@
       ],
       "title": "RetryableStage",
       "type": "string"
+    },
+    "TaskKind": {
+      "description": "Task kind determines collect behavior.\n\n- SELECTION: Normal collect; empty selection → early-return (default)\n- CREATION: Skip collect; items=[]; compute/apply must handle empty input",
+      "enum": [
+        "selection",
+        "creation"
+      ],
+      "title": "TaskKind",
+      "type": "string"
     }
   },
+  "additionalProperties": false,
   "description": "Task execution options.",
   "properties": {
+    "mode": {
+      "default": "apply",
+      "description": "'apply' executes the batch. 'validate' checks operation contracts without invoking handlers or changing document state on the default structured SOC route; it is not applied to custom callbacks.",
+      "enum": [
+        "apply",
+        "validate"
+      ],
+      "title": "Mode",
+      "type": "string"
+    },
+    "stopOnError": {
+      "default": false,
+      "description": "Stop the default structured SOC batch after the first failed operation. Custom callback pipelines do not consume this option.",
+      "title": "Stoponerror",
+      "type": "boolean"
+    },
+    "kind": {
+      "$ref": "#/$defs/TaskKind",
+      "default": "selection",
+      "description": "Callback-pipeline collection mode: 'selection' collects items and 'creation' skips collection. The default SOC executor forces creation."
+    },
+    "skipCollect": {
+      "default": false,
+      "description": "Low-level callback-pipeline control that skips collection; kind='creation' implies it. The default SOC executor already skips collection.",
+      "title": "Skipcollect",
+      "type": "boolean"
+    },
+    "minCreated": {
+      "anyOf": [
+        {
+          "minimum": 0,
+          "type": "integer"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "Callback-pipeline safety rail checked after apply; warns when the reported modified count is below this value. Not applied to the default SOC route, whose apply callback is absent.",
+      "title": "Mincreated"
+    },
     "dryRun": {
       "default": false,
-      "description": "Preview changes without applying",
+      "description": "NOT SUPPORTED (T03). Setting this rejects the request before execution. It formerly claimed 'no changes applied' while batch operations had already mutated the document during the compute stage. Use a read-only tool to inspect state instead.",
       "title": "Dryrun",
       "type": "boolean"
     },
@@ -92,11 +144,17 @@
     "idPolicy": {
       "$ref": "#/$defs/IdPolicy",
       "default": "none",
-      "description": "ID assignment policy"
+      "description": "ID assignment policy used during the callback pipeline's collect stage. The default SOC route skips that outer collection."
+    },
+    "assignIds": {
+      "default": false,
+      "description": "Deprecated compatibility alias for opt-in ID assignment during the callback pipeline's collect stage. Prefer idPolicy='opt_in'.",
+      "title": "Assignids",
+      "type": "boolean"
     },
     "timeout": {
       "default": 30,
-      "description": "Timeout in seconds",
+      "description": "Compatibility field retained and validated, but not currently used as illustrator_execute_task's host deadline.",
       "maximum": 300,
       "minimum": 1,
       "title": "Timeout",
@@ -112,12 +170,55 @@
         }
       ],
       "default": null,
-      "description": "Retry policy (null = no retry)"
+      "description": "Compatibility field retained and validated, but currently ignored: illustrator_execute_task does not call the retry wrapper."
     },
     "idempotency": {
       "$ref": "#/$defs/Idempotency",
       "default": "unknown",
-      "description": "Caller-declared idempotency (affects retry behavior)"
+      "description": "Compatibility field retained for retry metadata, but currently ignored because illustrator_execute_task does not call the retry wrapper."
+    },
+    "rollback": {
+      "anyOf": [
+        {
+          "type": "boolean"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": false,
+      "description": "Unsupported recovery request; true is rejected before dispatch. False and null are accepted as disabled compatibility forms.",
+      "title": "Rollback"
+    },
+    "snapshot": {
+      "anyOf": [
+        {
+          "type": "boolean"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": false,
+      "description": "Unsupported recovery request; true is rejected before dispatch. False and null are accepted as disabled compatibility forms.",
+      "title": "Snapshot"
+    },
+    "recompute": {
+      "anyOf": [
+        {
+          "type": "boolean"
+        },
+        {
+          "additionalProperties": true,
+          "type": "object"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "Unsupported destructive replay request; any enabled request is rejected.",
+      "title": "Recompute"
     }
   },
   "title": "TaskOptions",

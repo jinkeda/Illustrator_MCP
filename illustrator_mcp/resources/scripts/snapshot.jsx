@@ -1,14 +1,49 @@
 /**
- * snapshot.jsx - Document State Snapshot/Restore
+ * snapshot.jsx - Partial property snapshot / restore
  * Part of Illustrator MCP SOC Framework
- * 
- * Provides safer rollback than undo-based approach:
- * - Captures serializable state before batch execution
- * - Restores state on failure instead of relying on undo history
- * 
+ *
+ * SCOPE — read this before relying on it for recovery (T04).
+ *
+ * This is a shallow PROPERTY snapshot of @mcp:id-tagged page items. It is
+ * NOT a document transaction and cannot make an arbitrary batch reversible.
+ *
+ * What it captures, per tagged item:
+ *   position (left/top), size (width/height), opacity, visibility, locked,
+ *   filled + fill colour, stroked + stroke colour + stroke width.
+ * Plus, for layers: name, visible, locked, colour — captured but NOT restored.
+ *
+ * What it CANNOT restore, and therefore what rollback cannot undo:
+ *   - deleted objects (nothing here can recreate one)
+ *   - path anchors and Bézier handles; any geometry change beyond the
+ *     bounding box
+ *   - text content, character/paragraph runs, or applied fonts
+ *   - parent/child structure: grouping, ungrouping, clipping masks
+ *   - z-order and layer membership or ordering
+ *   - appearance beyond a single flat fill/stroke (effects, multiple fills,
+ *     gradients, patterns, transparency modes)
+ *   - anything on an UNTAGGED item: captureItemState returns null when there
+ *     is no @mcp:id, so `options.mcpOnly: false` does NOT widen capture.
+ *
+ * Restore is also best effort per item: it can partially apply and then fail,
+ * leaving an item in a mixed state. Always inspect the returned
+ * {restored, failed, notFound, errors} — a call that throws nothing has still
+ * not necessarily restored anything.
+ *
+ * Use it for what it is: reverting simple property edits on tagged items.
+ * For real recovery, take an explicit document checkpoint (T29).
+ *
  * @requires mcp_id (for extractMcpId)
- * @version 1.0.0
+ * @version 1.1.0
  */
+
+/**
+ * One-line description of what a snapshot-based recovery actually covers.
+ * Included in recovery results so callers do not over-read a "restored".
+ */
+var SNAPSHOT_RECOVERY_SCOPE =
+    "captured properties (position, size, opacity, visibility, lock, flat " +
+    "fill/stroke) of @mcp:id-tagged items only; does not cover deletions, " +
+    "path geometry, text, grouping, or z-order";
 
 // ==================== Color Serialization ====================
 
@@ -124,14 +159,18 @@ function captureItemState(item) {
 }
 
 /**
- * Capture document state snapshot.
- * Only captures items with MCP IDs for targeted restore.
- * 
+ * Capture a partial property snapshot. See the module header for the full
+ * list of what is and is not covered.
+ *
  * @param {Document} doc - Active document
  * @param {Object} options - Capture options
- * @param {boolean} options.mcpOnly - Only capture MCP-managed items (default: true)
+ * @param {boolean} options.mcpOnly - NO EFFECT. Retained for call-site
+ *   compatibility only. captureItemState returns null for any item without an
+ *   @mcp:id, so passing false does NOT capture untagged artwork (T04).
  * @param {Function} options.clock - Injectable clock for P2 compliance (default: new Date().getTime)
- * @returns {Object} Snapshot object
+ * @returns {Object} Snapshot object — {version, timestamp, docName,
+ *   artboardIndex, items, layers, warnings}. `layers` is captured but never
+ *   restored by restoreSnapshot.
  */
 function captureSnapshot(doc, options) {
     options = options || {};
@@ -246,6 +285,9 @@ function restoreSnapshot(doc, snapshot, options) {
             error: "Duplicate MCP IDs found: " + duplicateIds.slice(0, 5).join(", "),
             restored: 0,
             failed: 0,
+            captured: snapshot.items.length,
+            complete: false,
+            scope: SNAPSHOT_RECOVERY_SCOPE,
             notFound: [],
             errors: []
         };
@@ -331,10 +373,16 @@ function restoreSnapshot(doc, snapshot, options) {
         }
     }
 
+    // T04: report completeness explicitly.  `ok: true` means every captured
+    // property was reapplied — NOT that the document is back to its prior
+    // state.  `scope` says what was in range at all.
     var result = {
         ok: failed === 0,
         restored: restored,
         failed: failed,
+        captured: snapshot.items.length,
+        complete: failed === 0 && restored === snapshot.items.length,
+        scope: SNAPSHOT_RECOVERY_SCOPE,
         notFound: notFound.slice(0, 10),
         errors: errors.slice(0, 5)
     };
@@ -350,4 +398,5 @@ if (typeof $.global !== "undefined") {
     $.global.restoreSnapshot = restoreSnapshot;
     $.global.serializeColor = serializeColor;
     $.global.deserializeColor = deserializeColor;
+    $.global.SNAPSHOT_RECOVERY_SCOPE = SNAPSHOT_RECOVERY_SCOPE;
 }

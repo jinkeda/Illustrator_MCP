@@ -10,6 +10,7 @@ Parameterized templates expose a .substitute(**kw) API via _CompatTemplate for
 backward compatibility with existing consumers.
 """
 
+import json
 from string import Template
 
 from illustrator_mcp.tools.templates import wrap_script
@@ -34,8 +35,12 @@ class _CompatTemplate:
 # ==================== Document Operations ====================
 
 
-def _build_create_document(width, height, color_space, title_line=""):
+def _build_create_document(width, height, color_space, title_line="",
+                           requested_name="null"):
     body = f"""
+        // Invalidate heap — previous document's DOM references are stale
+        if ($.global.mcpHeap) $.global.mcpHeap = {{index: {{}}, docName: null}};
+
         var preset = new DocumentPreset();
         preset.width = {width};
         preset.height = {height};
@@ -56,12 +61,24 @@ def _build_create_document(width, height, color_space, title_line=""):
         var h = {height};
         ab.artboardRect = [0, 0, w, -h];
 
+        // Report the name the document actually has, next to the one asked
+        // for. Illustrator normalises some titles — a name containing a
+        // backslash is treated as a path and only the last segment survives
+        // ("a\\b" becomes "b") — and silently returning only `doc.name` gave
+        // no way to tell a normalised name from the requested one.
+        var requestedName = {requested_name};
         var data = {{
             name: doc.name,
+            requestedName: requestedName,
+            nameSubstituted: !!(requestedName && requestedName !== doc.name),
             width: doc.width,
             height: doc.height,
             artboardRect: ab.artboardRect
         }};
+        if (data.nameSubstituted) {{
+            data.warnings = ["Document name normalised by Illustrator: requested '" +
+                             requestedName + "', created as '" + doc.name + "'"];
+        }}
     """
     return wrap_script(body, "create_document", require_document=False)
 
@@ -141,20 +158,8 @@ EXPORT_FILE = _CompatTemplate(_build_export_file)
 
 
 def _build_export_pdf(path):
-    body = f"""
-        var file = new File("{path}");
-        var opts = new PDFSaveOptions();
-        doc.saveAs(file, opts);
-        var abIdx = doc.artboards.getActiveArtboardIndex();
-        var abRect = doc.artboards[abIdx].artboardRect;
-        var data = {{
-            path: "{path}",
-            format: "PDF",
-            width_pt: abRect[2] - abRect[0],
-            height_pt: Math.abs(abRect[3] - abRect[1])
-        }};
-    """
-    return wrap_script(body, "export_pdf")
+    """PDF saveAs cannot honor the source-preservation contract (SR06)."""
+    return wrap_script('throw new Error("Native PDF export disabled; use a separate working copy with Illustrator PDF save.");', "export_pdf")
 
 
 EXPORT_PDF = _CompatTemplate(_build_export_pdf)
@@ -388,7 +393,25 @@ GET_SELECTION_INFO = wrap_script(
 # ==================== Import/Place ====================
 
 # Single template for both import_image and place_file (they're 95% identical)
-def _build_place_item(path, x, neg_y, y, linked, embed_line="", marker_line="", error_prefix="File"):
+def _build_place_item(path, x, y, linked, embed_line="", marker_line="",
+                      error_prefix="File", id_line="", id_json="null",
+                      tmp_name="__mcp_placing__", neg_y=None):
+    """Place a file, keeping identity and geometry across an embed().
+
+    Two measured Illustrator behaviours drive the shape of this script:
+
+    * ``embed()`` replaces the artwork and leaves the original reference as a
+      **silent zombie** — it keeps answering ``typename === "PlacedItem"`` with
+      its pre-embed ``width`` and ``note`` and never throws, so anything read
+      or written through it afterwards is stale rather than obviously broken.
+    * ``embed()`` **discards ``note``** but **preserves ``name``**. The trace
+      marker used to be written to ``note`` after the embed, through the zombie
+      reference, so it never reached the real artwork and tracing an embedded
+      image always failed with "Trace target not found".
+
+    ``neg_y`` is accepted and ignored; placement is now artboard-relative like
+    every other operation, so the caller no longer supplies a negated y.
+    """
     body = f"""
         var file = new File("{path}");
         if (!file.exists) {{
@@ -397,18 +420,75 @@ def _build_place_item(path, x, neg_y, y, linked, embed_line="", marker_line="", 
                 error: {{ message: "{error_prefix} not found: {path}", operation: __op }}
             }});
         }}
+
+        // Artboard-relative, y-down: the convention every executor operation
+        // uses (`abLeft + x`, `abTop - y`). Placement used to set
+        // document-absolute coordinates (`top = -y`), so place_file(x, y) and
+        // element_create(x, y) disagreed, and anything placed at a positive y
+        // landed off the artboard entirely.
+        var abIdx = doc.artboards.getActiveArtboardIndex();
+        var abRect = doc.artboards[abIdx].artboardRect;   // [left, top, right, bottom]
+        var abLeft = abRect[0];
+        var abTop = abRect[1];
+
         var placed = doc.placedItems.add();
         placed.file = file;
-        placed.left = {x};
-        placed.top = {neg_y};
+        placed.left = abLeft + {x};
+        placed.top = abTop - {y};
+
+        // Captured BEFORE the embed, while the reference is still real.
+        var parent = placed.parent;
+        var placedWidth = placed.width;
+        var placedHeight = placed.height;
+        var placedLeft = placed.left;
+        var placedTop = placed.top;
+
+        // `name` survives embed(), `note` does not, so identity travels on the
+        // name and is restamped on whatever actually survives.
+        var priorName = placed.name;
+        var tmpName = "{tmp_name}";
+        placed.name = tmpName;
+
+        var item = placed;
+        var embedded = false;
         {embed_line}
+
+        if (embedded) {{
+            item = null;
+            for (var pi = 0; pi < parent.pageItems.length; pi++) {{
+                __mcp_check();
+                if (parent.pageItems[pi].name === tmpName) {{
+                    item = parent.pageItems[pi];
+                    break;
+                }}
+            }}
+            if (!item) {{
+                return JSON.stringify({{
+                    ok: false,
+                    error: {{
+                        message: "Embedded artwork could not be located after embed(). " +
+                                 "It is still in the document; retrying would place a second copy.",
+                        operation: __op
+                    }}
+                }});
+            }}
+        }}
+
+        item.name = priorName;
+        {id_line}
         {marker_line}
+
         var data = {{
+            id: {id_json},
+            typename: item.typename,
+            embedded: embedded,
             path: "{path}",
             linked: {linked},
+            artboard: abIdx,
             position: {{x: {x}, y: {y}}},
-            width: placed.width,
-            height: placed.height
+            origin: {{left: placedLeft, top: placedTop}},
+            width: placedWidth,
+            height: placedHeight
         }};
     """
     return wrap_script(body, "place_item")
@@ -419,7 +499,8 @@ PLACE_ITEM = _CompatTemplate(_build_place_item)
 
 # Image Trace: vectorize a placed raster image
 # Finds target by UUID marker (not fragile index), retries expandTracing() directly.
-def _build_trace_placed_image(marker, preset, expand):
+def _build_trace_placed_image(marker, preset, expand, placed_id=None):
+    placed_id_js = json.dumps(placed_id) if placed_id else "null"
     body = f"""
     var marker = "{marker}";
     var warnings = [];
@@ -447,8 +528,19 @@ def _build_trace_placed_image(marker, preset, expand):
         }}
     }}
     if (!target) {{
+        // The placement already happened. Name what is in the document so a
+        // caller retries the trace against existing artwork instead of
+        // placing a second copy of the image.
         return JSON.stringify({{
-            ok: false, error: {{ message: "Trace target not found (marker: " + marker + ")", operation: __op }}
+            ok: false,
+            error: {{
+                message: "Trace target not found (marker: " + marker + "). " +
+                         "The image was placed and is still in the document" +
+                         ({placed_id_js} ? " as " + {placed_id_js} : "") +
+                         "; trace it directly rather than placing it again.",
+                operation: __op
+            }},
+            data: {{ placedId: {placed_id_js}, placementRetained: true }}
         }});
     }}
 
@@ -460,25 +552,61 @@ def _build_trace_placed_image(marker, preset, expand):
         }});
     }}
 
-    // 3. Trace
+    // 3. Validate the preset BEFORE tracing.
+    //
+    // `loadFromPreset` does not throw on an unknown name — it silently leaves
+    // the previous options in place. The old code relied on a catch that never
+    // fired, so an unavailable or misspelled preset produced a confident
+    // "preset: <requested>" in the result while the trace used something else
+    // entirely. Checking the name first also means a bad preset costs nothing:
+    // the image is not traced at all, so no artwork is half-converted.
+    var presetName = {preset};
+    var available = [];
+    try {{ available = app.tracingPresetsList; }} catch (le) {{ available = []; }}
+    if (presetName) {{
+        var known = false;
+        for (var ai = 0; ai < available.length; ai++) {{
+            if (available[ai] === presetName) {{ known = true; break; }}
+        }}
+        if (!known) {{
+            return JSON.stringify({{
+                ok: false,
+                error: {{
+                    message: "Trace preset not found: '" + presetName + "'. Nothing was traced. " +
+                             "Available presets: " + available.join(", "),
+                    operation: __op
+                }},
+                data: {{ placedId: {placed_id_js}, placementRetained: true,
+                        availablePresets: available }}
+            }});
+        }}
+    }}
+
+    // 4. Trace
     doc.selection = null;
     target.selected = true;
     var plugin = target.trace();
 
-    // 4. Apply preset (safe fallback on locale/version mismatch)
-    var presetName = {preset};
+    var appliedPreset = null;
     if (presetName) {{
-        try {{
-            plugin.tracing.tracingOptions.loadFromPreset(presetName);
-        }} catch(pe) {{
-            warnings.push("Preset not found: " + presetName + "; using default");
-        }}
+        try {{ plugin.tracing.tracingOptions.loadFromPreset(presetName); }}
+        catch (pe) {{ warnings.push("Preset could not be loaded: " + presetName); }}
+    }}
+    // Read back what the tracing engine actually holds rather than repeating
+    // the request back to the caller.
+    try {{ appliedPreset = String(plugin.tracing.tracingOptions.preset); }}
+    catch (re) {{ appliedPreset = null; }}
+    if (presetName && appliedPreset && appliedPreset !== presetName) {{
+        warnings.push("Trace preset substituted: requested '" + presetName +
+                      "', applied '" + appliedPreset + "'");
     }}
 
     var result = {{
         trace_marker: marker,
         target_typename: tn,
-        preset: presetName || "(default)",
+        preset: {{ requested: presetName || null,
+                  applied: appliedPreset,
+                  substituted: !!(presetName && appliedPreset && appliedPreset !== presetName) }},
         warnings: warnings
     }};
 
@@ -505,8 +633,14 @@ def _build_trace_placed_image(marker, preset, expand):
             }});
         }}
 
-        // Tag with MCP ID (trace: namespace)
-        var mcpId = "trace:" + marker.replace("@mcp:trace_target=", "");
+        // Tag with the caller's requested identity when there is one.
+        //
+        // Tracing consumes the placed raster, so the traced group IS the
+        // imported artwork. Stamping only a generated "trace:" ID meant the
+        // ID the caller asked for named nothing in the document afterwards,
+        // and the reported identity could not be used to target the result.
+        var mcpId = {placed_id_js} ? {placed_id_js}
+                                   : ("trace:" + marker.replace("@mcp:trace_target=", ""));
         group.note = "@mcp:id=" + mcpId;
         group.name = "traced_group";
 
@@ -540,11 +674,48 @@ TRACE_PLACED_IMAGE = _CompatTemplate(_build_trace_placed_image)
 
 # ==================== Undo/Redo ====================
 
+# Undo/redo report UNKNOWN effects, not a successful transaction.
+#
+# These used to return {message: "Undo successful"} — a job-sized claim for an
+# operation whose scope this server cannot know. Worse, undo leaves **silent
+# zombies**: a deleted-then-restored item's old reference still answers with
+# typename "PathItem" and never throws, so handles issued before an undo can
+# resolve to artwork that is no longer what they described. Every handle is
+# therefore invalidated here; MCP IDs, which live in the artwork's own note,
+# survive because they are stored in the document itself.
+_HISTORY_NOTE = (
+    "Illustrator's undo stack is not aligned with MCP jobs: one app.undo() "
+    "reverts one Illustrator history step, which may be part of an operation, "
+    "a whole operation, or something a person did in the UI. The reverted "
+    "scope is not knowable from this server."
+)
+
+_HISTORY_EPILOGUE = """
+        var invalidated = null;
+        if (typeof mcpHandleInvalidateAll === "function") {
+            invalidated = mcpHandleInvalidateAll(action + "_history_step");
+        }
+        var data = {
+            action: action,
+            applied: applied,
+            requested: requested,
+            scope: "unknown",
+            effects: "unknown",
+            note: __NOTE__,
+            handlesInvalidated: invalidated ? invalidated.invalidated : 0,
+            handleEpoch: invalidated ? invalidated.epoch : null
+        };
+""".replace("__NOTE__", json.dumps(_HISTORY_NOTE))
+
+
 UNDO = wrap_script(
     """
+        var action = "undo";
+        var requested = 1;
+        var applied = 0;
         app.undo();
-        var data = { message: "Undo successful" };
-    """,
+        applied = 1;
+    """ + _HISTORY_EPILOGUE,
     "undo",
     require_document=False,
 )
@@ -552,9 +723,12 @@ UNDO = wrap_script(
 
 REDO = wrap_script(
     """
+        var action = "redo";
+        var requested = 1;
+        var applied = 0;
         app.redo();
-        var data = { message: "Redo successful" };
-    """,
+        applied = 1;
+    """ + _HISTORY_EPILOGUE,
     "redo",
     require_document=False,
 )
@@ -579,11 +753,12 @@ def _build_history_multi(count, action_name, action_method):
 
         if (succeeded === 0) throw new Error("No history step executed");
 
-        var data = {{
-            message: action + " " + succeeded + "/" + count + " actions",
-            succeeded: succeeded,
-            failed: failed
-        }};
+        var requested = count;
+        var applied = succeeded;
+    """ + _HISTORY_EPILOGUE + """
+        data.failed = failed;
+        data.succeeded = succeeded;
+        data.message = action + " " + succeeded + "/" + count + " actions";
     """
     return wrap_script(body, "history_multi", require_document=False)
 
@@ -629,7 +804,7 @@ UPDATE_LINKED_ITEMS = wrap_script(
 # ==================== Place/Embed (Editable) ====================
 
 # Open/copy/paste workflow for embedding editable content (PDFs)
-def _build_embed_editable(path, x, neg_y, y):
+def _build_embed_editable(path, x, y, id_line="", id_json="null", neg_y=None):
     body = f"""
         var targetDoc = doc;
         var targetDocName = targetDoc.name;
@@ -671,14 +846,24 @@ def _build_embed_editable(path, x, neg_y, y):
             group = sel[0];
         }}
 
-        // Position
-        group.position = [{x}, {neg_y}];
+        // Position: artboard-relative and y-down, matching every other
+        // operation. This used to be document-absolute ([x, -y]), so editable
+        // imports landed somewhere different from identically-addressed
+        // element_create calls, and off the artboard for any positive y.
+        var abIdx = targetDoc.artboards.getActiveArtboardIndex();
+        var abRect = targetDoc.artboards[abIdx].artboardRect;   // [L, T, R, B]
+        group.position = [abRect[0] + {x}, abRect[1] - {y}];
 
         var bounds = group.geometricBounds;
         targetDoc.selection = null;
 
+        {id_line}
+
         var data = {{
             type: "editable",
+            id: {id_json},
+            typename: group.typename,
+            artboard: abIdx,
             position: [{x}, {y}],
             width: bounds[2] - bounds[0],
             height: bounds[1] - bounds[3]
@@ -693,29 +878,76 @@ EMBED_EDITABLE = _CompatTemplate(_build_embed_editable)
 # ==================== Export (Standard formats: PNG/JPG/SVG) ====================
 
 def _build_export_standard(ab_index_js, options_class, scale_opts, clip_opt,
-                           path, export_type, scale, fmt_name, artboard_clip):
+                           path, export_type, scale, fmt_name, artboard_clip,
+                           clip_supported="false"):
+    """Export to PNG/JPEG/SVG.
+
+    Two things this has to get right that it previously did not:
+
+    * **The active artboard is temporary context.** Selecting the artboard to
+      export changed the document's active artboard and never put it back, so
+      an export silently repositioned the user's document (and every later
+      operation that reads the active artboard). It is now restored in a
+      ``finally``.
+    * **Report the clipping that was applied, not the clipping requested.**
+      ``artboard_clipping`` echoed the request for every format, but only PNG
+      ever set the option. A JPEG export with ``artboard_only=True`` reported
+      the artboard's dimensions while writing the whole artwork bounds:
+      reported 300x200, actual 1292x402.
+    """
     body = f"""
         var abIdx = {ab_index_js};
-        doc.artboards.setActiveArtboardIndex(abIdx);
+        if (abIdx < 0 || abIdx >= doc.artboards.length) {{
+            return JSON.stringify({{
+                ok: false,
+                error: {{ message: "Artboard index " + abIdx + " is out of range; " +
+                                   "the document has " + doc.artboards.length + " artboard(s).",
+                         operation: __op }}
+            }});
+        }}
 
-        var opts = new {options_class}();{scale_opts}
-        {clip_opt}
+        var prevAbIdx = doc.artboards.getActiveArtboardIndex();
+        var exportError = null;
+        var data = null;
+        try {{
+            doc.artboards.setActiveArtboardIndex(abIdx);
 
-        var file = new File("{path}");
-        doc.exportFile(file, {export_type}, opts);
+            var opts = new {options_class}();{scale_opts}
+            {clip_opt}
 
-        var abRect = doc.artboards[abIdx].artboardRect;
-        var exportWidth = Math.round((abRect[2] - abRect[0]) * {scale} / 100);
-        var exportHeight = Math.round(Math.abs(abRect[3] - abRect[1]) * {scale} / 100);
+            var file = new File("{path}");
+            doc.exportFile(file, {export_type}, opts);
 
-        var data = {{
-            path: file.fsName,
-            format: "{fmt_name}",
-            artboard_index: abIdx,
-            artboard_clipping: {artboard_clip},
-            width: exportWidth,
-            height: exportHeight
-        }};
+            var abRect = doc.artboards[abIdx].artboardRect;
+            var exportWidth = Math.round((abRect[2] - abRect[0]) * {scale} / 100);
+            var exportHeight = Math.round(Math.abs(abRect[3] - abRect[1]) * {scale} / 100);
+
+            data = {{
+                path: file.fsName,
+                format: "{fmt_name}",
+                artboard_index: abIdx,
+                artboard_clipping_requested: {artboard_clip},
+                artboard_clipping: {clip_supported} ? {artboard_clip} : false,
+                artboard_clipping_supported: {clip_supported},
+                artboardWidthPoints: abRect[2] - abRect[0],
+                artboardHeightPoints: Math.abs(abRect[3] - abRect[1]),
+                artboardFrame: "document",
+                artboardUnits: "pt",
+                width: exportWidth,
+                height: exportHeight,
+                dimensions_describe: {clip_supported} && {artboard_clip}
+                    ? "the exported file" : "the artboard, not necessarily the file"
+            }};
+        }} catch (ee) {{
+            exportError = ee;
+        }} finally {{
+            // Restore the caller's artboard whether or not the export worked.
+            try {{ doc.artboards.setActiveArtboardIndex(prevAbIdx); }} catch (re) {{
+                throw new Error("Export artboard restoration failed: " + String(re) + (exportError ? "; export error: " + String(exportError) : ""));
+            }}
+        }}
+
+        if (exportError) throw exportError;
     """
     return wrap_script(body, "export_standard")
 
@@ -739,153 +971,19 @@ CHECKPOINT_ACTION = _CompatTemplate(_build_checkpoint_action)
 
 # ==================== Reference Overlay ====================
 
-# Uses %s format for JSON payload injection.
-# SET_REFERENCE is special: it takes a JSON payload argument to the IIFE.
-# We keep it as a raw string with %s but wrap the body in wrap_script style.
+# One producer, retaining both historical template entry points.
 def _build_set_reference(payload_json):
-    # This template uses an IIFE argument pattern: (function(payload){...})(%s)
-    # We cannot use wrap_script directly because of the IIFE argument.
-    # Instead, we build a similar envelope manually but with the canonical shape.
-    return """
-(function(payload) {
-    var __op = "set_reference";
-    try {
-        if (!app.documents.length) {
-            return JSON.stringify({
-                ok: false,
-                error: { message: "NO_DOCUMENT: No document is open. Please create or open a document first.",
-                         line: null, operation: __op }
-            });
-        }
-        var doc = app.activeDocument;
-        var layerName = payload.layer_name;
-        var originalActiveName = doc.activeLayer.name;
-
-        // 1. Pre-flight file check
-        var imgFile = null;
-        if (payload.file_path) {
-            imgFile = new File(payload.file_path);
-            if (!imgFile.exists) {
-                return JSON.stringify({
-                    ok: false,
-                    error: { message: "File not found: " + payload.file_path, operation: __op }
-                });
-            }
-        }
-
-        // 2. Idempotent cleanup (unlock before delete, 0-layer guard)
-        try {
-            var existing = doc.layers.getByName(layerName);
-            existing.locked = false;
-            existing.visible = true;
-            if (doc.layers.length === 1) {
-                doc.layers.add().name = "Drawing Layer";
-            }
-            existing.remove();
-        } catch(e) {}
-
-        // 3. Clear-only mode
-        if (!payload.file_path) {
-            if (doc.layers.length > 0) doc.activeLayer = doc.layers[0];
-            return JSON.stringify({
-                ok: true, data: { status: "cleared", layer_name: layerName }, operation: __op
-            });
-        }
-
-        // 4. Create layer, send to bottom
-        var refLayer = doc.layers.add();
-        refLayer.name = layerName;
-        if (doc.layers.length > 1) {
-            refLayer.move(doc.layers[doc.layers.length - 1], ElementPlacement.PLACEAFTER);
-        }
-        refLayer.printable = false;
-
-        // 5. Place image, opacity on ITEM (not layer)
-        var pItem = refLayer.placedItems.add();
-        pItem.file = imgFile;
-
-        // 6. Redraw to materialize bounds
-        app.redraw();
-
-        pItem.opacity = payload.opacity;
-
-        // 7. Proportional fit + center on active artboard
-        var abRect = doc.artboards[doc.artboards.getActiveArtboardIndex()].artboardRect;
-        var abW = Math.abs(abRect[2] - abRect[0]);
-        var abH = Math.abs(abRect[3] - abRect[1]);
-
-        if (payload.fit && pItem.width > 0 && pItem.height > 0) {
-            var scale = Math.min(abW / pItem.width, abH / pItem.height) * 100;
-            pItem.resize(scale, scale);
-        }
-        pItem.position = [
-            abRect[0] + (abW - pItem.width) / 2,
-            abRect[1] - (abH - pItem.height) / 2
-        ];
-
-        // 8. Lock layer
-        refLayer.locked = true;
-
-        // 9. Restore active layer by NAME (avoids stale object refs)
-        var safeLayerFound = false;
-        for (var i = 0; i < doc.layers.length; i++) {
-            var L = doc.layers[i];
-            if (L.name === originalActiveName && L.name !== layerName
-                && !L.locked && L.visible) {
-                doc.activeLayer = L;
-                safeLayerFound = true;
-                break;
-            }
-        }
-        if (!safeLayerFound) {
-            for (var i = 0; i < doc.layers.length; i++) {
-                var L = doc.layers[i];
-                if (L.name !== layerName && !L.locked && L.visible) {
-                    doc.activeLayer = L;
-                    safeLayerFound = true;
-                    break;
-                }
-            }
-        }
-        if (!safeLayerFound) {
-            var drawLayer = doc.layers.add();
-            drawLayer.name = "Drawing Layer";
-            doc.activeLayer = drawLayer;
-        }
-
-        return JSON.stringify({
-            ok: true, data: {
-                status: "set", layer_name: layerName,
-                opacity: payload.opacity,
-                artboard: { width: abW, height: abH },
-                image_bounds: {
-                    left: pItem.left, top: pItem.top,
-                    width: pItem.width, height: pItem.height,
-                    center_x: pItem.left + pItem.width / 2,
-                    center_y: pItem.top - pItem.height / 2
-                },
-                spatial_context: {
-                    artboard: "X: 0 to " + Math.round(abW) + ", Y: 0 to " + Math.round(abH),
-                    reference_bounds: "X: " + Math.round(pItem.left - abRect[0]) + ", Y: " + Math.round(abRect[1] - pItem.top) + ", Width: " + Math.round(pItem.width) + ", Height: " + Math.round(pItem.height),
-                    instruction: "Use Y-down user coordinates (origin at artboard top-left). Keep all generated path coordinates within the artboard bounds."
-                }
-            },
-            operation: __op
-        });
-    } catch (e) {
-        return JSON.stringify({
-            ok: false,
-            error: { message: e.toString(), line: e.line || null, operation: __op }
-        });
-    }
-})(""" + payload_json + """);
-"""
+    return SET_REFERENCE % payload_json
 
 
-# The legacy constant — uses %s formatting from the consumer side
 SET_REFERENCE = """
 (function(payload) {
     var __op = "set_reference";
+    var existing = null, refLayer = null, drawLayer = null;
+    var existingLocked = false, existingVisible = true;
+    var referenceRemoved = false, committed = false;
+    var originalActiveName = null;
+    var cleanupErrors = [];
     try {
         if (!app.documents.length) {
             return JSON.stringify({
@@ -896,44 +994,65 @@ SET_REFERENCE = """
         }
         var doc = app.activeDocument;
         var layerName = payload.layer_name;
-        var originalActiveName = doc.activeLayer.name;
+        originalActiveName = doc.activeLayer.name;
 
-        // 1. Pre-flight file check
+        // Validate the action before any document changes, even for direct use.
+        if (payload.action !== "set" && payload.action !== "clear") {
+            throw new Error("Use action='set' with a file or action='clear' alone.");
+        }
+        if (payload.action === "set" &&
+            (typeof payload.file_path !== "string" || !/\\S/.test(payload.file_path))) {
+            throw new Error("action='set' requires a nonempty file_path.");
+        }
+        if (payload.action === "clear" &&
+            (payload.hasOwnProperty("file_path") || payload.hasOwnProperty("opacity") ||
+             payload.hasOwnProperty("fit"))) {
+            throw new Error("action='clear' accepts no placement arguments.");
+        }
+
+        // File preflight does not touch the existing reference.
         var imgFile = null;
-        if (payload.file_path) {
+        if (payload.action === "set") {
             imgFile = new File(payload.file_path);
-            if (!imgFile.exists) {
-                return JSON.stringify({
-                    ok: false,
-                    error: { message: "File not found: " + payload.file_path, operation: __op }
-                });
+            if (!imgFile.exists) throw new Error("File not found: " + payload.file_path);
+        }
+        // Enumeration distinguishes absence from failures accessing/removing a layer.
+        for (var n = 0; n < doc.layers.length; n++) {
+            if (doc.layers[n].name === layerName) {
+                existing = doc.layers[n];
+                existingLocked = existing.locked;
+                existingVisible = existing.visible;
+                break;
             }
         }
 
-        // 2. Idempotent cleanup (unlock before delete, 0-layer guard)
-        try {
-            var existing = doc.layers.getByName(layerName);
-            existing.locked = false;
-            existing.visible = true;
-            if (doc.layers.length === 1) {
-                doc.layers.add().name = "Drawing Layer";
+        if (payload.action === "clear") {
+            if (existing) {
+                if (doc.layers.length === 1) {
+                    drawLayer = doc.layers.add();
+                    drawLayer.name = "Drawing Layer";
+                }
+                existing.locked = false;
+                existing.visible = true;
+                existing.remove();
+                referenceRemoved = true;
             }
-            existing.remove();
-        } catch(e) {}
-
-        // 3. Clear-only mode
-        if (!payload.file_path) {
-            if (doc.layers.length > 0) doc.activeLayer = doc.layers[0];
             return JSON.stringify({
-                ok: true, data: { status: "cleared", layer_name: layerName }, operation: __op
+                ok: true, data: { status: "cleared", layer_name: layerName,
+                                 reference_removed: referenceRemoved }, operation: __op
             });
         }
 
         // 4. Create layer, send to bottom
-        var refLayer = doc.layers.add();
-        refLayer.name = layerName;
+        refLayer = doc.layers.add();
+        refLayer.name = layerName + " (pending)";
         if (doc.layers.length > 1) {
+            // Illustrator refuses layer.move relative to a locked reference.
+            // Keep its artwork intact and restore its flags after ordering;
+            // the outer failure path restores them if move itself throws.
+            if (existing) { existing.locked = false; existing.visible = true; }
             refLayer.move(doc.layers[doc.layers.length - 1], ElementPlacement.PLACEAFTER);
+            if (existing) { existing.locked = existingLocked; existing.visible = existingVisible; }
         }
         refLayer.printable = false;
 
@@ -967,7 +1086,7 @@ SET_REFERENCE = """
         var safeLayerFound = false;
         for (var i = 0; i < doc.layers.length; i++) {
             var L = doc.layers[i];
-            if (L.name === originalActiveName && L.name !== layerName
+            if (L.name === originalActiveName && L !== existing && L !== refLayer
                 && !L.locked && L.visible) {
                 doc.activeLayer = L;
                 safeLayerFound = true;
@@ -977,7 +1096,7 @@ SET_REFERENCE = """
         if (!safeLayerFound) {
             for (var i = 0; i < doc.layers.length; i++) {
                 var L = doc.layers[i];
-                if (L.name !== layerName && !L.locked && L.visible) {
+                if (L !== existing && L !== refLayer && !L.locked && L.visible) {
                     doc.activeLayer = L;
                     safeLayerFound = true;
                     break;
@@ -985,13 +1104,13 @@ SET_REFERENCE = """
             }
         }
         if (!safeLayerFound) {
-            var drawLayer = doc.layers.add();
+            drawLayer = doc.layers.add();
             drawLayer.name = "Drawing Layer";
             doc.activeLayer = drawLayer;
         }
 
-        return JSON.stringify({
-            ok: true, data: {
+        // Materialize result fields before committing the replacement.
+        var resultData = {
                 status: "set", layer_name: layerName,
                 opacity: payload.opacity,
                 artboard: { width: abW, height: abH },
@@ -1006,14 +1125,72 @@ SET_REFERENCE = """
                     reference_bounds: "X: " + Math.round(pItem.left - abRect[0]) + ", Y: " + Math.round(abRect[1] - pItem.top) + ", Width: " + Math.round(pItem.width) + ", Height: " + Math.round(pItem.height),
                     instruction: "Use Y-down user coordinates (origin at artboard top-left). Keep all generated path coordinates within the artboard bounds."
                 }
-            },
-            operation: __op
-        });
+        };
+        refLayer.name = layerName;
+        if (existing) {
+            existing.locked = false;
+            existing.visible = true;
+            existing.remove();
+            referenceRemoved = true;
+        }
+        committed = true;
+        return JSON.stringify({ok: true, data: resultData, operation: __op});
     } catch (e) {
+        // Remove only this call's staged layer. Never delete the old reference
+        // as compensation; failed cleanup must remain visible in the result.
+        if (refLayer && !committed) {
+            try {
+                refLayer.locked = false;
+                refLayer.remove();
+                refLayer = null;
+            } catch (cleanupError) {
+                cleanupErrors.push("Replacement cleanup: " + cleanupError.toString());
+                try { refLayer.name = layerName + " (pending)"; }
+                catch (nameError) { cleanupErrors.push("Replacement rename: " + nameError.toString()); }
+            }
+        }
+        if (existing && !referenceRemoved) {
+            try {
+                existing.locked = existingLocked;
+                existing.visible = existingVisible;
+            } catch (restoreError) {
+                cleanupErrors.push("Reference state restore: " + restoreError.toString());
+            }
+        }
+        if (drawLayer && !referenceRemoved) {
+            try { drawLayer.remove(); drawLayer = null; }
+            catch (drawError) { cleanupErrors.push("Drawing layer cleanup: " + drawError.toString()); }
+        }
+        if (originalActiveName !== null) {
+            try { doc.activeLayer = doc.layers.getByName(originalActiveName); }
+            catch (activeError) { cleanupErrors.push("Active layer restore: " + activeError.toString()); }
+        }
         return JSON.stringify({
             ok: false,
+            data: { status: "failed", reference_removed: referenceRemoved,
+                    replacement_retained: refLayer !== null,
+                    drawing_layer_retained: drawLayer !== null,
+                    cleanup_errors: cleanupErrors },
             error: { message: e.toString(), line: e.line || null, operation: __op }
         });
     }
 })(%s);
 """
+
+
+def with_user_interaction(script: str) -> str:
+    """Scope alert suppression to one host evaluation; never implies cancellation.
+
+    Restore in host-side finally, preserving the primary failure if restoration
+    also fails. An unknown evaluation must be reconciled before any further call.
+    """
+    import json
+    return """(function(){
+var previous=app.userInteractionLevel, value, primary=null, cleanup=null;
+try { app.userInteractionLevel=UserInteractionLevel.DONTDISPLAYALERTS; value=eval(SCRIPT); }
+catch(e) { primary=e; }
+finally { try { app.userInteractionLevel=previous; } catch(restoreError) { cleanup=restoreError; } }
+if(primary) { if(cleanup) primary.message += "; interaction restoration failed: " + String(cleanup); throw primary; }
+if(cleanup) throw cleanup;
+return value;
+})()""".replace("SCRIPT", json.dumps(script))

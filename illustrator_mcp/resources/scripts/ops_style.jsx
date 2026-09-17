@@ -17,6 +17,67 @@
  * @version 1.1.0
  */
 
+// ==================== Shared Color Helpers ====================
+
+/**
+ * Clamp an RGB channel value to 0-255 (integer).
+ * @param {number} v
+ * @returns {number}
+ */
+function _clampChannel(v) {
+    if (v < 0) return 0;
+    if (v > 255) return 255;
+    return Math.round(v);
+}
+
+/**
+ * Parse color from canonical nested or compat flat params.
+ *
+ * Priority:  params[key] → flat r/g/b → null
+ * Sentinels: false/null = "disable" (hard off, beats compat fallback)
+ * Validation: strict for nested (empty object = error), lenient for flat (default 0)
+ *
+ * Available to ops_text.jsx via include load order.
+ *
+ * @param {Object} params - handler params
+ * @param {string} key - "fill" or "stroke"
+ * @returns {{ color: RGBColor|null, disable: boolean, error: string|null }}
+ */
+function _parseColorParam(params, key) {
+    var src = params[key];
+
+    // ── Sentinel: explicit disable ──
+    if (src === false || src === null) {
+        return { color: null, disable: true, error: null };
+    }
+
+    // ── Canonical nested: strict validation ──
+    if (src && typeof src === "object") {
+        if (src.r == null && src.g == null && src.b == null) {
+            return {
+                color: null, disable: false,
+                error: key + " object provided but missing r/g/b channels"
+            };
+        }
+        var c = new RGBColor();
+        c.red = _clampChannel(src.r != null ? src.r : 0);
+        c.green = _clampChannel(src.g != null ? src.g : 0);
+        c.blue = _clampChannel(src.b != null ? src.b : 0);
+        return { color: c, disable: false, error: null };
+    }
+
+    // ── Compat flat: lenient (default 0) ──
+    if (params.r != null || params.g != null || params.b != null) {
+        var c2 = new RGBColor();
+        c2.red = _clampChannel(params.r != null ? params.r : 0);
+        c2.green = _clampChannel(params.g != null ? params.g : 0);
+        c2.blue = _clampChannel(params.b != null ? params.b : 0);
+        return { color: c2, disable: false, error: null };
+    }
+
+    return { color: null, disable: false, error: null };
+}
+
 // ==================== Style Set Fill ====================
 
 registerOpHandler("style_set_fill", function (params, targets, ctx) {
@@ -24,30 +85,34 @@ registerOpHandler("style_set_fill", function (params, targets, ctx) {
         return { ok: true, data: { modified: 0 }, warnings: ["No targets to style"] };
     }
 
+    var parsed = _parseColorParam(params, "fill");
+
+    // Disable sentinel: remove fill
+    if (parsed.disable) {
+        var removed = 0;
+        for (var d = 0; d < targets.length; d++) {
+            try { targets[d].filled = false; removed++; } catch (e) { }
+        }
+        return { ok: true, data: { modified: removed } };
+    }
+
+    // Validation error (e.g., empty object)
+    if (parsed.error) {
+        return makeError(ErrorCodes.V_INVALID_PARAM_VALUE || "V009", parsed.error, "validate");
+    }
+
+    // No color provided
+    if (!parsed.color) {
+        return makeError(ErrorCodes.V_MISSING_REQUIRED_PARAM,
+            "Missing color: use fill:{r,g,b} or flat r,g,b", "validate");
+    }
+
     var modified = 0;
     var warnings = [];
 
-    // Parse color
-    var color = null;
-    if (params.r != null || params.g != null || params.b != null) {
-        color = new RGBColor();
-        color.red = (params.r != null) ? params.r : 0;
-        color.green = (params.g != null) ? params.g : 0;
-        color.blue = (params.b != null) ? params.b : 0;
-    } else if (params.color) {
-        color = new RGBColor();
-        color.red = (params.color.r != null) ? params.color.r : 0;
-        color.green = (params.color.g != null) ? params.color.g : 0;
-        color.blue = (params.color.b != null) ? params.color.b : 0;
-    }
-
-    if (!color) {
-        return makeError(ErrorCodes.V_MISSING_REQUIRED_PARAM, "Missing color params (r, g, b)", "apply");
-    }
-
     for (var i = 0; i < targets.length; i++) {
         try {
-            targets[i].fillColor = color;
+            targets[i].fillColor = parsed.color;
             targets[i].filled = true;
             modified++;
         } catch (e) {
@@ -65,29 +130,37 @@ registerOpHandler("style_set_stroke", function (params, targets, ctx) {
         return { ok: true, data: { modified: 0 }, warnings: ["No targets to style"] };
     }
 
+    var parsed = _parseColorParam(params, "stroke");
+
+    // Disable sentinel: remove stroke
+    if (parsed.disable) {
+        var removed = 0;
+        for (var d = 0; d < targets.length; d++) {
+            try { targets[d].stroked = false; removed++; } catch (e) { }
+        }
+        return { ok: true, data: { modified: removed } };
+    }
+
+    // Validation error
+    if (parsed.error) {
+        return makeError(ErrorCodes.V_INVALID_PARAM_VALUE || "V009", parsed.error, "validate");
+    }
+
+    // Stroke width: nested > flat > default  (use != null so 0 is valid)
+    var strokeWidth = 1; // default
+    if (params.stroke && typeof params.stroke === "object" && params.stroke.width != null) {
+        strokeWidth = params.stroke.width;
+    } else if (params.width != null) {
+        strokeWidth = params.width;
+    }
+
     var modified = 0;
     var warnings = [];
 
-    // Parse color
-    var color = null;
-    if (params.r !== undefined || params.g !== undefined || params.b !== undefined) {
-        color = new RGBColor();
-        color.red = params.r || 0;
-        color.green = params.g || 0;
-        color.blue = params.b || 0;
-    } else if (params.color) {
-        color = new RGBColor();
-        color.red = params.color.r || 0;
-        color.green = params.color.g || 0;
-        color.blue = params.color.b || 0;
-    }
-
-    var strokeWidth = params.width || 1;
-
     for (var i = 0; i < targets.length; i++) {
         try {
-            if (color) {
-                targets[i].strokeColor = color;
+            if (parsed.color) {
+                targets[i].strokeColor = parsed.color;
             }
             targets[i].stroked = true;
             targets[i].strokeWidth = strokeWidth;
@@ -540,34 +613,93 @@ registerOpHandler("style_set_gradient", function (params, targets, ctx) {
     var gradType = params.type === "radial" ? GradientType.RADIAL : GradientType.LINEAR;
     var gradName = params.name || ("MCP_grad_" + generateUUID().substr(0, 8));
 
+    // OR05. A gradient is a document resource, and this handler either makes
+    // one or reuses the user's. Only the one it makes is its own: rolling back
+    // a reused gradient, or the stops added to it, would undo state the
+    // operation merely borrowed.
+    var gradScope = mcpOwnBegin("style_set_gradient");
+    var createdGradient = false;
+    var addedStops = [];
+
     // Reuse existing gradient by name (prevents document resource leak)
     var gradient = null;
     try { gradient = doc.gradients.getByName(gradName); } catch (e) { /* not found */ }
-    if (!gradient) {
-        gradient = doc.gradients.add();
-        gradient.name = gradName;
-    }
-    gradient.type = gradType;
+    try {
+        if (!gradient) {
+            gradient = doc.gradients.add();
+            mcpOwnAllocate(gradScope, gradient, "gradient");
+            createdGradient = true;
+            gradient.name = gradName;
+        }
+        gradient.type = gradType;
 
-    // Configure stops — add extras if needed, remove extras
-    while (gradient.gradientStops.length < params.stops.length) {
-        gradient.gradientStops.add();
-    }
-    // Remove excess stops (iterate in reverse)
-    while (gradient.gradientStops.length > params.stops.length) {
-        gradient.gradientStops[gradient.gradientStops.length - 1].remove();
+        // Configure stops — add extras if needed, remove extras
+        while (gradient.gradientStops.length < params.stops.length) {
+            var addedStop = gradient.gradientStops.add();
+            mcpOwnAllocate(gradScope, addedStop, "gradientStop");
+            addedStops.push(addedStop);
+        }
+        // Remove excess stops (iterate in reverse)
+        while (gradient.gradientStops.length > params.stops.length) {
+            gradient.gradientStops[gradient.gradientStops.length - 1].remove();
+        }
+
+        for (var s = 0; s < params.stops.length; s++) {
+            var c = new RGBColor();
+            c.red = params.stops[s].r || 0;
+            c.green = params.stops[s].g || 0;
+            c.blue = params.stops[s].b || 0;
+            gradient.gradientStops[s].color = c;
+            gradient.gradientStops[s].rampPoint = params.stops[s].pos !== undefined
+                ? params.stops[s].pos
+                : Math.round(s * 100 / (params.stops.length - 1));
+        }
+    } catch (gradientError) {
+        var gradientCleanup;
+        var retained = null;
+        if (createdGradient) {
+            // The stops live inside the gradient, so removing it takes them:
+            // one removal, and a record that says so.
+            mcpOwnAbsorb(gradScope, addedStops, gradient);
+            gradientCleanup = mcpOwnCleanup(gradScope);
+        } else {
+            // The gradient is the user's. Ownership cleanup would DELETE it,
+            // and deleting a document resource this operation only looked up
+            // is the one outcome that must not happen — the same rule that
+            // stops a rollback destroying grouped originals.
+            //
+            // Preserved from deletion is not the same as untouched, and the
+            // report must not claim the stronger thing. By the time anything
+            // in the block above can throw, `gradient.type` has already been
+            // assigned, and stops may have been added, removed or
+            // recoloured. None of that is undone: ownership knows how to
+            // remove what it made, not how to restore what it changed, and
+            // restoring a document resource's prior state is a different
+            // mechanism that does not exist here. Disclose the residue
+            // rather than let a caller read "failed" as "nothing changed".
+            gradientCleanup = { ok: true, failed: [] };
+            mcpOwnRelease(gradScope);
+            retained = {
+                resource: "gradient",
+                name: gradName,
+                reused: true,
+                reason: "an existing gradient was left partly reconfigured; " +
+                        "its previous stops and type were not restored"
+            };
+        }
+        var gradientFailure = makeError(ErrorCodes.R_APPLY_FAILED,
+            "Failed to configure gradient '" + gradName + "': " +
+            gradientError.message, "apply", null,
+            retained ? { retained: retained } : null);
+        if (!gradientCleanup.ok) {
+            mcpSetCleanupFailures(gradientFailure, gradientCleanup.failed);
+        }
+        return gradientFailure;
     }
 
-    for (var s = 0; s < params.stops.length; s++) {
-        var c = new RGBColor();
-        c.red = params.stops[s].r || 0;
-        c.green = params.stops[s].g || 0;
-        c.blue = params.stops[s].b || 0;
-        gradient.gradientStops[s].color = c;
-        gradient.gradientStops[s].rampPoint = params.stops[s].pos !== undefined
-            ? params.stops[s].pos
-            : Math.round(s * 100 / (params.stops.length - 1));
-    }
+    // Configured. A gradient this handler made is now the document's, and one
+    // it reused never was.
+    mcpOwnRelease(gradScope);
 
     var modified = 0;
     var warnings = [];

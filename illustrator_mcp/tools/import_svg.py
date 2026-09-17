@@ -8,18 +8,22 @@ This tool is for importing existing SVG path data only.
 import hashlib
 import json
 import logging
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Literal, Optional, Union
 
+from illustrator_mcp.tools.base import MutationInputBase
 from pydantic import Field
 
 from illustrator_mcp.shared import mcp
+from illustrator_mcp.results import finalize_tool_result
+from mcp.types import CallToolResult
 from illustrator_mcp.proxy_client import execute_script_with_context, format_envelope
-from illustrator_mcp.tools.base import ToolInputBase
+from illustrator_mcp.tools.base import declare_effects, ToolInputBase
+from illustrator_mcp.tools._models import ColorRGB, StrokeSpec
 
 logger = logging.getLogger(__name__)
 
 
-class PathImportSvgInput(ToolInputBase):
+class PathImportSvgInput(MutationInputBase):
     """Input for path_import_svg tool."""
 
     d: str = Field(
@@ -39,6 +43,28 @@ class PathImportSvgInput(ToolInputBase):
         description="Optional name for the imported path item."
     )
 
+    # ── Appearance fields (trichotomy: None / False / value) ──
+
+    fill: Optional[Union[ColorRGB, Literal[False]]] = Field(
+        default=None,
+        description="Fill color. None=pipeline default, False=no fill, "
+                    "{r,g,b}=force color."
+    )
+    stroke: Optional[Union[StrokeSpec, Literal[False]]] = Field(
+        default=None,
+        description="Stroke color. None=pipeline default, False=no stroke, "
+                    "{r,g,b,width?}=force color."
+    )
+
+    # ── Identity ──
+
+    id: Optional[str] = Field(
+        default=None,
+        description="User-specified MCP ID. If provided, used as @mcp:id "
+                    "instead of auto-generated UUID. Must be unique — "
+                    "collisions raise an error."
+    )
+
 
 from illustrator_mcp.tools.base import TOOL_ANNOTATIONS
 
@@ -46,7 +72,7 @@ _SVG_NAME = "illustrator_path_import_svg"
 
 
 @mcp.tool(name=_SVG_NAME, annotations=TOOL_ANNOTATIONS[_SVG_NAME])
-async def illustrator_path_import_svg(params: PathImportSvgInput) -> str:
+async def illustrator_path_import_svg(params: PathImportSvgInput) -> CallToolResult:
     """Import an SVG path d attribute into the active document.
 
     CONTRACT: readOnly=False, destructive=False, idempotent=False, openWorld=False
@@ -56,20 +82,42 @@ async def illustrator_path_import_svg(params: PathImportSvgInput) -> str:
       - Complex outlines, organic shapes, arcs described in SVG syntax
 
     EXAMPLES:
-      illustrator_path_import_svg(d="M 10 50 C 20 20, 80 20, 90 50 Z")
-      illustrator_path_import_svg(d="M 0 0 L 100 0 L 100 100 Z", fill={r: 255, g: 0, b: 0})
+      A curve:
+        {"params": {"d": "M 10 50 C 20 20, 80 20, 90 50 Z"}}
+      Filled red:
+        {"params": {"d": "M 0 0 L 100 0 L 100 100 Z", "fill": {"r": 255, "g": 0, "b": 0}}}
+      Stroked with no fill:
+        {
+          "params": {
+            "d": "M 0 0 L 50 50 L 100 0",
+            "stroke": {
+              "r": 0,
+              "g": 0,
+              "b": 0,
+              "width": 2
+            },
+            "fill": false
+          }
+        }
+      With an explicit id for later targeting:
+        {"params": {"d": "M 0 0 L 100 0 L 100 100 Z", "id": "triangle"}}
 
     NOTES:
       - Parses SVG d string server-side, converts arcs to cubic Beziers
       - Safety limits: 50,000 chars, 5,000 segments, 100 subpaths, +/-100,000 coords
       - Returned bounds are [left, top, right, bottom] in Illustrator's native Y-up space
       - For new shapes prefer illustrator_execute_task + element_create with smooth:true
+      - fill/stroke: None=leave default, False=force off, {r,g,b}=force color
+      - id: must be unique; collision with existing @mcp:id raises an error
     """
     # F5: Track mutation cadence — lazy import avoids import-order risk
     from illustrator_mcp.tools.execute import _counter
-    _counter.increment()
-    try:
+    from illustrator_mcp.execution.logical_job import run_logical_job
+    async def body(job):
+        _counter.increment()
         return await _path_import_svg_impl(params)
+    try:
+        return await run_logical_job(_SVG_NAME, params, body)
     except Exception:
         _counter.decrement()
         raise
@@ -143,6 +191,15 @@ async def _path_import_svg_impl(params: PathImportSvgInput) -> str:
     if params.name:
         spec["name"] = params.name
 
+    # ── Wire appearance (fill/stroke trichotomy) ───────────────
+    appearance = _build_appearance(params)
+    if appearance:
+        spec["appearance"] = appearance
+
+    # ── Wire user-supplied ID ──────────────────────────────────
+    if params.id is not None:
+        spec["id"] = params.id
+
     diagnostics["segments"] = segment_count
     diagnostics["is_multi"] = is_multi
     if is_multi:
@@ -173,15 +230,66 @@ async def _path_import_svg_impl(params: PathImportSvgInput) -> str:
             diagnostics=diagnostics,
         )
 
+    # Name the path that was created, so the canonical `effects` says what
+    # this call did instead of reporting nothing with `complete` false.
+    # An id we cannot read is reported as incomplete rather than as empty:
+    # something was created either way, and pretending otherwise is the
+    # failure this replaces.
+    from illustrator_mcp.utils.response import JsxPayloadError, require_jsx_payload
+
+    try:
+        created = require_jsx_payload(response, context="path_import_svg")
+        created_id = created.get("id") or (created.get("ids") or [None])[0]
+    except (JsxPayloadError, Exception):
+        created_id = None
+    diagnostics["effects"] = declare_effects(
+        created=[created_id] if created_id else [],
+        complete=bool(created_id),
+    )
+
     # Let format_envelope handle result parsing, error classification,
     # and success/failure determination (replaces manual json.loads +
     # draw_result.get("ok") check).
-    return format_envelope(
-        response,
+    from illustrator_mcp.tools.base import canonical_jsx_result
+    return canonical_jsx_result(
+        response, tool=_SVG_NAME,
         context="path_import_svg",
         warnings=warnings,
         diagnostics=diagnostics,
     )
+
+
+def _build_appearance(params: PathImportSvgInput) -> Optional[Dict[str, Any]]:
+    """Build spec.appearance dict from fill/stroke params.
+
+    Trichotomy:
+      None  → omit key (pipeline default)
+      False → noFill / noStroke
+      Model → {r, g, b} or {r, g, b, width}
+    """
+    if params.fill is None and params.stroke is None:
+        return None
+
+    appearance: Dict[str, Any] = {}
+
+    if params.fill is False:
+        appearance["noFill"] = True
+    elif params.fill is not None:
+        appearance["fill"] = {"r": params.fill.r, "g": params.fill.g, "b": params.fill.b}
+
+    if params.stroke is False:
+        appearance["noStroke"] = True
+    elif params.stroke is not None:
+        stroke_dict: Dict[str, Any] = {
+            "r": params.stroke.r,
+            "g": params.stroke.g,
+            "b": params.stroke.b,
+        }
+        if params.stroke.width is not None:
+            stroke_dict["width"] = params.stroke.width
+        appearance["stroke"] = stroke_dict
+
+    return appearance
 
 
 def _ir_points_to_draw_spec(ir: Dict[str, Any]) -> list:
@@ -200,3 +308,4 @@ def _ir_points_to_draw_spec(ir: Dict[str, Any]) -> list:
                 entry["right"] = h["out"]
         result.append(entry)
     return result
+

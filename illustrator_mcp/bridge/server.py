@@ -10,6 +10,8 @@ import websockets
 from websockets.server import WebSocketServerProtocol
 from typing import Optional, Callable, Awaitable
 
+from illustrator_mcp.config import config
+
 logger = logging.getLogger(__name__)
 
 
@@ -32,20 +34,40 @@ class WebSocketServer:
     async def run(self, started_event: Optional[threading.Event] = None):
         """Run the WebSocket server."""
         self._shutdown_event = asyncio.Event()
-        self._start_error = None
         
         try:
+            # F20: pass the CONFIGURED message limit to the transport.
+            #
+            # These flags were previously omitted, so websockets applied its
+            # own 1 MiB default while the application believed the limit was
+            # config.max_message_size_mb (10 MB). A response over 1 MiB was
+            # therefore not rejected by the application check in
+            # websocket_bridge._handle_message — the library closed the
+            # connection first, which surfaces as an abrupt
+            # "CEP panel is not connected" on the NEXT call rather than as an
+            # error about the oversized message. Worth keeping in proportion:
+            # the injected library prelude for execute_task is already ~509 KB,
+            # so half the old default was spent before a script did anything.
+            max_size = config.max_message_size_mb * 1024 * 1024
             self.server = await websockets.serve(
                 self._handle_client,
-                "localhost",
+                config.ws_host,
                 self.port,
                 ping_interval=30,
-                ping_timeout=10
+                ping_timeout=10,
+                max_size=max_size,
+                # Do not let the library buffer more than one oversized frame
+                # before the handler sees it.
+                max_queue=32,
+                close_timeout=2,
+            )
+            logger.info(
+                "WebSocket max message size: %d MB", config.max_message_size_mb
             )
             
             logger.info(f"="*50)
             logger.info(f"WebSocket bridge STARTED on port {self.port}")
-            logger.info(f"CEP panel should connect to: ws://localhost:{self.port}")
+            logger.info(f"CEP panel should connect to: ws://{config.ws_host}:{self.port}")
             logger.info(f"="*50)
             
             if started_event:
@@ -54,23 +76,14 @@ class WebSocketServer:
             # Keep server running until shutdown event
             await self._shutdown_event.wait()
             
-            # Graceful shutdown
-            logger.info("Shutting down WebSocket bridge...")
-            self.server.close()
-            await self.server.wait_closed()
-            
-            # Close active client if any
-            if self.client:
-                await self.client.close(1000, "Server shutting down")
-
         except OSError as e:
-            if "address already in use" in str(e).lower() or e.errno == 10048:
-                logger.error(f"Port {self.port} is already in use!")
-            else:
-                logger.error(f"WebSocket server OSError: {e}")
             self._start_error = e
             if started_event:
                 started_event.set()
+            # Publish failure immediately; stop() still joins this thread so
+            # bounded diagnostic evidence is emitted before process exit.
+            from illustrator_mcp.startup_diagnostics import log_bind_failure
+            log_bind_failure(e, config.ws_host, self.port)
             raise
         except Exception as e:
             logger.error(f"WebSocket server error: {e}")
@@ -78,6 +91,11 @@ class WebSocketServer:
             if started_event:
                 started_event.set()
             raise
+        finally:
+            # Cancellation and startup errors take the same socket cleanup path.
+            if self.server is not None:
+                self.server.close()
+                await self.server.wait_closed()
 
     async def _handle_client(self, websocket: WebSocketServerProtocol):
         """Handle a connected client."""

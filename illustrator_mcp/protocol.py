@@ -11,7 +11,7 @@ Includes:
 
 from enum import Enum
 from typing import Literal, Optional, List, Dict, Any, Union, Annotated
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, StrictBool, model_validator
 
 
 # ==================== Error Codes ====================
@@ -34,54 +34,109 @@ class OrderBy(str, Enum):
     AREA = "area"                   # Smallest to largest
 
 
-class ExcludeFilter(BaseModel):
+class _SelectorModel(BaseModel):
+    model_config = ConfigDict(extra="forbid", allow_inf_nan=False)
+
+
+class ExcludeFilter(_SelectorModel):
     """Filter to exclude items from results."""
-    locked: bool = Field(default=False, description="Exclude locked items")
-    hidden: bool = Field(default=False, description="Exclude hidden items")
-    guides: bool = Field(default=False, description="Exclude guides")
-    clipped: bool = Field(default=False, description="Exclude items inside clipping masks")
+    locked: StrictBool = Field(default=False, description="Exclude locked items")
+    hidden: StrictBool = Field(default=False, description="Exclude hidden items")
+    guides: StrictBool = Field(default=False, description="Exclude guides")
+    clipped: StrictBool = Field(default=False, description="Exclude items inside clipping masks")
 
 
 # ==================== Target Selectors ====================
 
-class SelectionTarget(BaseModel):
+class SelectionTarget(_SelectorModel):
     """Target: current selection."""
     type: Literal["selection"] = "selection"
 
 
-class LayerTarget(BaseModel):
+class LayerTarget(_SelectorModel):
     """Target: all items on a layer."""
     type: Literal["layer"] = "layer"
     layer: str = Field(..., min_length=1, description="Layer name")
-    recursive: bool = Field(default=False)
+    recursive: StrictBool = Field(default=False)
 
 
-class AllTarget(BaseModel):
+class AllTarget(_SelectorModel):
     """Target: all items in document."""
     type: Literal["all"] = "all"
-    recursive: bool = Field(default=False)
+    recursive: StrictBool = Field(default=False)
 
 
-class QueryTarget(BaseModel):
+class QueryTarget(_SelectorModel):
     """Target: items matching query filters."""
     type: Literal["query"] = "query"
     itemType: Optional[str] = Field(None, description="PathItem, TextFrame, etc.")
     pattern: Optional[str] = Field(None, description="Name pattern with * wildcard")
+    contents: Optional[str] = Field(None, description="Exact TextFrame contents; CRLF/LF match Illustrator CR.")
     layer: Optional[str] = None
-    recursive: bool = Field(default=False)
+    recursive: StrictBool = Field(default=False)
     
     @model_validator(mode='after')
     def require_at_least_one_filter(self):
-        if not self.itemType and not self.pattern and not self.layer:
-            raise ValueError("Query target requires at least one filter (itemType, pattern, or layer)")
+        if not self.itemType and not self.pattern and not self.layer and self.contents is None:
+            raise ValueError("Query target requires at least one filter (itemType, pattern, layer, or contents)")
         return self
 
 
+class IdTarget(_SelectorModel):
+    """Target one or more explicitly stamped item identities."""
+    type: Literal["id"] = "id"
+    ids: List[str] = Field(..., min_length=1)
+
+
+class HandleTarget(_SelectorModel):
+    """Target exact untagged artwork through an expiring host handle."""
+    type: Literal["handle"] = "handle"
+    handles: List[str] = Field(..., min_length=1)
+
+
+class SpatialRect(_SelectorModel):
+    x: float
+    y: float
+    width: float
+    height: float
+
+
+class NearTarget(_SelectorModel):
+    id: str = Field(..., min_length=1)
+    radius: float = Field(..., ge=0)
+
+
+class SpatialTarget(_SelectorModel):
+    type: Literal["spatial"] = "spatial"
+    within: Optional[SpatialRect] = None
+    outside: Optional[SpatialRect] = None
+    nearTo: Optional[NearTarget] = None
+    coord: Literal["user", "ai"] = "user"
+    layer: Optional[str] = None
+
+    @model_validator(mode="after")
+    def require_predicate(self):
+        if self.within is None and self.outside is None and self.nearTo is None:
+            raise ValueError("Spatial target requires within, outside, or nearTo")
+        return self
+
+
+class GridTarget(_SelectorModel):
+    type: Literal["grid"] = "grid"
+    cell: str = Field(..., min_length=1)
+    cols: int = Field(default=4, ge=1, le=99, strict=True)
+    rows: int = Field(default=4, ge=1, le=26, strict=True)
+    layer: Optional[str] = None
+
+
 # Compound selector
-SimpleTarget = Union[SelectionTarget, LayerTarget, AllTarget, QueryTarget]
+SimpleTarget = Union[
+    SelectionTarget, LayerTarget, AllTarget, QueryTarget,
+    IdTarget, HandleTarget, SpatialTarget, GridTarget,
+]
 
 
-class CompoundTarget(BaseModel):
+class CompoundTarget(_SelectorModel):
     """
     Compound target selector with boolean logic.
     
@@ -93,11 +148,15 @@ class CompoundTarget(BaseModel):
         {"type": "compound", "anyOf": [...], "exclude": {"locked": true, "hidden": true}}
     """
     type: Literal["compound"] = "compound"
-    anyOf: List[SimpleTarget] = Field(..., min_length=1, description="Union of targets")
+    anyOf: List[Union[SimpleTarget, "CompoundTarget"]] = Field(..., min_length=1, description="Union of targets (nested compounds supported)")
     exclude: Optional[ExcludeFilter] = Field(default=None, description="Exclusion filter")
 
 
-class TargetSelector(BaseModel):
+class TargetExpectation(_SelectorModel):
+    count: int = Field(..., ge=0, strict=True)
+
+
+class TargetSelector(_SelectorModel):
     """
     Complete target selector with ordering.
     
@@ -105,7 +164,10 @@ class TargetSelector(BaseModel):
     The 'orderBy' field ensures deterministic result ordering.
     """
     target: Annotated[
-        Union[SelectionTarget, LayerTarget, AllTarget, QueryTarget, CompoundTarget],
+        Union[
+            SelectionTarget, LayerTarget, AllTarget, QueryTarget,
+            IdTarget, HandleTarget, SpatialTarget, GridTarget, CompoundTarget,
+        ],
         Field(discriminator='type')
     ]
     orderBy: OrderBy = Field(
@@ -116,6 +178,61 @@ class TargetSelector(BaseModel):
         default=None,
         description="Global exclusion filter (applied after target resolution)"
     )
+    maxScan: Optional[int] = Field(
+        default=None,
+        ge=1,
+        strict=True,
+        description=(
+            "Optional selector scan cap. If the cap prevents a complete result, "
+            "resolution fails explicitly instead of returning a partial/no-match result."
+        ),
+    )
+    expect: Optional[TargetExpectation] = None
+
+    @classmethod
+    def __get_pydantic_json_schema__(cls, core_schema, handler):
+        """Publish both accepted shapes, deriving flat fields from the models."""
+        from copy import deepcopy
+
+        wrapped = handler.resolve_ref_schema(handler(core_schema))
+        variants = [deepcopy(wrapped)]
+        controls = {key: value for key, value in wrapped["properties"].items() if key != "target"}
+        for ref in wrapped["properties"]["target"]["oneOf"]:
+            flat = deepcopy(handler.resolve_ref_schema(ref))
+            flat["properties"].update(deepcopy(controls))
+            # Only an omitted type on a flat selection has default semantics.
+            # Without this requirement several defaulted variants match {}.
+            if flat["properties"]["type"]["const"] != "selection":
+                flat["required"] = list(dict.fromkeys([*flat.get("required", []), "type"]))
+            variants.append(flat)
+        return {"title": "TargetSelector", "description": cls.__doc__, "oneOf": variants}
+
+    @model_validator(mode="before")
+    @classmethod
+    def normalize(cls, value):
+        pending = [(value, 0)]
+        while pending:
+            node, depth = pending.pop()
+            if depth > 16:
+                raise ValueError("Selector exceeds 16 compound levels")
+            if isinstance(node, dict):
+                if node is not value and "expect" in node:
+                    raise ValueError("Move expect to the outer TargetSelector; it is not allowed inside target or anyOf.")
+                if "target" in node:
+                    pending.append((node["target"], depth))
+                children = node.get("anyOf")
+                if isinstance(children, list):
+                    pending.extend((child, depth + 1) for child in children)
+        if not isinstance(value, dict) or "target" in value:
+            return value
+        target = dict(value)
+        outer = {key: target.pop(key) for key in ("orderBy", "maxScan", "expect") if key in target}
+        # Compound exclusions belong to the compound; other flat exclusions
+        # are global. Never drop unknown keys: strict models reject them.
+        if target.get("type") != "compound" and "exclude" in target:
+            outer["exclude"] = target.pop("exclude")
+        target.setdefault("type", "selection")
+        return {"target": target, **outer}
 
 
 # ==================== Stable References ====================
@@ -201,6 +318,8 @@ class RetryableStage(str, Enum):
 
 class RetryPolicy(BaseModel):
     """Stage-specific retry configuration."""
+    model_config = ConfigDict(extra="forbid")
+
     maxAttempts: int = Field(default=3, ge=1, le=5, description="Max retry attempts")
     retryableStages: List[RetryableStage] = Field(
         default=[RetryableStage.COLLECT],
@@ -278,27 +397,133 @@ class TaskKind(str, Enum):
 
 class TaskOptions(BaseModel):
     """Task execution options."""
+    model_config = ConfigDict(extra="forbid")
+
+    mode: Literal["apply", "validate"] = Field(
+        default="apply",
+        description=(
+            "'apply' executes the batch. 'validate' checks operation contracts "
+            "without invoking handlers or changing document state on the "
+            "default structured SOC route; it is not applied to custom callbacks."
+        ),
+    )
+    stopOnError: bool = Field(
+        default=False,
+        description=(
+            "Stop the default structured SOC batch after the first failed "
+            "operation. Custom callback pipelines do not consume this option."
+        ),
+    )
     kind: TaskKind = Field(
         default=TaskKind.SELECTION,
-        description="Task kind: 'selection' (collect items) or 'creation' (skip collect, apply creates)"
+        description=(
+            "Callback-pipeline collection mode: 'selection' collects items and "
+            "'creation' skips collection. The default SOC executor forces creation."
+        )
     )
     skipCollect: bool = Field(
         default=False,
-        description="Low-level: skip collect stage explicitly (kind='creation' implies this)"
+        description=(
+            "Low-level callback-pipeline control that skips collection; "
+            "kind='creation' implies it. The default SOC executor already skips collection."
+        )
     )
     minCreated: Optional[int] = Field(
         default=None, ge=0,
-        description="Safety rail: minimum items apply must create (warns if not met)"
+        description=(
+            "Callback-pipeline safety rail checked after apply; warns when the "
+            "reported modified count is below this value. Not applied to the "
+            "default SOC route, whose apply callback is absent."
+        )
     )
-    dryRun: bool = Field(default=False, description="Preview changes without applying")
+    dryRun: bool = Field(
+        default=False,
+        description=(
+            "NOT SUPPORTED (T03). Setting this rejects the request before "
+            "execution. It formerly claimed 'no changes applied' while batch "
+            "operations had already mutated the document during the compute "
+            "stage. Use a read-only tool to inspect state instead."
+        ),
+    )
     trace: bool = Field(default=False, description="Include execution trace")
-    idPolicy: IdPolicy = Field(default=IdPolicy.NONE, description="ID assignment policy")
-    timeout: int = Field(default=30, ge=1, le=300, description="Timeout in seconds")
-    retry: Optional[RetryPolicy] = Field(default=None, description="Retry policy (null = no retry)")
+    idPolicy: IdPolicy = Field(
+        default=IdPolicy.NONE,
+        description=(
+            "ID assignment policy used during the callback pipeline's collect "
+            "stage. The default SOC route skips that outer collection."
+        ),
+    )
+    assignIds: bool = Field(
+        default=False,
+        description=(
+            "Deprecated compatibility alias for opt-in ID assignment during "
+            "the callback pipeline's collect stage. Prefer idPolicy='opt_in'."
+        ),
+    )
+    timeout: int = Field(
+        default=30,
+        ge=1,
+        le=300,
+        description=(
+            "Compatibility field retained and validated, but not currently "
+            "used as illustrator_execute_task's host deadline."
+        ),
+    )
+    retry: Optional[RetryPolicy] = Field(
+        default=None,
+        description=(
+            "Compatibility field retained and validated, but currently ignored: "
+            "illustrator_execute_task does not call the retry wrapper."
+        ),
+    )
     idempotency: Idempotency = Field(
         default=Idempotency.UNKNOWN,
-        description="Caller-declared idempotency (affects retry behavior)"
+        description=(
+            "Compatibility field retained for retry metadata, but currently "
+            "ignored because illustrator_execute_task does not call the retry wrapper."
+        )
     )
+    rollback: Optional[bool] = Field(
+        default=False,
+        exclude=True,
+        description=(
+            "Unsupported recovery request; true is rejected before dispatch. "
+            "False and null are accepted as disabled compatibility forms."
+        ),
+    )
+    snapshot: Optional[bool] = Field(
+        default=False,
+        exclude=True,
+        description=(
+            "Unsupported recovery request; true is rejected before dispatch. "
+            "False and null are accepted as disabled compatibility forms."
+        ),
+    )
+    recompute: Optional[Union[bool, Dict[str, Any]]] = Field(
+        default=None,
+        exclude=True,
+        description="Unsupported destructive replay request; any enabled request is rejected.",
+    )
+
+    @model_validator(mode="after")
+    def reject_unsupported_recovery(self):
+        requested = []
+        if self.rollback:
+            requested.append("rollback")
+        if self.snapshot:
+            requested.append("snapshot")
+        # JavaScript treats even an empty object as an enabled request. Preserve
+        # that boundary while continuing to accept the explicit disabled forms.
+        if isinstance(self.recompute, dict) or self.recompute is True:
+            requested.append("recompute")
+        if requested:
+            names = ", ".join(f"options.{name}" for name in requested)
+            raise ValueError(
+                f"Unsupported recovery option(s): {names}. Whole-batch "
+                "rollback, snapshot recovery, and destructive recompute are "
+                "not supported; the request was rejected before host dispatch."
+            )
+        return self
 
 
 # ==================== Task Payload & Report ====================
@@ -326,11 +551,13 @@ class TaskReport(BaseModel):
 
 class TaskPayload(BaseModel):
     """Standard task payload."""
+    model_config = ConfigDict(extra="forbid")
+
     task: str = Field(..., description="Task type: draw_shapes, apply_styles, query_items")
     version: str = Field(default=TASK_PROTOCOL_VERSION, description="Protocol version")
-    targets: Optional[Union[TargetSelector, Dict[str, Any]]] = Field(
+    targets: Optional[TargetSelector] = Field(
         default=None,
-        description="Target selector (structured or legacy dict)"
+        description="Strict target selector; accepts flat or wrapped forms"
     )
     params: Dict[str, Any] = Field(default_factory=dict, description="Task parameters")
     options: TaskOptions = Field(default_factory=TaskOptions)

@@ -19,9 +19,14 @@ import logging
 
 from pydantic import Field
 
+from mcp.types import CallToolResult
 from illustrator_mcp.shared import mcp
 from illustrator_mcp import templates
-from illustrator_mcp.tools.base import execute_jsx_tool, TOOL_ANNOTATIONS
+from illustrator_mcp.tools.base import execute_jsx_tool, TOOL_ANNOTATIONS, canonical_tool
+from illustrator_mcp.tools.cadence import (
+    forget_document,
+    get_active_cadence_document,
+)
 from illustrator_mcp.utils import escape_path_for_jsx
 # Re-export for backward-compat: tests patch these at
 # "illustrator_mcp.tools.documents.execute_script_with_context"
@@ -67,8 +72,9 @@ _DOC_NAME = "illustrator_document"
 
 
 @mcp.tool(name=_DOC_NAME, annotations=TOOL_ANNOTATIONS[_DOC_NAME])
-async def illustrator_document(params: DocumentInput) -> str:
-    """Create, open, save, or close an Illustrator document.
+@canonical_tool(_DOC_NAME, reserve=True)
+async def illustrator_document(params: DocumentInput) -> CallToolResult:
+    """Create, open, list, activate, save, or close an Illustrator document.
 
     CONTRACT: readOnly=False, destructive=True, idempotent=False, openWorld=True
 
@@ -79,28 +85,56 @@ async def illustrator_document(params: DocumentInput) -> str:
       - Closing the active document (action='close')
 
     EXAMPLES:
-      illustrator_document(action="create", width=800, height=600, color_mode="RGB")
-      illustrator_document(action="open", file_path="C:/art/figure.ai")
-      illustrator_document(action="save", file_path="C:/art/figure_v2.ai")
-      illustrator_document(action="close", save_before_close=True)
+      Create:
+        {"params": {"action": "create", "width": 800, "height": 600, "color_mode": "RGB"}}
+      Open:
+        {"params": {"action": "open", "file_path": "C:/art/figure.ai"}}
+      Save under a new name:
+        {"params": {"action": "save", "file_path": "C:/art/figure_v2.ai"}}
+      Close, saving first:
+        {"params": {"action": "close", "save_before_close": true}}
 
     NOTES:
       - close without save_before_close=True discards unsaved changes
       - open/save interact with the filesystem (openWorld)
+      - list exposes live document tokens without changing the shared pin
+      - activate requires expected_document_token and explicitly changes the pin
+      - save/close reject a mismatching active document; close never repins
     """
     action = params.action
+
+    if action == "list":
+        return await execute_jsx_tool(canonical=True,
+            script="JSON.stringify({ok:true,data:mcpDocList()})",
+            command_type="list_documents", tool_name=_DOC_NAME, includes=["doc_session"])
+    if action == "activate":
+        if not params.expected_document_token:
+            return format_envelope({"error": "activate requires expected_document_token; use action=list to obtain live tokens"})
+        return await execute_jsx_tool(canonical=True,
+            script="JSON.stringify(mcpDocActivate(" + json.dumps(params.expected_document_token) + "))",
+            command_type="activate_document", tool_name=_DOC_NAME, includes=["doc_session"])
 
     if action == "create":
         color_space = "RGB" if params.color_mode.upper() == "RGB" else "CMYK"
         name = params.name or "Untitled"
-        title_line = f'preset.title = "{name}";'
+        # Escape the title like every other string sent to the host.
+        #
+        # This was interpolated raw, so a document name was a hole straight
+        # into the script: a name containing a double quote produced
+        # "S005 JavaScript syntax error: Expected: ;", a name containing a
+        # backslash was silently corrupted, and a name of
+        # '"; app.beep(); var z="' RAN — reporting ok:true for a document
+        # called "Untitled-1" whose requested name had quietly vanished.
+        title_line = f'preset.title = "{escape_path_for_jsx(name)}";'
         script = templates.DOC_CREATE.substitute(
             width=params.width,
             height=params.height,
             color_space=color_space,
             title_line=title_line,
+            requested_name=json.dumps(name),
         )
         return await execute_jsx_tool(
+            canonical=True,
             script=script,
             command_type="create_document",
             tool_name="illustrator_document",
@@ -111,6 +145,7 @@ async def illustrator_document(params: DocumentInput) -> str:
         path = escape_path_for_jsx(params.file_path)
         script = templates.DOC_OPEN.substitute(path=path)
         return await execute_jsx_tool(
+            canonical=True,
             script=script,
             command_type="open_document",
             tool_name="illustrator_document",
@@ -123,6 +158,7 @@ async def illustrator_document(params: DocumentInput) -> str:
         else:
             script = templates.DOC_SAVE
         return await execute_jsx_tool(
+            canonical=True,
             script=script,
             command_type="save_document",
             tool_name="illustrator_document",
@@ -131,9 +167,17 @@ async def illustrator_document(params: DocumentInput) -> str:
     elif action == "close":
         save_opt = "SaveOptions.SAVECHANGES" if params.save_before_close else "SaveOptions.DONOTSAVECHANGES"
         script = templates.DOC_CLOSE.substitute(save_option=save_opt)
-        return await execute_jsx_tool(
+        # Whose cadence is about to become meaningless.
+        closing = get_active_cadence_document()
+        result = await execute_jsx_tool(
+            canonical=True,
             script=script,
             command_type="close_document",
             tool_name="illustrator_document",
             params={"action": action, "save_before_close": params.save_before_close}
         )
+        # A closed document's unverified-mutation count must not carry over to
+        # whatever document becomes active next, which would fire a checkpoint
+        # against a document that had not been touched.
+        forget_document(closing)
+        return result

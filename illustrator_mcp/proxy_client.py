@@ -12,6 +12,7 @@ Architecture (simplified):
 """
 
 import asyncio
+import contextvars
 import json
 import logging
 import time
@@ -35,6 +36,33 @@ from illustrator_mcp.utils.response import try_parse_json, unwrap_result
 
 # Configure logging
 logger = logging.getLogger(__name__)
+
+
+#: True while this task already holds the coordinator's execution slot (T12).
+#:
+#: A multi-call job takes the slot once via ``coordinator.reserve()`` and then
+#: makes several host calls inside it. Without this flag each of those calls
+#: would try to acquire the slot the job itself is holding, and deadlock.
+#: A ContextVar rather than a global because concurrent tool calls are
+#: separate asyncio tasks with independent contexts.
+_in_reserved_job: "contextvars.ContextVar[bool]" = contextvars.ContextVar(
+    "illustrator_mcp_in_reserved_job", default=False
+)
+
+
+def mark_reserved_job(value: bool = True):
+    """Mark the current task as already holding the execution slot.
+
+    Returns the token to pass to :func:`contextvars.ContextVar.reset`.
+    Used by callers that wrap several host calls in one
+    ``coordinator.reserve()`` block.
+    """
+    return _in_reserved_job.set(value)
+
+
+def clear_reserved_job(token) -> None:
+    """Undo :func:`mark_reserved_job`."""
+    _in_reserved_job.reset(token)
 
 
 # ==================== Request ID Generation ====================
@@ -170,10 +198,22 @@ async def _execute_via_bridge(
                 )
         except Exception:
             detail = (
-                f"Script execution timed out after {timeout}s. "
-                "Consider breaking into smaller operations or increasing timeout."
+                f"Client wait timed out after {timeout}s; host outcome unknown."
             )
-        return {"error": format_code(ErrorCode.R_TIMEOUT, detail)}
+        # Carry the job the same way the bridge's own timeout does. A timeout
+        # that names no job leaves the caller with nothing to reconcile
+        # against, and the only remaining move is to replay a mutation that
+        # may already have applied.
+        try:
+            from illustrator_mcp.execution import get_coordinator
+            job_id = get_coordinator().active_job_id
+        except Exception:  # pragma: no cover - diagnostics must not fail here
+            job_id = None
+        return {
+            "error": format_code(ErrorCode.R_TIMEOUT, detail),
+            "execution": "unknown",
+            "jobId": job_id,
+        }
     except ConnectionError as e:
         # ===== TIER 1: Connection Lost During Execution =====
         # C_DISCONNECTED covers: not connected, dropped, network reset
@@ -261,6 +301,25 @@ async def execute_script_with_context(
         trace_id=tid
     )
     
+    from illustrator_mcp.execution.host_phases import active_phases, wrap_phase
+    from illustrator_mcp.execution.trusted_probe import readiness
+    if _in_reserved_job.get():
+        from illustrator_mcp.execution import get_coordinator
+        refusal = await readiness(get_coordinator())
+        if refusal is not None:
+            return refusal
+    from illustrator_mcp.execution import document_intent
+    intent = document_intent.active.get()
+    if intent is not None:
+        refusal = await document_intent.prepare()
+        if refusal is not None:
+            return refusal
+        script = document_intent.guard(script)
+        includes = list(dict.fromkeys([*(includes or []), "doc_session"]))
+    if active_phases.get() is not None:
+        script = wrap_phase(script, command_type)
+        includes = list(dict.fromkeys([*(includes or []), "host_runtime", "doc_session"]))
+
     # --- Library injection (centralized) ---
     injection_meta = None
     if includes:
@@ -317,15 +376,64 @@ async def execute_script_with_context(
     # Note: Connection check is done in _execute_via_bridge, avoiding duplication
     start_time = time.time()
     log_command(logger, tid, command_type, "starting")
-    
-    # Execute via centralized helper
-    response = await _execute_via_bridge(
-        script=script,
-        timeout=timeout or config.timeout,
-        command=command,
-        trace_id=tid
-    )
-    
+
+    # T12: every host call is serialised through the process-wide coordinator.
+    # Illustrator has one active document and one selection, so two jobs
+    # interleaving their calls corrupt each other's assumptions.
+    #
+    # A caller already holding the slot (a multi-call job inside
+    # `coordinator.reserve()`) must NOT try to take it again — that would
+    # deadlock the job against itself. `_in_reserved_job` marks those.
+    from illustrator_mcp.execution import get_coordinator
+
+    coordinator = get_coordinator()
+    already_reserved = _in_reserved_job.get()
+
+    async def _run() -> ExecutionResponse:
+        refusal = await readiness(coordinator)
+        if refusal is not None:
+            return refusal
+        from illustrator_mcp.execution.progress import milestone
+        await milestone(f"host phase: {command_type}; duration unknown")
+        response = await _execute_via_bridge(
+            script=script,
+            timeout=timeout or config.timeout,
+            command=command,
+            trace_id=tid,
+        )
+        from illustrator_mcp.execution.host_phases import interpret_phase_refusal
+        response = interpret_phase_refusal(response)
+        response = document_intent.accept_lifecycle(response)
+        from illustrator_mcp.execution.journal import active_journal
+        journal = active_journal.get()
+        if journal is not None:
+            response.setdefault("trace_id", tid)
+            response.setdefault("jobId", coordinator.active_job_id)
+            call = response.get("requestToken") or response.get("trace_id")
+            if not any(r["hostCall"] == call for r in journal.snapshot()["records"]):
+                journal.record_host(response, command=command_type)
+            record = coordinator.get(response["jobId"]) if response.get("jobId") else None
+            if record is not None:
+                record.journal = journal
+                # Recovered effects predate this process's fresh journal; they
+                # are its base account, not replaceable by an empty new fact.
+                recovered = record.effects if record.outcome_source == "host_phase_finalizer" else None
+                coordinator.record_journal_report(journal, recovered)
+        return response
+
+    if already_reserved:
+        response = await _run()
+    else:
+        async with coordinator.reserve(
+            digest=generate_trace_id(),  # single-call jobs are never duplicates
+            label=command_type,
+        ):
+            token = _in_reserved_job.set(True)
+            try:
+                response = await _run()
+            finally:
+                _in_reserved_job.reset(token)
+
     duration_ms = (time.time() - start_time) * 1000
 
 
@@ -361,8 +469,44 @@ async def execute_script_with_context(
             "library_versions": injection_meta.get("library_versions", {}),
             "manifest_version": injection_meta.get("manifest_version", ""),
         }
-    
+
+    # Learn which document the host was working in.
+    #
+    # Every wrapped script reports `activeDocument` in its envelope. This is
+    # the single point every host call returns through, so noting it here keeps
+    # the per-document VLM cadence accurate for every tool without any tool
+    # having to ask for the document identity itself.
+    _note_active_document(response)
+
     return response
+
+
+def _document_from_response(response: Any) -> Optional[str]:
+    """The active document name a host envelope reported, if any."""
+    if not isinstance(response, dict):
+        return None
+    raw = response.get("result")
+    if isinstance(raw, str):
+        try:
+            raw = json.loads(raw)
+        except (ValueError, TypeError):
+            return None
+    if not isinstance(raw, dict):
+        return None
+    name = raw.get("activeDocument")
+    return name if isinstance(name, str) and name else None
+
+
+def _note_active_document(response: Any) -> None:
+    """Attribute cadence to the document the host actually worked in."""
+    try:
+        from illustrator_mcp.tools.cadence import note_active_document
+
+        name = _document_from_response(response)
+        if name:
+            note_active_document(name)
+    except Exception as exc:  # never let bookkeeping break a tool call
+        logger.debug(f"Active-document bookkeeping failed: {exc}")
 
 
 
@@ -470,6 +614,48 @@ def _extract_result(response: Dict[str, Any]) -> "ResponseClassification":
     return classify_response(response)
 
 
+def _host_truncation_notes(raw):
+    """The host's own truncation notes, if its envelope carried any.
+
+    ``host.jsx`` sets ``truncation`` alongside ``data`` when it applies a node
+    or depth limit, and says so deliberately: "Any limit that was applied is
+    disclosed, never applied silently." Everything downstream unwraps to
+    ``data``, so the disclosure was dropped on the floor.
+    """
+    parsed = try_parse_json(raw) if isinstance(raw, str) else raw
+    if not isinstance(parsed, dict):
+        return None
+    notes = parsed.get("truncation")
+    if not notes:
+        return None
+    return notes if isinstance(notes, list) else [notes]
+
+
+def note_host_truncation(diagnostics: dict, response: Any) -> dict:
+    """Record any limit the host disclosed, for callers that build their own
+    envelope.
+
+    ``build_envelope_dict`` does this for every tool that routes through it.
+    The boolean builds its result with ``make_envelope`` instead, so it never
+    saw the notes and could report a cut response beside a field claiming
+    nothing was truncated. Notes accumulate across the several host calls one
+    logical operation makes.
+    """
+    if not isinstance(response, dict):
+        return diagnostics
+    for key in ("jobId", "execution", "requestToken", "integrity"):
+        if response.get(key) is not None:
+            diagnostics[key] = response[key]
+    notes = _host_truncation_notes(response.get("result"))
+    if notes:
+        existing = diagnostics.get("truncation") or []
+        if not isinstance(existing, list):
+            existing = [existing]
+        identity = {key: response[key] for key in ("jobId", "requestToken", "trace_id") if response.get(key)}
+        diagnostics["truncation"] = existing + [dict(note, **identity) if isinstance(note, dict) else {"detail": note, **identity} for note in notes]
+    return diagnostics
+
+
 def build_envelope_dict(
     response: Dict[str, Any],
     context: str = "",
@@ -496,6 +682,16 @@ def build_envelope_dict(
         diagnostics["trace_id"] = response["trace_id"]
     if response.get("elapsed_ms"):
         diagnostics["elapsed_ms"] = response["elapsed_ms"]
+    for key in ("jobId", "execution", "requestToken"):
+        if response.get(key) is not None:
+            diagnostics[key] = response[key]
+
+    # The host discloses any limit it applied as a `truncation` sibling of
+    # `data` in its own envelope. Unwrapping to `data` dropped that sibling,
+    # so an explicit "I omitted some of this" was discarded and the canonical
+    # result reported `truncated: false` — a positive claim that nothing was
+    # left out. Lift it here, where the untouched host reply is still in hand.
+    note_host_truncation(diagnostics, response)
 
     def _error_dict(error_msg: str, line: int = None, operation: str = None) -> dict:
         structured = create_structured_error(error_msg, context)
@@ -528,6 +724,10 @@ def build_envelope_dict(
             )
         return _error_dict(top_error)
 
+    if "_rawScriptValue" in response:
+        return {"ok": True, "warnings": warnings, "error": None,
+                "diagnostics": diagnostics, "result": response["_rawScriptValue"]}
+
     # Extract and classify result
     classification = _extract_result(response)
     if not classification.ok:
@@ -549,50 +749,6 @@ def build_envelope_dict(
         "diagnostics": diagnostics,
         "result": result,
     }
-
-
-def format_response(response: dict[str, Any], context: str = "") -> str:
-    """Format response as plain text.
-
-    .. deprecated:: Use :func:`format_envelope` directly.
-       Retained only for backward compatibility with archive tools.
-
-    Args:
-        response: Response dictionary from execute_script
-        context: Optional context about the operation for better error messages
-
-    Returns:
-        Formatted string for MCP tool response
-    """
-    import warnings as _w
-    _w.warn(
-        "format_response is deprecated, use format_envelope",
-        DeprecationWarning,
-        stacklevel=2,
-    )
-    from illustrator_mcp.errors import format_error_response
-
-    # Top-level errors: use raw error string from response for parity
-    # with the old implementation (avoids create_structured_error drift).
-    if response.get("error"):
-        raw_error = response["error"]
-        if isinstance(raw_error, dict):
-            raw_error = raw_error.get("message", str(raw_error))
-        return format_error_response(raw_error, context)
-
-    # Non-error path: classify via shared core
-    envelope = build_envelope_dict(response, context)
-
-    if not envelope["ok"]:
-        # Classification found an error in the result payload
-        err = envelope.get("error") or {}
-        error_msg = err.get("message", str(err))
-        return format_error_response(error_msg, context)
-
-    result = envelope.get("result")
-    if isinstance(result, (dict, list)):
-        return json.dumps(result, indent=2)
-    return str(result)
 
 
 def format_envelope(
@@ -625,4 +781,3 @@ def format_envelope(
     return json.dumps(
         build_envelope_dict(response, context, warnings, diagnostics)
     )
-

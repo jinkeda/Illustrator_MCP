@@ -50,6 +50,8 @@ register_tools(mcp)
 
 def main():
     """Entry point for the MCP server."""
+    from illustrator_mcp.startup_diagnostics import log_startup_identity
+    log_startup_identity()
     logger.info("Starting Adobe Illustrator MCP Server...")
     logger.info("(WebSocket bridge will start via lifespan management)")
     logger.info("")

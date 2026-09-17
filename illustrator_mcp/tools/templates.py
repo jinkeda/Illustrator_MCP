@@ -80,7 +80,20 @@ def wrap_script(
         // User script
         {script}
 
-        return JSON.stringify({{ ok: true, data: {data_expr}, operation: __op }});
+        // Name the document this ran against.
+        //
+        // VLM checkpoint cadence is per-document, and nothing else in the
+        // envelope says which document a script touched — so a single
+        // process-wide counter advanced across every open document at once
+        // and fired its checkpoint against whichever one happened to be
+        // active. This is the one place every wrapped script returns through.
+        var __mcpDocName = null;
+        try {{
+            if (app.documents.length > 0) __mcpDocName = app.activeDocument.name;
+        }} catch (de) {{ __mcpDocName = null; }}
+
+        return JSON.stringify({{ ok: true, data: {data_expr}, operation: __op,
+                                 activeDocument: __mcpDocName }});
     }} catch (e) {{
         return JSON.stringify({{
             ok: false,

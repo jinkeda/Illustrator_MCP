@@ -35,3 +35,4 @@ class ExecutionResponse(TypedDict, total=False):
     trace_id: str
     elapsed_ms: float
     command: str
+    integrity: Dict[str, Any]

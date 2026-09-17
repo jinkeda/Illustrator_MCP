@@ -90,7 +90,7 @@ echo  Installation Complete!
 echo =============================================
 echo.
 echo Next steps:
-echo 1. Start the proxy-server: cd proxy-server ^&^& npm install ^&^& node index.js
+echo 1. Configure your MCP client to start the Python server
 echo 2. Open Adobe Illustrator
 echo 3. Go to Window ^> Extensions ^> MCP Control
 echo 4. Click "Connect" in the panel

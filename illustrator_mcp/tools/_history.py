@@ -6,15 +6,20 @@ Extracted from documents.py for readability.
 
 from typing import Literal, Optional
 
+from illustrator_mcp.tools.base import MutationInputBase
 from pydantic import Field
 
+from mcp.types import CallToolResult
 from illustrator_mcp.shared import mcp
 from illustrator_mcp import templates
-from illustrator_mcp.tools.base import execute_jsx_tool, ToolInputBase, TOOL_ANNOTATIONS
+from illustrator_mcp.tools.base import (
+    execute_jsx_tool, ToolInputBase, TOOL_ANNOTATIONS, canonical_tool,
+    declare_effects,
+)
 from illustrator_mcp.errors import make_envelope
 
 
-class HistoryInput(ToolInputBase):
+class HistoryInput(MutationInputBase):
     """Input for undo/redo and named checkpoint operations."""
     action: Literal[
         "undo", "redo",
@@ -28,13 +33,21 @@ class HistoryInput(ToolInputBase):
         max_length=64
     )
 
-    @classmethod
-    def model_validate(cls, *args, **kwargs):
-        instance = super().model_validate(*args, **kwargs)
-        if instance.action.startswith("checkpoint_") and instance.action != "checkpoint_list":
-            if not instance.name or not instance.name.strip():
-                raise ValueError(f"{instance.action} requires a non-empty 'name'")
-        return instance
+    def model_post_init(self, __context) -> None:
+        """Validate action-specific required fields.
+
+        This check used to live in a ``model_validate`` override, which the
+        plain constructor does not go through — so ``HistoryInput(
+        action="checkpoint_save")`` built an invalid input, and the missing
+        name surfaced from the host-side code as
+        ``AttributeError: 'NoneType' object has no attribute 'replace'``
+        instead of a validation error raised before anything ran.
+        ``model_post_init`` runs on every construction path, which is also
+        where ``DocumentInput`` puts the same kind of check.
+        """
+        if self.action.startswith("checkpoint_") and self.action != "checkpoint_list":
+            if not self.name or not self.name.strip():
+                raise ValueError(f"{self.action} requires a non-empty 'name'")
 
 
 async def _handle_checkpoint(params: HistoryInput) -> str:
@@ -62,6 +75,7 @@ async def _handle_checkpoint(params: HistoryInput) -> str:
     )
 
     return await execute_jsx_tool(
+            canonical=True,
         script=script,
         command_type=params.action,
         tool_name="illustrator_history",
@@ -74,7 +88,8 @@ _HISTORY_NAME = "illustrator_history"
 
 
 @mcp.tool(name=_HISTORY_NAME, annotations=TOOL_ANNOTATIONS[_HISTORY_NAME])
-async def illustrator_history(params: HistoryInput) -> str:
+@canonical_tool(_HISTORY_NAME, reserve=True)
+async def illustrator_history(params: HistoryInput) -> CallToolResult:
     """Undo or redo actions in Illustrator.
 
     CONTRACT: readOnly=False, destructive=True, idempotent=False, openWorld=False
@@ -85,10 +100,14 @@ async def illustrator_history(params: HistoryInput) -> str:
       - Saving/restoring named checkpoints for recovery
 
     EXAMPLES:
-      illustrator_history(action="undo", count=3)
-      illustrator_history(action="checkpoint_save", name="before_boolean")
-      illustrator_history(action="checkpoint_restore", name="before_boolean")
-      illustrator_history(action="checkpoint_list")
+      Undo three steps:
+        {"params": {"action": "undo", "count": 3}}
+      Save a checkpoint before risky work:
+        {"params": {"action": "checkpoint_save", "name": "before_boolean"}}
+      Restore it:
+        {"params": {"action": "checkpoint_restore", "name": "before_boolean"}}
+      List checkpoints:
+        {"params": {"action": "checkpoint_list"}}
 
     NOTES:
       - Checkpoints capture MCP-managed items only (those with @mcp:id)
@@ -116,8 +135,18 @@ async def illustrator_history(params: HistoryInput) -> str:
         script = template
     
     return await execute_jsx_tool(
+            canonical=True,
         script=script,
         command_type=params.action,
         tool_name="illustrator_history",
-        params={"action": params.action, "count": params.count}
+        params={"action": params.action, "count": params.count},
+        # `handles` supplies mcpHandleInvalidateAll. Undo leaves silent zombies
+        # — a restored item's old reference still answers with its typename and
+        # never throws — so every handle issued before the step is dropped.
+        includes=["handles"],
+        # The one honest `complete: false` in the set. Undo restores whatever
+        # the previous step touched, and the server has no record of which
+        # items those were, so it cannot enumerate them. Saying so is the
+        # signal; the other tools saying it while knowing was the defect.
+        effects=declare_effects(complete=False),
     )

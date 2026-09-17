@@ -1,8 +1,12 @@
 import { defineConfig } from 'vite';
 import react from '@vitejs/plugin-react-swc';
 import path from 'path';
+import { readFileSync } from 'node:fs';
+
+const { version: packageVersion } = JSON.parse(readFileSync(path.resolve(__dirname, 'package.json'), 'utf8'));
 
 export default defineConfig({
+  define: { __APP_VERSION__: JSON.stringify(packageVersion) },
   plugins: [react()],
   base: './', // CRITICAL for CEP - relative paths
   resolve: {

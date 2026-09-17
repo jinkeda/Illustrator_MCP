@@ -1,0 +1,1598 @@
+{
+  "geometry": {
+    "coordinates": "Points. XY helpers take active-artboard-relative x right/y down; DOM bounds and getContext use document x right/y up. Millimeter conversions are explicit.",
+    "notes": "Requires an open document for DOM helpers. Creation helpers mutate artwork. Optional ownership scopes must be completed or cleaned by the caller; inspect cleanup failures. Signatures list formal arguments; notes specify optional values.",
+    "example": {
+      "prerequisites": "An open document with an active artboard.",
+      "code": "var p = pointXY(10, 20); return {point: p, context: getContext(), tenMm: mmToPoints(10)};"
+    },
+    "exports": {
+      "getContext": {
+        "signature": "getContext()",
+        "returns": "{left, top, right, bottom, width, height, centerX, centerY} for the active artboard."
+      },
+      "pointXY": {
+        "signature": "pointXY(x, y)",
+        "returns": "{left, top}: document coordinates converted from artboard-relative points."
+      },
+      "rectXY": {
+        "signature": "rectXY(x, y, w, h, options, scope)",
+        "returns": "PathItem.",
+        "notes": "Top-left XY, width/height in points; optional options.cornerRadius in points; optional ownership scope."
+      },
+      "ellipseXY": {
+        "signature": "ellipseXY(x, y, w, h, scope)",
+        "returns": "PathItem.",
+        "notes": "Top-left XY and dimensions in points; optional ownership scope."
+      },
+      "lineXY": {
+        "signature": "lineXY(x1, y1, x2, y2, scope)",
+        "returns": "Open, unfilled PathItem.",
+        "notes": "Endpoints in artboard XY points; optional ownership scope."
+      },
+      "polygonXY": {
+        "signature": "polygonXY(points, closed, scope)",
+        "returns": "PathItem.",
+        "notes": "points is an array of [x,y] pairs; closed defaults true; scope optional."
+      },
+      "makeRGBColor": {
+        "signature": "makeRGBColor(r, g, b)",
+        "returns": "RGBColor.",
+        "notes": "Supply RGB channels in 0..255."
+      },
+      "mmToPoints": {
+        "signature": "mmToPoints(mm)",
+        "returns": "Number: mm multiplied by 2.83464567."
+      },
+      "pointsToMm": {
+        "signature": "pointsToMm(pt)",
+        "returns": "Number: points divided by 2.83464567."
+      },
+      "getVisibleBounds": {
+        "signature": "getVisibleBounds(item)",
+        "returns": "Document [left,top,right,bottom] in points.",
+        "notes": "For clipped groups uses the clipping path geometric bounds when found; otherwise item.visibleBounds."
+      },
+      "getVisibleInfo": {
+        "signature": "getVisibleInfo(item)",
+        "returns": "{left,top,right,bottom,width,height} using getVisibleBounds."
+      },
+      "_createPath": {
+        "signature": "_createPath(item, points, abLeft, abTop)",
+        "returns": "Boolean: whether Bezier handles were supplied.",
+        "notes": "Internal helper modifies an existing PathItem. Points are [x,y], {anchor,left,right}, or [anchor,inHandle,outHandle]; artboard XY converts using explicit abLeft/abTop."
+      },
+      "drawPathPoints": {
+        "signature": "drawPathPoints(spec)",
+        "returns": "{ok,uuid,typename,bounds} for created artwork.",
+        "notes": "Supply points or subpaths, never both; each path needs at least two points. closed defaults true. compound requires closed subpaths. Optional appearance, target.layer, meta and id; id must be unique. Coordinates are artboard XY points."
+      }
+    }
+  },
+  "layout": {
+    "coordinates": "Document visible bounds use points, Y up. arrangeInGrid spacing and batchResize dimensions use millimeters. createGrid and distribute gaps use points.",
+    "notes": "Mutates supplied PageItems or creates artwork. Requires an open document and editable items. Returned DOM items are not JSON-serializable.",
+    "example": {
+      "prerequisites": "An open document; select at least two editable items.",
+      "code": "var items = []; for (var i = 0; i < app.activeDocument.selection.length; i++) items.push(app.activeDocument.selection[i]); if (items.length < 2) throw new Error('Select at least two items'); distributeHorizontal(items, 10); return {arranged: items.length, gapPoints: 10};"
+    },
+    "exports": {
+      "arrangeInGrid": {
+        "signature": "arrangeInGrid(items, columns, spacingMm)",
+        "returns": "undefined.",
+        "notes": "PageItem array, positive integer columns, spacing in millimeters. Anchors at first item's visible top-left; rows use their maximum height."
+      },
+      "batchResize": {
+        "signature": "batchResize(items, targetWidthMm, targetHeightMm)",
+        "returns": "undefined.",
+        "notes": "Truthy dimensions in millimeters; omit one for proportional resizing, supply both for independent width/height. Uses visible dimensions."
+      },
+      "createGrid": {
+        "signature": "createGrid(params)",
+        "returns": "Array of created PathItems in row-major order.",
+        "notes": "Required rows, cols, itemWidth, itemHeight. Dimensions/gapX/gapY/cornerRadius/offsetX/offsetY in points. gapX defaults 10, gapY to gapX. shape rect or ellipse; optional colors and names arrays. Centered on active artboard; offsets x right/y down."
+      },
+      "distributeHorizontal": {
+        "signature": "distributeHorizontal(items, gap)",
+        "returns": "undefined.",
+        "notes": "At least two items for an effect. gap optional in points; omission distributes within existing outer span."
+      },
+      "distributeVertical": {
+        "signature": "distributeVertical(items, gap)",
+        "returns": "undefined.",
+        "notes": "At least two items for an effect. gap optional in points; omission distributes within existing outer span."
+      },
+      "alignCenter": {
+        "signature": "alignCenter(items)",
+        "returns": "undefined.",
+        "notes": "Centers aggregate visible bounds on active artboard, preserving relative placement; empty array is a no-op."
+      },
+      "alignHorizontal": {
+        "signature": "alignHorizontal(items, alignment)",
+        "returns": "undefined.",
+        "notes": "At least two items. left/right align outer edges; other values (including omitted) align to mean item center X."
+      },
+      "alignVertical": {
+        "signature": "alignVertical(items, alignment)",
+        "returns": "undefined.",
+        "notes": "At least two items. top/bottom align outer edges; other values (including omitted) align to mean item center Y."
+      }
+    }
+  },
+  "selection": {
+    "coordinates": "Document points, Y up; spatial sort uses a five-point tolerance.",
+    "notes": "Reads active document selection. Does not change selection.",
+    "example": {
+      "prerequisites": "An open document.",
+      "code": "return {count: getOrderedSelection('row-major', false).length};"
+    },
+    "exports": {
+      "getOrderedSelection": {
+        "signature": "getOrderedSelection(order, reverse)",
+        "returns": "Array of selected items, or [] when empty.",
+        "notes": "column-major sorts X first; other orders use rows top to bottom. reverse is optional."
+      }
+    }
+  },
+  "assets": {
+    "coordinates": "Document points, X right/Y up; bounds are [left,top,right,bottom].",
+    "notes": "Reads placed and raster items; does not mutate artwork.",
+    "example": {
+      "prerequisites": "An open document; an empty asset list is valid.",
+      "code": "return analyzeAssets('document');"
+    },
+    "exports": {
+      "analyzeAssets": {
+        "signature": "analyzeAssets(scope)",
+        "returns": "{count,scope,assets}, or {error,count:0,assets:[]}.",
+        "notes": "scope is selection, document, or a layer name; assets sorted by name."
+      },
+      "getAssetInfo": {
+        "signature": "getAssetInfo(item)",
+        "returns": "Asset metadata object.",
+        "notes": "PlacedItem/RasterItem: name,type,bounds,width,height,aspectRatio,orientation,position,isLinked,filePath. Missing link path is null."
+      },
+      "collectAllPlaced": {
+        "signature": "collectAllPlaced(doc)",
+        "returns": "Array of placed items followed by raster items.",
+        "notes": "Supply a Document."
+      },
+      "collectPlacedFromLayer": {
+        "signature": "collectPlacedFromLayer(layer)",
+        "returns": "Array of placed/raster items, including sublayers.",
+        "notes": "Supply a Layer."
+      },
+      "isPlacedOrRaster": {
+        "signature": "isPlacedOrRaster(item)",
+        "returns": "Boolean.",
+        "notes": "Checks typename for PlacedItem or RasterItem."
+      }
+    }
+  },
+  "geo_ir": {
+    "coordinates": "Pure numeric geometry preserves the supplied coordinate frame and units; use artboard XY points when passing results to XY creation helpers.",
+    "notes": "IR constructors do not draw. Constructors are permissive; call irValidate before consuming external IR.",
+    "example": {
+      "prerequisites": "No Illustrator document is needed for this example.",
+      "code": "return irValidate(irPath([[0,0],[10,10]], false));"
+    },
+    "exports": {
+      "GEO_IR_VERSION": {
+        "kind": "value",
+        "type": "number",
+        "notes": "IR format version."
+      },
+      "GEO_IR_TYPES": {
+        "kind": "value",
+        "type": "object",
+        "notes": "Recognized IR type names."
+      },
+      "GEO_IR_KINDS": {
+        "kind": "value",
+        "type": "object",
+        "notes": "Recognized path kind names."
+      },
+      "irPath": {
+        "signature": "irPath(points, closed, meta)",
+        "returns": "Polyline path IR.",
+        "notes": "points is [[x,y],...]; closed defaults false; meta optional object."
+      },
+      "irBezierPath": {
+        "signature": "irBezierPath(points, handles, closed, meta)",
+        "returns": "Bezier path IR with absolute handles.",
+        "notes": "handles parallels points, with in/out pairs and optional type. Missing type is filled in on the supplied handle objects; closed defaults false."
+      },
+      "irMulti": {
+        "signature": "irMulti(paths, meta)",
+        "returns": "Multi-path IR.",
+        "notes": "paths array and metadata default empty."
+      },
+      "irPoints": {
+        "signature": "irPoints(points, meta)",
+        "returns": "Point-cloud IR.",
+        "notes": "points array and metadata default empty."
+      },
+      "isIR": {
+        "signature": "isIR(obj)",
+        "returns": "Boolean.",
+        "notes": "Duck check for a string ir property, not full validation."
+      },
+      "irType": {
+        "signature": "irType(obj)",
+        "returns": "IR type string or null."
+      },
+      "irValidate": {
+        "signature": "irValidate(obj)",
+        "returns": "{ok,errors}.",
+        "notes": "Validates IR version, type, points and handle structure; constructors alone do not ensure validity."
+      },
+      "irFlatten": {
+        "signature": "irFlatten(obj)",
+        "returns": "Array of paths.",
+        "notes": "A path becomes [obj], multi returns its paths, other types return []; not recursive flattening."
+      },
+      "irPointCount": {
+        "signature": "irPointCount(obj)",
+        "returns": "Number of points across the IR."
+      },
+      "irMapPoints": {
+        "signature": "irMapPoints(obj, fn)",
+        "returns": "Transformed IR, or unchanged input for unrecognized/non-IR values.",
+        "notes": "fn takes a coordinate pair and returns a pair; maps anchors and absolute handles; metadata remains shared."
+      }
+    }
+  },
+  "curves": {
+    "coordinates": "Pure numeric geometry preserves the supplied coordinate frame and units; use artboard XY points when passing results to XY creation helpers.",
+    "notes": "Curve construction returns IR without DOM writes. Angles are radians.",
+    "example": {
+      "prerequisites": "No Illustrator document is needed for this example.",
+      "code": "return circularArc(0, 0, 10, 0, Math.PI / 2);"
+    },
+    "exports": {
+      "smoothCurve": {
+        "signature": "smoothCurve(pts, tension, closed)",
+        "returns": "Path IR, normally Bezier.",
+        "notes": "pts is [[x,y],...]; tension defaults 0.5; closed false. Two or fewer points produce a polyline."
+      },
+      "naturalSpline": {
+        "signature": "naturalSpline(pts, closed)",
+        "returns": "Natural cubic spline IR.",
+        "notes": "closed defaults false; two or fewer points produce a polyline."
+      },
+      "circularArc": {
+        "signature": "circularArc(cx, cy, r, startAngle, endAngle, segments)",
+        "returns": "Arc IR.",
+        "notes": "Center/radius in input units; radians; segments optional, defaults to at most 90 degrees per segment."
+      },
+      "ellipticalArc": {
+        "signature": "ellipticalArc(cx, cy, rx, ry, startAngle, endAngle, segments)",
+        "returns": "Arc IR.",
+        "notes": "Radii in input units; radians; optional segment count. Zero angular span produces a point path."
+      },
+      "roundedPolygon": {
+        "signature": "roundedPolygon(verts, radius, closed)",
+        "returns": "Rounded polygon IR.",
+        "notes": "verts are coordinate pairs; closed defaults true; radius limited by adjacent edge lengths."
+      }
+    }
+  },
+  "grid_helper": {
+    "coordinates": "artboardGrid cells use artboard-relative points, X right/Y down. itemsInCell records use document bounds and centers, Y up.",
+    "notes": "Reads artwork. Cell labels are row letters and 1-based columns, e.g. A1.",
+    "example": {
+      "prerequisites": "An open document with an active artboard.",
+      "code": "return artboardGrid(4, 4);"
+    },
+    "exports": {
+      "artboardGrid": {
+        "signature": "artboardGrid(cols, rows)",
+        "returns": "{cells,cols,rows,cellWidth,cellHeight}.",
+        "notes": "Defaults 4 by 4. Supply integer cols 1..99, rows 1..26 and a nonempty active artboard. Each cell has x,y,width,height."
+      },
+      "itemsInCell": {
+        "signature": "itemsInCell(cellLabel, cols, rows, opts)",
+        "returns": "{cell,mode,items,summary,total}.",
+        "notes": "opts.mode is containsCenter (default) or intersects. Reports visible non-guide artwork with document bounds; no handles are issued."
+      }
+    }
+  },
+  "session": {
+    "coordinates": "Not applicable; no spatial coordinates.",
+    "notes": "Host-engine stash, namespaced by document name (or __no_doc__). Not durable storage or object identity. Do not mutate references returned by stashGet.",
+    "example": {
+      "prerequisites": "No Illustrator document is needed for this example.",
+      "code": "return stashInfo();"
+    },
+    "exports": {
+      "stashPut": {
+        "signature": "stashPut(key, data, meta)",
+        "returns": "undefined.",
+        "notes": "Stores a direct data reference; use JSON-serializable data. Optional metadata object."
+      },
+      "stashGet": {
+        "signature": "stashGet(key)",
+        "returns": "Stored value or null.",
+        "notes": "Returns the stored reference, not a clone."
+      },
+      "stashPutIR": {
+        "signature": "stashPutIR(key, irData, meta)",
+        "returns": "{ok,errors?}.",
+        "notes": "Validates with irValidate before storing; optional metadata."
+      },
+      "stashKeys": {
+        "signature": "stashKeys()",
+        "returns": "Array of keys in the current document namespace."
+      },
+      "stashClear": {
+        "signature": "stashClear(key)",
+        "returns": "undefined.",
+        "notes": "Truthy key deletes one entry; omitted key clears the current namespace."
+      },
+      "stashInfo": {
+        "signature": "stashInfo()",
+        "returns": "Map from key to metadata.",
+        "notes": "Entries include key,ns,ts,size,meta; size is serialized string length."
+      }
+    }
+  },
+  "validate": {
+    "coordinates": "Document points, X right/Y up; bounds are [left,top,right,bottom].",
+    "notes": "Read-only geometric checks; result serialization differs between helpers.",
+    "example": {
+      "prerequisites": "No Illustrator document is needed for this example.",
+      "code": "return isItemCenterOnArtboard([0,100,20,80], [0,100,100,0]);"
+    },
+    "exports": {
+      "isItemCenterOnArtboard": {
+        "signature": "isItemCenterOnArtboard(itemBounds, artboardRect)",
+        "returns": "Boolean.",
+        "notes": "Both arguments are document [left,top,right,bottom]; center containment includes edges."
+      },
+      "isLayerHidden": {
+        "signature": "isLayerHidden(item)",
+        "returns": "Boolean.",
+        "notes": "Checks invisible ancestor layers; unreadable ancestry returns false."
+      },
+      "countItemsOnArtboard": {
+        "signature": "countItemsOnArtboard(opts)",
+        "returns": "JSON string containing counts and a sample of off-artboard items.",
+        "notes": "Optional artboardIndex (default active), boundsType visible/geometric, boundsSource group_visible/clipping_path, policy fully-contained/intersects, scope document/artboard, ignoreHidden and ignoreLocked (both default true). Requires an open document; parse the returned string before combining with other JSON data."
+      },
+      "publicationPreflightScan": {
+        "signature": "publicationPreflightScan(doc, options)",
+        "returns": "Bounded publication checks, measurements, issues, scope, summary and coverage.",
+        "notes": "options: publication thresholds, artboard_index, scan_max_items, scan_budget_ms. Missing font/raster evidence is unknown. Cooperative budgets are not host timeouts."
+      }
+    }
+  },
+  "item_ref": {
+    "coordinates": "Not applicable; no spatial coordinates.",
+    "notes": "Locator and tag helpers. Reading descriptions does not stamp notes; assign helpers do. Locators are not stable handles.",
+    "example": {
+      "prerequisites": "No Illustrator document is needed for this example.",
+      "code": "return parseMcpTags('@mcp:id=example @mcp:role=label');"
+    },
+    "exports": {
+      "getLayerPath": {
+        "signature": "getLayerPath(layer)",
+        "returns": "Slash-separated layer path string."
+      },
+      "getIndexPath": {
+        "signature": "getIndexPath(item)",
+        "returns": "Array of indices along the item container path."
+      },
+      "describeItem": {
+        "signature": "describeItem(item, layer)",
+        "returns": "Legacy {layerPath,indexPath,itemId,itemName,itemType}.",
+        "notes": "Deprecated: use describeItemV2. Optional fallback layer; item.layer takes precedence when readable.",
+        "deprecated": true
+      },
+      "describeItemV2": {
+        "signature": "describeItemV2(item, options)",
+        "returns": "{locator,identity,tags,itemType,itemName}.",
+        "notes": "options.includeIdentity and includeTags default enabled unless false; tags is {tags: map}. No ID assignment."
+      },
+      "parseMcpTags": {
+        "signature": "parseMcpTags(str)",
+        "returns": "Map of @mcp:key=value tags.",
+        "notes": "Parses strings without mutating notes."
+      },
+      "assignItemId": {
+        "signature": "assignItemId(item)",
+        "returns": "Generated ID string.",
+        "notes": "Deprecated: use assignItemIdV2. Attempts to replace note ID; write failure is swallowed, so returned ID does not prove stamping succeeded.",
+        "deprecated": true
+      },
+      "assignItemIdV2": {
+        "signature": "assignItemIdV2(item, policy)",
+        "returns": "{assigned,id,conflict,previousId}.",
+        "notes": "policy defaults none; preserve reads existing ID, opt_in keeps an existing ID or assigns, always replaces. Writes item.note when assigning."
+      }
+    }
+  },
+  "mcp_id": {
+    "coordinates": "Not applicable; no spatial coordinates.",
+    "notes": "Token-aware note identity utilities. Reading never stamps; setMcpId writes. Walk helpers traverse document layers to avoid stale document-level collections.",
+    "example": {
+      "prerequisites": "No Illustrator document is needed for this example.",
+      "code": "return extractAllMcpIds('@mcp:id=one @mcp:id=two');"
+    },
+    "exports": {
+      "extractMcpId": {
+        "signature": "extractMcpId(note)",
+        "returns": "First MCP ID string or null."
+      },
+      "extractAllMcpIds": {
+        "signature": "extractAllMcpIds(note)",
+        "returns": "Array of ID tokens in note order."
+      },
+      "noteHasMcpId": {
+        "signature": "noteHasMcpId(note, id)",
+        "returns": "Boolean.",
+        "notes": "Exact complete token match, not substring matching."
+      },
+      "findItemsByMcpId": {
+        "signature": "findItemsByMcpId(doc, id, opts)",
+        "returns": "{items,scanned,truncated,duplicate}.",
+        "notes": "opts.limit is optional maximum scanned items; 0 means unlimited. Inspect duplicate and truncated before trusting identity."
+      },
+      "setMcpId": {
+        "signature": "setMcpId(item, id)",
+        "returns": "undefined.",
+        "notes": "Replaces existing ID tokens in item.note while preserving other content."
+      },
+      "removeIdFromNote": {
+        "signature": "removeIdFromNote(note)",
+        "returns": "Note string with ID tokens removed.",
+        "notes": "Does not write to artwork."
+      },
+      "mcpWalkPageItems": {
+        "signature": "mcpWalkPageItems(doc, visitor, opts)",
+        "returns": "{visited,truncated,stopped}.",
+        "notes": "visitor(item) returns truthy to stop; opts.limit default unlimited."
+      },
+      "mcpFindItemByRef": {
+        "signature": "mcpFindItemByRef(doc, ref, opts)",
+        "returns": "{item,matches}.",
+        "notes": "Matches the exact retained DOM reference in a fresh walk, not similar metadata."
+      }
+    }
+  },
+  "error_envelope": {
+    "coordinates": "Not applicable; no spatial coordinates.",
+    "notes": "Constructs the shared JSX error envelope without throwing.",
+    "example": {
+      "prerequisites": "No Illustrator document is needed for this example.",
+      "code": "return makeError('V006', 'Example validation error', 'validate');"
+    },
+    "exports": {
+      "makeError": {
+        "signature": "makeError(code, message, stage, itemRef, details)",
+        "returns": "{ok:false,error:{code,message,stage,itemRef,details}}.",
+        "notes": "code is an ErrorCodes value; optional localization itemRef and details."
+      }
+    }
+  },
+  "field_eval": {
+    "coordinates": "Spatial field evaluators use the target/document context; numeric outputs retain the destination parameter units.",
+    "notes": "Field descriptors are {$field: name, ...parameters}. Registration changes the evaluator table for this execution.",
+    "example": {
+      "prerequisites": "No Illustrator document is needed for this example.",
+      "code": "return {field: isField({$field:'index'}), plain: containsFields({opacity:50})};"
+    },
+    "exports": {
+      "FIELD_EVALUATORS": {
+        "kind": "value",
+        "type": "object",
+        "notes": "Evaluator name to function table; populated at include time."
+      },
+      "registerFieldEvaluator": {
+        "signature": "registerFieldEvaluator(name, fn)",
+        "returns": "undefined.",
+        "notes": "fn(fieldParams, context) returns a resolved value; registers by name."
+      },
+      "isField": {
+        "signature": "isField(val)",
+        "returns": "Boolean.",
+        "notes": "Recognizes a $field descriptor, not a full semantic validation."
+      },
+      "containsFields": {
+        "signature": "containsFields(val)",
+        "returns": "Boolean.",
+        "notes": "Recursively checks objects and arrays for field descriptors."
+      },
+      "evaluateField": {
+        "signature": "evaluateField(field, evalCtx)",
+        "returns": "Resolved value.",
+        "notes": "evalCtx has target,index,total,doc. Unknown evaluator throws."
+      },
+      "resolveFields": {
+        "signature": "resolveFields(params, target, index, total, ctx)",
+        "returns": "New parameter object with descriptors resolved.",
+        "notes": "Pass current target, zero-based index, total target count and execution context with doc."
+      }
+    }
+  },
+  "snapshot": {
+    "coordinates": "Document points, X right/Y up; bounds are [left,top,right,bottom].",
+    "notes": "Partial property recovery of @mcp:id-tagged items only. Cannot recreate deletions, anchors, text, grouping, z-order or full appearance. Inspect failure/notFound counts; this is not a document transaction.",
+    "example": {
+      "prerequisites": "No Illustrator document is needed for this example.",
+      "code": "return {scope: SNAPSHOT_RECOVERY_SCOPE};"
+    },
+    "exports": {
+      "captureSnapshot": {
+        "signature": "captureSnapshot(doc, options)",
+        "returns": "Snapshot object with version,timestamp,docName,items and layers.",
+        "notes": "options.clock optional. mcpOnly has no effect: untagged items are always excluded. Layer properties are captured but not restored."
+      },
+      "restoreSnapshot": {
+        "signature": "restoreSnapshot(doc, snapshot, options)",
+        "returns": "Restore report with restored,failed,notFound,errors.",
+        "notes": "geometry and style default true, restoreSize and visibility default false. Best effort; can partially apply before failure."
+      },
+      "serializeColor": {
+        "signature": "serializeColor(color)",
+        "returns": "JSON-safe color descriptor or null.",
+        "notes": "Supports RGB, CMYK, gray, spot name, and none; unsupported types return null."
+      },
+      "deserializeColor": {
+        "signature": "deserializeColor(colorData)",
+        "returns": "Illustrator Color or null.",
+        "notes": "Supports rgb,cmyk,gray,none; spot descriptors are not reconstructed."
+      },
+      "SNAPSHOT_RECOVERY_SCOPE": {
+        "kind": "value",
+        "type": "string",
+        "notes": "Human-readable limit on snapshot recovery coverage."
+      }
+    }
+  },
+  "checkpoint": {
+    "coordinates": "Document points, X right/Y up; bounds are [left,top,right,bottom].",
+    "notes": "Named, bounded property snapshots built on snapshot.jsx, not full-document backups. Saved by document key with a filesystem fallback; inspect warnings and partial restore results.",
+    "example": {
+      "prerequisites": "An open document; reads the checkpoint store and may load its filesystem fallback.",
+      "code": "return checkpointList(app.activeDocument);"
+    },
+    "exports": {
+      "checkpointSave": {
+        "signature": "checkpointSave(name, doc)",
+        "returns": "{ok,name,itemCount,byteSize,warnings} or failure result.",
+        "notes": "Name uses letters, digits, spaces, dot, underscore or hyphen. Limits: 2000 items and 2 MiB serialized data."
+      },
+      "checkpointRestore": {
+        "signature": "checkpointRestore(name, doc, opts)",
+        "returns": "Restore report or failure result.",
+        "notes": "opts: geometry,style,visibility,restoreSize as in restoreSnapshot. Cannot reconstruct deleted items or structural edits."
+      },
+      "checkpointList": {
+        "signature": "checkpointList(doc)",
+        "returns": "{ok,checkpoints}.",
+        "notes": "Entries contain name,timestamp,itemCount,byteSize."
+      },
+      "checkpointDelete": {
+        "signature": "checkpointDelete(name, doc)",
+        "returns": "{ok,deleted}.",
+        "notes": "Removes the named stored checkpoint, not artwork."
+      }
+    }
+  },
+  "targets": {
+    "coordinates": "Document points, X right/Y up; bounds are [left,top,right,bottom]. Spatial selectors can explicitly use artboard coordinates.",
+    "notes": "Collection helpers return DOM references, never stamp notes. normalizeTargetSelector accepts flat or wrapped selectors and can add a default type to the supplied object; it rejects unknown selector and nested filter fields, with at most 16 compound levels.",
+    "example": {
+      "prerequisites": "No Illustrator document is needed for this example.",
+      "code": "return normalizeTargetSelector({type:'selection', orderBy:'reading'});"
+    },
+    "exports": {
+      "sortItems": {
+        "signature": "sortItems(items, orderBy)",
+        "returns": "New sorted PageItem array.",
+        "notes": "orderBy: zOrder,zOrderReverse,reading,column,name,positionX,positionY,area."
+      },
+      "filterItems": {
+        "signature": "filterItems(items, exclude)",
+        "returns": "New filtered PageItem array.",
+        "notes": "exclude: locked,hidden,guides,clipped booleans."
+      },
+      "isInsideClippingMask": {
+        "signature": "isInsideClippingMask(item)",
+        "returns": "Boolean.",
+        "notes": "Checks clipped group ancestry."
+      },
+      "selectionToArray": {
+        "signature": "selectionToArray(sel)",
+        "returns": "PageItem array.",
+        "notes": "Copies a selection collection."
+      },
+      "pageItemsToArray": {
+        "signature": "pageItemsToArray(items)",
+        "returns": "PageItem array.",
+        "notes": "Copies a pageItems collection."
+      },
+      "findLayer": {
+        "signature": "findLayer(doc, layerName)",
+        "returns": "Layer or null.",
+        "notes": "Looks up a layer by name."
+      },
+      "collectContainerItems": {
+        "signature": "collectContainerItems(container, recursive, scan)",
+        "returns": "PageItem array.",
+        "notes": "Container has pageItems; recursive controls group descent."
+      },
+      "collectLayerItems": {
+        "signature": "collectLayerItems(layer, recursive, scan)",
+        "returns": "PageItem array.",
+        "notes": "Optional recursive group descent."
+      },
+      "queryItems": {
+        "signature": "queryItems(doc, query, scan)",
+        "returns": "PageItem array.",
+        "notes": "query has layer,itemType,pattern,recursive; pattern is a regular expression string."
+      },
+      "collectTargets": {
+        "signature": "collectTargets(doc, target, opts)",
+        "returns": "PageItem array or structured exception.",
+        "notes": "Supports selection,all,layer,query,id,spatial,grid,compound,handle. Optional opts.report collects unresolvedIds, opts.startingSelection stabilizes batch selection. Collection applies ordering, exclusions and maxScan, including grid selectors; compound also applies internal exclusion."
+      },
+      "normalizeTargetSelector": {
+        "signature": "normalizeTargetSelector(selector)",
+        "returns": "{target,orderBy,exclude,maxScan}.",
+        "notes": "Omitted selector defaults selection; maxScan must be a positive integer when supplied. Supports flat selector or {target,...} wrapper. Does not resolve artwork."
+      },
+      "dedupeTargetItems": {
+        "signature": "dedupeTargetItems(items)",
+        "returns": "New array with duplicate references removed.",
+        "notes": "Preserves first-seen order."
+      }
+    }
+  },
+  "handles": {
+    "coordinates": "Document points, X right/Y up; bounds are [left,top,right,bottom].",
+    "notes": "Ephemeral host-engine handles do not write artwork notes or names. Five-minute retention, maximum 500 records; resolution refreshes expiry and requires the exact live object in the bound active document.",
+    "example": {
+      "prerequisites": "No Illustrator document is needed for this example.",
+      "code": "return mcpHandleState();"
+    },
+    "exports": {
+      "MCP_HANDLE_VERSION": {
+        "kind": "value",
+        "type": "string",
+        "notes": "Handle format implementation version."
+      },
+      "mcpIssueHandle": {
+        "signature": "mcpIssueHandle(item, documentToken)",
+        "returns": "{ok,status,record? ,message?}.",
+        "notes": "PageItem and optional document-session token; omitted token binds the active document. Success record includes handle,documentToken,sessionEpoch,issuedAt,expiresAt,itemType,itemName,bounds,status."
+      },
+      "mcpIssueHandles": {
+        "signature": "mcpIssueHandles(items, documentToken)",
+        "returns": "Array of issue results, one per item.",
+        "notes": "Same optional token as mcpIssueHandle; inspect each ok value."
+      },
+      "mcpResolveHandle": {
+        "signature": "mcpResolveHandle(handle, doc, opts)",
+        "returns": "{ok,status,item?,record?,message?}.",
+        "notes": "Current limitation: supply the explicit, bound active Document as doc. Omitted/null doc is broken in the shipped bundle: validation returns no document reference, so resolution reports stale and invalidates an otherwise live handle. A subsequent attempt reports unknown, even with doc supplied. Unknown/expired/stale handles fail; no metadata-based substitution."
+      },
+      "mcpHandleStatus": {
+        "signature": "mcpHandleStatus(handle)",
+        "returns": "{ok,status,message,record}.",
+        "notes": "Current limitation: calls mcpResolveHandle with null doc, so an otherwise live handle reports stale and is invalidated (subsequent resolution reports unknown). Do not use as a harmless status probe. Until repaired, use mcpResolveHandle(handle, explicitBoundActiveDocument) and inspect its result."
+      },
+      "mcpHandleInvalidateAll": {
+        "signature": "mcpHandleInvalidateAll(reason)",
+        "returns": "{ok,invalidated,reason,epoch}.",
+        "notes": "Clears all retained handles and changes epoch; optional reason defaults reset."
+      },
+      "mcpHandleState": {
+        "signature": "mcpHandleState()",
+        "returns": "{version,epoch,retained,maxRecords}.",
+        "notes": "Prunes expired records before reporting."
+      }
+    }
+  },
+  "doc_session": {
+    "coordinates": "Document points, X right/Y up; bounds are [left,top,right,bottom].",
+    "notes": "Document sessions retain exact DOM document references in the host engine. Tokens are not paths and do not survive engine reset; validate before mutation.",
+    "example": {
+      "prerequisites": "No Illustrator document is needed for this example.",
+      "code": "return mcpDocSessions();"
+    },
+    "exports": {
+      "MCP_DOC_SESSION_VERSION": {
+        "kind": "value",
+        "type": "string",
+        "notes": "Document-session implementation version."
+      },
+      "mcpDocBind": {
+        "signature": "mcpDocBind(opts)",
+        "returns": "Bound: {ok:true,status:'bound',token,name,reused,context}; no document: {ok:true,status:'no_document',token:null,detail}.",
+        "notes": "Binds active document; optional opts.label. Rebinding reuses the token. No-document binding is a successful app-level state with no token or binding, not a failure. Check token/status before document-bound work."
+      },
+      "mcpDocValidate": {
+        "signature": "mcpDocValidate(token, opts)",
+        "returns": "Success: {ok:true,status,token,boundName,currentName,renamed,isActive,context}; failure: {ok:false,status,message,...}. No document object is returned.",
+        "notes": "opts.requireActive defaults true; token must refer to the retained live document. Success status is valid or valid_inactive (when requireActive is false). Retained DOM references remain internal; validation.document is undefined."
+      },
+      "mcpDocContext": {
+        "signature": "mcpDocContext(token)",
+        "returns": "{ok,status,context?}.",
+        "notes": "With a token, validates using requireActive:false and returns its context. Without a token, reads active-document context with ok:true,status:'unbound' and creates no binding. Without an active document returns ok:false,status:'no_document'. Context includes active artboard and coordinate data."
+      },
+      "mcpDocRelease": {
+        "signature": "mcpDocRelease(token)",
+        "returns": "{ok,released}.",
+        "notes": "Removes the retained binding, not the document."
+      },
+      "mcpDocSessions": {
+        "signature": "mcpDocSessions()",
+        "returns": "{count,sessions}.",
+        "notes": "Lists live bindings after pruning closed documents."
+      },
+      "mcpDocList": {
+        "signature": "mcpDocList()",
+        "returns": "Live documents and active document with reference tokens, without activation."
+      },
+      "mcpDocActivate": {
+        "signature": "mcpDocActivate(token)",
+        "returns": "Explicitly activate a live document; invalid tokens fail."
+      }
+    }
+  },
+  "observation": {
+    "coordinates": "clipBox is [left,top,right,bottom] in active-artboard-relative points, Y down; returned artboard/item bounds are document points, Y up.",
+    "notes": "Internal infrastructure. Prefer public tools for normal agent work; direct calls require the surrounding lifecycle described here. Pair begin/end with the same unique observation ID. These retain comparison guards and issue handles without modifying artwork; completeness is bounded by maxItems.",
+    "example": {
+      "prerequisites": "An open document; do not reuse an ID belonging to an in-flight observation.",
+      "code": "var before = mcpObservationBegin('reference-example', 10); return {before: before, preservation: mcpObservationEnd('reference-example')};"
+    },
+    "exports": {
+      "MCP_OBSERVATION_VERSION": {
+        "kind": "value",
+        "type": "string",
+        "notes": "Observation guard implementation version."
+      },
+      "mcpObservationBegin": {
+        "signature": "mcpObservationBegin(observationId, maxItems, clipBox, exactVisibleCount, clipSpace, includeMap)",
+        "returns": "{ok,observationId,context,items,totalVisible,mapComplete,runtime,omissions}.",
+        "notes": "maxItems defaults 200; clipBox optional. exactVisibleCount opts into a full visible-total scan; otherwise totals may be lower bounds (totalVisibleExact=false). Requires active document; abandoned guards are bounded to 32 records and ten minutes, pruned only at a new managed begin. Eviction never reconciles host work."
+      },
+      "mcpObservationEnd": {
+        "signature": "mcpObservationEnd(observationId)",
+        "returns": "{ok,status,complete?,differences?,durationMs?}.",
+        "notes": "Consumes the guard and compares document, artboard, selection and recorded artwork properties. Missing guard reports unavailable; not a full document diff."
+      }
+    }
+  },
+  "host_runtime": {
+    "coordinates": "Not applicable; no spatial coordinates.",
+    "notes": "Internal infrastructure. Prefer public tools for normal agent work; direct calls require the surrounding lifecycle described here. Persistent host job bookkeeping, not an agent execution API. Reset/init can invalidate sessions or displace jobs; do not call them inside normal drawing scripts.",
+    "example": {
+      "prerequisites": "No Illustrator document is needed for this example.",
+      "code": "return mcpRuntimeState();"
+    },
+    "exports": {
+      "MCP_BOOTSTRAP_VERSION": {
+        "kind": "value",
+        "type": "string",
+        "notes": "Host bootstrap implementation version."
+      },
+      "mcpRuntimeState": {
+        "signature": "mcpRuntimeState()",
+        "returns": "Runtime state object, including present and version/session/job metadata.",
+        "notes": "Does not initialize an absent runtime."
+      },
+      "mcpRuntimeInit": {
+        "signature": "mcpRuntimeInit(spec)",
+        "returns": "{ok,status,state?,displacedJobIds?,previousEpoch?}.",
+        "notes": "spec: protocolVersion,runtimeHash,capabilities,force. Managed bootstrap only."
+      },
+      "mcpRuntimeHandshake": {
+        "signature": "mcpRuntimeHandshake(expected)",
+        "returns": "{status,matches,state,mismatches}.",
+        "notes": "expected: protocolVersion,runtimeHash,sessionEpoch. Compares current runtime."
+      },
+      "mcpRuntimeBeginWork": {
+        "signature": "mcpRuntimeBeginWork(spec)",
+        "returns": "Begin result with ok,status/sessionEpoch/activeJobs as applicable.",
+        "notes": "spec is jobId string or {jobId,digest,context}; requires initialized runtime and a valid job ID. Internal managed phase requests also supply phase and context.owner; continuation requires the same owner/digest and the exact next phase. Missing history refuses continuation."
+      },
+      "mcpRuntimeCompleteWork": {
+        "signature": "mcpRuntimeCompleteWork(jobId, outcome)",
+        "returns": "{ok,status,sessionEpoch?,activeJobs?,record?}.",
+        "notes": "Finalizes active job. outcome.status: succeeded,failed,partial (other becomes unknown); optional effects,errors,result,context. Only this route records completed:true for a whole-job finalizer. Internal outcome.phase finalizers instead retain completed:false/status:unknown and context.lastPhase evidence, because later logical-job steps are not established."
+      },
+      "mcpRuntimeJobStatus": {
+        "signature": "mcpRuntimeJobStatus(jobId)",
+        "returns": "{ok,status,record?,reason?,sessionEpoch?}.",
+        "notes": "Reads retained outcome without replay. Missing records remain unknown."
+      },
+      "mcpRuntimeEndWork": {
+        "signature": "mcpRuntimeEndWork(jobId)",
+        "returns": "End result with ok,status,durationMs?,sessionEpoch?,activeJobs?.",
+        "notes": "Ends bookkeeping; does not establish a completed outcome. Prefer managed CompleteWork."
+      },
+      "mcpRuntimeReset": {
+        "signature": "mcpRuntimeReset()",
+        "returns": "{ok,previousEpoch,displacedJobIds}.",
+        "notes": "Clears runtime state; managed lifecycle only."
+      }
+    }
+  },
+  "heap": {
+    "coordinates": "Not applicable; no spatial coordinates.",
+    "notes": "Internal infrastructure. Prefer public tools for normal agent work; direct calls require the surrounding lifecycle described here. Heap transactions track the identity index, not DOM rollback. Registering/deleting index entries does not create/remove artwork. stampMcpId writes notes.",
+    "example": {
+      "prerequisites": "No Illustrator document is needed for this example.",
+      "code": "return heapDiagnostics();"
+    },
+    "exports": {
+      "heapBeginTxn": {
+        "signature": "heapBeginTxn(batchId, doc)",
+        "returns": "undefined.",
+        "notes": "Starts an identity-index transaction; optional document defaults active. Managed batches own this lifecycle."
+      },
+      "heapCommitTxn": {
+        "signature": "heapCommitTxn()",
+        "returns": "{added,deleted} transaction statistics.",
+        "notes": "Commits index changes."
+      },
+      "heapRollbackTxn": {
+        "signature": "heapRollbackTxn()",
+        "returns": "{rolledBackAdds,rolledBackDeletes} statistics.",
+        "notes": "Restores index entries, not artwork."
+      },
+      "heapRegister": {
+        "signature": "heapRegister(uuid, ref)",
+        "returns": "undefined.",
+        "notes": "Associates an MCP ID with a PageItem reference."
+      },
+      "stampMcpId": {
+        "signature": "stampMcpId(item, id)",
+        "returns": "undefined.",
+        "notes": "Replaces the entire item.note with the MCP ID token and registers the item in the heap."
+      },
+      "resolveIdCompat": {
+        "signature": "resolveIdCompat(id, doc, opts)",
+        "returns": "PageItem or null.",
+        "notes": "Legacy first-match ID resolution; opts.freshScan bypasses heap and scans doc.pageItems, then caches a match. Does not detect duplicate IDs."
+      },
+      "heapTombstone": {
+        "signature": "heapTombstone(uuid)",
+        "returns": "undefined.",
+        "notes": "Marks an ID deleted in the current transaction/index."
+      },
+      "heapDelete": {
+        "signature": "heapDelete(uuid, ref)",
+        "returns": "undefined.",
+        "notes": "Records index deletion with reference for rollback; does not remove the item."
+      },
+      "heapResolve": {
+        "signature": "heapResolve(uuid, doc)",
+        "returns": "PageItem or null.",
+        "notes": "Checks tombstones/index and falls back to document lookup."
+      },
+      "heapResolveMany": {
+        "signature": "heapResolveMany(doc, uuids)",
+        "returns": "Array of found PageItems.",
+        "notes": "Preserves requested order and skips missing IDs."
+      },
+      "heapRebuildIndex": {
+        "signature": "heapRebuildIndex(doc)",
+        "returns": "Number of indexed items.",
+        "notes": "Rebuilds the identity cache from the document."
+      },
+      "heapInvalidate": {
+        "signature": "heapInvalidate()",
+        "returns": "undefined.",
+        "notes": "Clears cached identity state."
+      },
+      "heapDiagnostics": {
+        "signature": "heapDiagnostics()",
+        "returns": "Identity-index diagnostic object.",
+        "notes": "Includes transaction/cache statistics."
+      }
+    }
+  },
+  "ownership": {
+    "coordinates": "Not applicable; no spatial coordinates.",
+    "notes": "Internal infrastructure. Prefer public tools for normal agent work; direct calls require the surrounding lifecycle described here. This library has no required executor dependency; local sequence IDs and optional recovery hooks are self-contained. Scopes own newly allocated DOM objects until transfer/release. Register immediately after allocation. Cleanup can fail: always propagate failed records. Never use a cleanup scope to claim ownership of preexisting artwork.",
+    "example": {
+      "prerequisites": "No Illustrator document is needed for this example.",
+      "code": "var scope = mcpOwnBegin('empty-example'); return mcpOwnCommit(scope);"
+    },
+    "exports": {
+      "MCP_OWNERSHIP_RECORD_VERSION": {
+        "kind": "value",
+        "type": "string",
+        "notes": "Allocation-record contract version."
+      },
+      "mcpOwnBegin": {
+        "signature": "mcpOwnBegin(label)",
+        "returns": "New scope object.",
+        "notes": "Optional diagnostic label; nested scopes retain a parent."
+      },
+      "mcpOwnAllocate": {
+        "signature": "mcpOwnAllocate(scope, item, kind)",
+        "returns": "The supplied item.",
+        "notes": "Registers immediately after creation; optional diagnostic kind."
+      },
+      "mcpOwnIdentify": {
+        "signature": "mcpOwnIdentify(scope, item, mcpId)",
+        "returns": "undefined.",
+        "notes": "Records an already-stamped ID; does not stamp it."
+      },
+      "mcpOwnAbsorb": {
+        "signature": "mcpOwnAbsorb(scope, consumed, container)",
+        "returns": "undefined.",
+        "notes": "consumed is an array of owned items now inside the already-registered container; suppresses separate child cleanup."
+      },
+      "mcpOwnReplace": {
+        "signature": "mcpOwnReplace(scope, consumed, container, kind)",
+        "returns": "The container.",
+        "notes": "Registers a newly returned container and absorbs consumed items; optional kind."
+      },
+      "mcpOwnCommit": {
+        "signature": "mcpOwnCommit(scope)",
+        "returns": "{ok,released,records}.",
+        "notes": "Transfers ownership to an open parent; root commit retains artwork. released entries are MCP IDs when known, otherwise allocation IDs."
+      },
+      "mcpOwnRelease": {
+        "signature": "mcpOwnRelease(scope)",
+        "returns": "{ok,released,records}.",
+        "notes": "Ends ownership permanently without transfer to the parent; retains artwork."
+      },
+      "mcpOwnCleanup": {
+        "signature": "mcpOwnCleanup(scope)",
+        "returns": "{ok,removed,failed,records}.",
+        "notes": "Removes owned artwork; retries failed removals on subsequent calls. Failed entries carry allocId,mcpId,error."
+      },
+      "mcpOwnDispose": {
+        "signature": "mcpOwnDispose(scope, item)",
+        "returns": "{ok,removed,failed}.",
+        "notes": "Removes one owned item and records the outcome."
+      },
+      "mcpOwnRecords": {
+        "signature": "mcpOwnRecords(scope)",
+        "returns": "Array of public allocation records.",
+        "notes": "No live DOM references in the public records."
+      },
+      "mcpOwnAllRecords": {
+        "signature": "mcpOwnAllRecords()",
+        "returns": "Array of public records across retained scopes."
+      },
+      "mcpOwnReset": {
+        "signature": "mcpOwnReset()",
+        "returns": "undefined.",
+        "notes": "Test seam: clears scope/recovery bookkeeping; does not remove artwork. Not called by production paths."
+      }
+    }
+  },
+  "ops_core": {
+    "coordinates": "Operation parameters generally use artboard XY points; inspect illustrator://ops/{name} for operation-specific units. Runtime identity/recovery helpers have no coordinates.",
+    "notes": "Internal infrastructure. Prefer public tools for normal agent work; direct calls require the surrounding lifecycle described here. Includes the batch executor, not every handler. Include required ops_* modules for dispatch. Discovery membership never registers a handler.",
+    "example": {
+      "prerequisites": "No Illustrator document is needed for this example.",
+      "code": "return validateOp({task:'element_create', params:{}} , true);"
+    },
+    "exports": {
+      "OP_SCHEMA_VERSION": {
+        "kind": "value",
+        "type": "string",
+        "notes": "Batch operation format version."
+      },
+      "generateUUID": {
+        "signature": "generateUUID()",
+        "returns": "MCP-prefixed random UUID string."
+      },
+      "OP_HANDLERS": {
+        "kind": "value",
+        "type": "object",
+        "notes": "Registered operation name to handler table."
+      },
+      "registerOpHandler": {
+        "signature": "registerOpHandler(taskName, handler)",
+        "returns": "undefined.",
+        "notes": "handler(params, targets, ctx) returns a handler result; changes dispatch table."
+      },
+      "validateOp": {
+        "signature": "validateOp(op, strict)",
+        "returns": "{ok,errors}.",
+        "notes": "op has task,targets?,params?,comment?; strict rejects unknown operation keys. This is not full handler validation."
+      },
+      "resolveTargets": {
+        "signature": "resolveTargets(doc, targets, ctx)",
+        "returns": "Resolved PageItem array.",
+        "notes": "Uses batch context, selectors and identity facilities; may throw structured resolution errors."
+      },
+      "executeOpBatch": {
+        "signature": "executeOpBatch(ops, options)",
+        "returns": "Batch report with ok,ops,stats,createdIds and optional diagnostics.",
+        "notes": "ops is an array. Optional options: strict/stopOnError,rollback,snapshot,chunkSize,onProgress,trace,summaryOnly,journal,clock,space,defaultLayer. Uses active document and creates its own execution context. Recovery is partial; inspect returned outcomes."
+      },
+      "profileOp": {
+        "signature": "profileOp(label, fn, clock)",
+        "returns": "{result,duration_ms,label}.",
+        "notes": "fn() is invoked once; optional clock returns milliseconds."
+      },
+      "mcpRecoveryReset": {
+        "signature": "mcpRecoveryReset()",
+        "returns": "undefined.",
+        "notes": "Clears execution-local recovery events and counters."
+      },
+      "mcpRecoveryRecord": {
+        "signature": "mcpRecoveryRecord(recovery)",
+        "returns": "The recovery object.",
+        "notes": "Adds chronology/identity and records the event; non-object values pass through."
+      },
+      "mcpRecoveryMark": {
+        "signature": "mcpRecoveryMark()",
+        "returns": "Current recovery event count.",
+        "notes": "Use before an operation as a cursor."
+      },
+      "mcpRecoveriesSince": {
+        "signature": "mcpRecoveriesSince(mark)",
+        "returns": "Array of recovery events since cursor.",
+        "notes": "Invalid/negative mark starts at zero."
+      },
+      "mcpMergeRecovery": {
+        "signature": "mcpMergeRecovery(first, second)",
+        "returns": "null, one recovery object, or array.",
+        "notes": "Accepts objects or arrays; assigns missing event identity and deduplicates promoted records."
+      },
+      "mcpSetCleanupFailures": {
+        "signature": "mcpSetCleanupFailures(result, failures)",
+        "returns": "The supplied result.",
+        "notes": "Writes array into success data or error.details; non-array failures becomes []."
+      },
+      "mcpCleanupFailures": {
+        "signature": "mcpCleanupFailures(result)",
+        "returns": "Array of cleanup failures.",
+        "notes": "Reads success/error location; defaults []."
+      },
+      "mcpTargetIdentity": {
+        "signature": "mcpTargetIdentity(item)",
+        "returns": "MCP ID, ephemeral handle, or null.",
+        "notes": "Reads note first, then may issue a handle. Does not stamp notes."
+      }
+    }
+  },
+  "presets": {
+    "coordinates": "Document points, X right/Y up; bounds are [left,top,right,bottom]. Preset margins/gutters and slot sizes are points. fitToSlot reports scale as a multiplier (1 preserves size).",
+    "notes": "Layout helpers mutate items. Palette lookup helpers return definitions or DOM colors. Do not mutate shared preset/palette tables.",
+    "example": {
+      "prerequisites": "No Illustrator document is needed for this example.",
+      "code": "return {presets: listPresets(), palettes: listPalettes()};"
+    },
+    "exports": {
+      "PRESETS": {
+        "kind": "value",
+        "type": "object",
+        "notes": "Named grid/margin/gutter preset definitions."
+      },
+      "getPreset": {
+        "signature": "getPreset(name)",
+        "returns": "Preset definition reference.",
+        "notes": "Unknown name throws; discover names with listPresets."
+      },
+      "computeSlotGeometry": {
+        "signature": "computeSlotGeometry(presetName, artboardRect)",
+        "returns": "{preset,presetName,grid,cellSize,artboard,slots}.",
+        "notes": "artboardRect is document [left,top,right,bottom]; slots have index,row,col,x,y,width,height with y the top edge."
+      },
+      "fitToSlot": {
+        "signature": "fitToSlot(item, slot, mode)",
+        "returns": "{scaled,scale?,finalBounds?,slotCenter?,error?}.",
+        "notes": "slot has document x,y,width,height. mode defaults contain; cover may extend beyond slot. Zero-dimension item returns error. Returned scale is a multiplier; resize internally receives percent."
+      },
+      "applyPreset": {
+        "signature": "applyPreset(presetName, items, mode)",
+        "returns": "{preset,mode,arranged,overflow,totalSlots} or no-document error result.",
+        "notes": "Arranges up to slot capacity on active artboard. mode defaults contain, or cover; extra items are untouched. Does not propagate per-item fitToSlot error results."
+      },
+      "listPresets": {
+        "signature": "listPresets()",
+        "returns": "Array of {id,name,grid} preset summaries."
+      },
+      "COLOR_PALETTES": {
+        "kind": "value",
+        "type": "object",
+        "notes": "Named palette definitions and color arrays."
+      },
+      "getColor": {
+        "signature": "getColor(paletteName, index)",
+        "returns": "RGBColor.",
+        "notes": "Supply nonnegative integer index; wraps by palette length; unknown palette throws."
+      },
+      "getColorDef": {
+        "signature": "getColorDef(paletteName, index)",
+        "returns": "Color definition {r,g,b,name}.",
+        "notes": "Supply nonnegative integer index; wraps by palette length; returned definition is shared."
+      },
+      "getPalette": {
+        "signature": "getPalette(paletteName)",
+        "returns": "Array of RGBColor objects.",
+        "notes": "Unknown palette throws."
+      },
+      "listPalettes": {
+        "signature": "listPalettes()",
+        "returns": "Array of palette name strings."
+      },
+      "getPaletteInfo": {
+        "signature": "getPaletteInfo(paletteName)",
+        "returns": "{name,count,colors}.",
+        "notes": "Unknown palette throws; colors is the shared array of color definitions."
+      },
+      "applyPaletteToItems": {
+        "signature": "applyPaletteToItems(items, paletteName, options)",
+        "returns": "Number of items colored.",
+        "notes": "options.fill defaults true, stroke false. Cycles palette over PageItems; failures may be skipped."
+      }
+    }
+  },
+  "task_pipeline": {
+    "coordinates": "Not applicable; no spatial coordinates.",
+    "notes": "Internal infrastructure. Prefer public tools for normal agent work; direct calls require the surrounding lifecycle described here. Generic collect/compute/apply pipeline. Use the public task tools to supply the protocol envelope and execution lifecycle.",
+    "example": {
+      "prerequisites": "No Illustrator document is needed for this example.",
+      "code": "return profile('example', function () { return 2 + 2; });"
+    },
+    "exports": {
+      "safeExecute": {
+        "signature": "safeExecute(fn, item, report, stage)",
+        "returns": "fn(item) result, or null on caught error.",
+        "notes": "Appends an error to report; stage identifies collect/compute/apply etc."
+      },
+      "buildReport": {
+        "signature": "buildReport(ok, stats, timing, warnings, errors)",
+        "returns": "TaskReport object.",
+        "notes": "Caller supplies status, counters, timing and diagnostic arrays."
+      },
+      "validatePayload": {
+        "signature": "validatePayload(payload)",
+        "returns": "Array of errors; [] when valid.",
+        "notes": "Validates TaskPayload {task,version,targets,params,options}; does not run it."
+      },
+      "executeTask": {
+        "signature": "executeTask(payload, collectFn, computeFn, applyFn)",
+        "returns": "TaskReport.",
+        "notes": "Callbacks: collectFn(doc,targets), computeFn(items,params,report), applyFn(actions,report). Requires active document and valid payload."
+      },
+      "executeTaskWithRetry": {
+        "signature": "executeTaskWithRetry(payload, collectFn, computeFn, applyFn, maxRetries)",
+        "returns": "TaskReport with retry information.",
+        "notes": "Deprecated wrapper; clones payload and sets retry stages collect/compute, maxAttempts to maxRetries or 3. Prefer executeTaskWithRetrySafe.",
+        "deprecated": true
+      },
+      "executeTaskWithRetrySafe": {
+        "signature": "executeTaskWithRetrySafe(payload, collectFn, computeFn, applyFn)",
+        "returns": "TaskReport with retry information.",
+        "notes": "Retry configuration is payload.options.retry; applies retry stage/code policy rather than blindly repeating mutation."
+      },
+      "isRetryable": {
+        "signature": "isRetryable(error, retryableStages)",
+        "returns": "Boolean.",
+        "notes": "Tests retryable code and allowed stage; default allowed stages is collect."
+      },
+      "recordTaskHistory": {
+        "signature": "recordTaskHistory(payload, report)",
+        "returns": "undefined.",
+        "notes": "Appends an in-session record (maximum 50); needs report.stats and report.timing."
+      },
+      "getTaskHistory": {
+        "signature": "getTaskHistory(limit)",
+        "returns": "Array of recent history entries.",
+        "notes": "Defaults last 10."
+      },
+      "clearTaskHistory": {
+        "signature": "clearTaskHistory()",
+        "returns": "undefined.",
+        "notes": "Clears in-session history."
+      },
+      "profile": {
+        "signature": "profile(name, fn)",
+        "returns": "{name,result,elapsed_ms}.",
+        "notes": "Calls fn() once; propagates thrown errors."
+      },
+      "formatTiming": {
+        "signature": "formatTiming(timing)",
+        "returns": "Formatted timing string.",
+        "notes": "timing has collect_ms,compute_ms,apply_ms,total_ms."
+      }
+    }
+  },
+  "contracts": {
+    "coordinates": "Not applicable; no spatial coordinates.",
+    "notes": "Generated from the Python operation contract SSOT. Broad validation is not a replacement for nested typed models or handler checks. Never edit the generated JSX to change schemas.",
+    "example": {
+      "prerequisites": "No Illustrator document is needed for this example.",
+      "code": "return validateOpParams('element_modify', {scale:2});"
+    },
+    "exports": {
+      "CONTRACTS_CHECKSUM": {
+        "kind": "value",
+        "type": "string",
+        "notes": "Checksum of the generated contract source."
+      },
+      "ErrorCodes": {
+        "kind": "value",
+        "type": "object",
+        "notes": "Symbolic error names mapped to wire code strings."
+      },
+      "RETRYABLE_CODES": {
+        "kind": "value",
+        "type": "object",
+        "notes": "Collection of retryable error codes."
+      },
+      "OP_PARAM_SCHEMAS": {
+        "kind": "value",
+        "type": "object",
+        "notes": "Operation parameter schema lookup table."
+      },
+      "validateOpParams": {
+        "signature": "validateOpParams(task, params)",
+        "returns": "{ok,errors}.",
+        "notes": "Validates JSX operation availability, broad types, required fields, enums and unknown keys, including audited empty catalogues. Optional null values are treated as absent; false can disable object parameters. Field descriptors defer value checks to runtime. Numeric values must be finite. Python uses the same SSOT and adds near-miss suggestions."
+      },
+      "getOpSchema": {
+        "signature": "getOpSchema(task)",
+        "returns": "Parameter schema object or null.",
+        "notes": "Unknown operation returns null."
+      },
+      "listSchemaOps": {
+        "signature": "listSchemaOps()",
+        "returns": "Array of schema operation names.",
+        "notes": "Names are contract membership, not proof of registered handlers."
+      },
+      "getValueType": {
+        "signature": "getValueType(val)",
+        "returns": "Type label string.",
+        "notes": "Distinguishes null,array and JavaScript typeof values."
+      }
+    }
+  },
+  "ops_journal": {
+    "coordinates": "Not applicable; no spatial coordinates.",
+    "notes": "Internal infrastructure. Prefer public tools for normal agent work; direct calls require the surrounding lifecycle described here. Legacy JSX journal storage/replay helpers. Filesystem operations can fail. Replay executes operations and is not a dry run or full recovery guarantee.",
+    "example": {
+      "prerequisites": "No Illustrator document is needed for this example.",
+      "code": "return jsonStringify({example:true});"
+    },
+    "exports": {
+      "journalAppend": {
+        "signature": "journalAppend(entry, docName, doc)",
+        "returns": "undefined.",
+        "notes": "entry: batchId,timestamp,ops,options,report. Appends to host memory and rewrites a JSON-array file fallback; file errors are swallowed, leaving memory-only history."
+      },
+      "journalGet": {
+        "signature": "journalGet(docName, doc)",
+        "returns": "Array of parsed journal entries.",
+        "notes": "Optional doc participates in file location; missing/unreadable data may produce an empty list."
+      },
+      "journalClear": {
+        "signature": "journalClear(docName, doc)",
+        "returns": "undefined.",
+        "notes": "Removes stored journal file; optional doc participates in file location."
+      },
+      "journalSummary": {
+        "signature": "journalSummary(docName)",
+        "returns": "{entries,totalOps,firstTimestamp,lastTimestamp}.",
+        "notes": "Reads journal for the named document."
+      },
+      "journalReplay": {
+        "signature": "journalReplay(doc, entries, replayOptions)",
+        "returns": "Replay report.",
+        "notes": "Requires needed handlers included. replayOptions: onError strict/skip/rollback, clock, fromBatchId. Can mutate artwork; inspect per-entry failures/recovery."
+      },
+      "jsonStringify": {
+        "signature": "jsonStringify(val)",
+        "returns": "JSON string.",
+        "notes": "Uses JSON.stringify when available, with a legacy fallback."
+      }
+    }
+  },
+  "generative": {
+    "coordinates": "Pure numeric geometry preserves the supplied coordinate frame and units; use artboard XY points when passing results to XY creation helpers. getArtboardBounds and addLabel use document coordinates, Y up, without XY conversion.",
+    "notes": "Most helpers are pure numeric algorithms; addLabel creates text. Spatial-hash queries only gather candidate buckets; use a distance check for exact neighbors.",
+    "example": {
+      "prerequisites": "No Illustrator document is needed for this example.",
+      "code": "var rng = seededRandom(42); var perm = buildPermTable(rng, 256); return {noise: valueNoise2D(0.2, 0.3, perm)};"
+    },
+    "exports": {
+      "seededRandom": {
+        "signature": "seededRandom(seed)",
+        "returns": "PRNG function returning floats in [0,1).",
+        "notes": "Integer seed gives repeatable sequence."
+      },
+      "buildPermTable": {
+        "signature": "buildPermTable(rng, size)",
+        "returns": "Doubled permutation array.",
+        "notes": "rng() returns [0,1); size defaults 256. Use a positive power of two with valueNoise2D."
+      },
+      "getArtboardBounds": {
+        "signature": "getArtboardBounds(doc, index)",
+        "returns": "{x,y,w,h,left,top,right,bottom,clamped}.",
+        "notes": "doc defaults active, index defaults 0 (not active artboard); out-of-range index clamped. x=left,y=top in document coordinates."
+      },
+      "addLabel": {
+        "signature": "addLabel(container, x, y, text, opts, scope)",
+        "returns": "Created TextFrame.",
+        "notes": "container is Layer/GroupItem; x,y are document pointText coordinates. Nonempty text; opts.size defaults 12 points, optional color,font,name. Optional ownership scope. No artboard-relative conversion; absent color is not explicitly set."
+      },
+      "smoothstep": {
+        "signature": "smoothstep(t)",
+        "returns": "Number t*t*(3-2*t).",
+        "notes": "Supply t in [0,1] for interpolation; no clamping."
+      },
+      "lerp": {
+        "signature": "lerp(a, b, t)",
+        "returns": "Number a+(b-a)*t.",
+        "notes": "No clamping of t."
+      },
+      "valueNoise2D": {
+        "signature": "valueNoise2D(x, y, perm)",
+        "returns": "Interpolated scalar noise in [0,1] for a valid permutation table.",
+        "notes": "Use buildPermTable with a power-of-two size greater than one."
+      },
+      "fbm": {
+        "signature": "fbm(x, y, opts)",
+        "returns": "Normalized multi-octave noise number.",
+        "notes": "opts.perm required; octaves defaults 4, lacunarity 2, gain 0.5 (truthy defaults)."
+      },
+      "ridgedNoise": {
+        "signature": "ridgedNoise(x, y, opts)",
+        "returns": "Number 1-abs(2*fbm-1).",
+        "notes": "Same options as fbm."
+      },
+      "marchingSquares": {
+        "signature": "marchingSquares(field, cols, rows, threshold, cellSize)",
+        "returns": "Array of segments [[x1,y1],[x2,y2]].",
+        "notes": "field(ix,iy) returns scalar grid samples; cellSize optional {dx,dy}, defaults 1x1."
+      },
+      "chainSegments": {
+        "signature": "chainSegments(segments, tolerance)",
+        "returns": "Array of polylines, each an array of pairs.",
+        "notes": "Endpoint matching tolerance defaults 0.001 in input units."
+      },
+      "chaikinSmooth": {
+        "signature": "chaikinSmooth(points, iterations, closed, maxPoints)",
+        "returns": "Array of smoothed coordinate pairs.",
+        "notes": "iterations defaults 2, closed false; optional maxPoints bounds growth."
+      },
+      "decimatePoints": {
+        "signature": "decimatePoints(points, maxN)",
+        "returns": "Array of sampled coordinate pairs.",
+        "notes": "Supply positive integer maximum output count."
+      },
+      "cleanPolyline": {
+        "signature": "cleanPolyline(points, opts)",
+        "returns": "Cleaned coordinate-pair array.",
+        "notes": "opts.epsilon defaults 0.001, minSegLen 0, snapClose false; removes coincident/short segments."
+      },
+      "chainSegmentsIR": {
+        "signature": "chainSegmentsIR(segments, tolerance, meta)",
+        "returns": "Multi-path IR.",
+        "notes": "tolerance defaults 0.5; optional metadata; combines chaining and IR construction."
+      },
+      "spatialHashBuild": {
+        "signature": "spatialHashBuild(points, cellSize)",
+        "returns": "{cellSize,buckets}.",
+        "notes": "points are coordinate pairs; nonpositive/omitted cellSize becomes 1."
+      },
+      "spatialHashQuery": {
+        "signature": "spatialHashQuery(hash, x, y, radius)",
+        "returns": "Array of candidate point indices.",
+        "notes": "Returns every index in neighboring buckets, including points outside radius. Does not perform exact distance filtering."
+      },
+      "pairsWithinRadius": {
+        "signature": "pairsWithinRadius(points, hash, radius)",
+        "returns": "Array of [i,j] index pairs with i<j.",
+        "notes": "Uses exact squared-distance comparison; hash must be built from the same coordinate-pair array."
+      },
+      "clusterByRadius": {
+        "signature": "clusterByRadius(points, hash, radius, reducer)",
+        "returns": "Array of merged point objects.",
+        "notes": "points are {x,y,...}, hash built from corresponding pairs; optional reducer(cluster), default centroid with first point's extra fields."
+      },
+      "buildFieldGrid": {
+        "signature": "buildFieldGrid(fn, cols, rows, bounds)",
+        "returns": "{cols,rows,vx,vy,lookup,...} sampled vector field.",
+        "notes": "fn(x,y) returns [vx,vy]; bounds is {x,y,w,h}; use positive grid dimensions."
+      },
+      "integrateField": {
+        "signature": "integrateField(field, start, stepLen, maxSteps, bounds)",
+        "returns": "Array of [x,y] trajectory points.",
+        "notes": "field is fn(x,y) or object.lookup; start pair; stepLen in domain units, bounds {x,y,w,h} limits trajectory."
+      },
+      "buildCurlField": {
+        "signature": "buildCurlField(noiseOpts, bounds, fieldScale, gridOpts)",
+        "returns": "Sampled vector field with lookup(x,y).",
+        "notes": "noiseOpts has perm and optional octaves,lacunarity,gain; bounds {x,y,w,h}, frequency fieldScale; gridOpts optionally cols,rows,eps."
+      }
+    }
+  },
+  "symbols": {
+    "coordinates": "Document points, X right/Y up; bounds are [left,top,right,bottom]. Instance scale is a percentage derived from bounding boxes (100 preserves dimensions), not a multiplier or a recovered transform matrix.",
+    "notes": "Read-only symbol inspection; does not place, expand, select or remove artwork. Unavailable symbolArt is reported rather than reconstructed.",
+    "example": {
+      "prerequisites": "An open document; symbol-free documents return an empty list.",
+      "code": "return JSON.parse(mcpSymbolDefinitions({includeContents:false}));"
+    },
+    "exports": {
+      "mcpSymbolDescribeItem": {
+        "signature": "mcpSymbolDescribeItem(item)",
+        "returns": "{typename,name,hidden,locked,opacity,bounds,contents?}.",
+        "notes": "Describes one item; TextFrame adds contents; unavailable fields remain null."
+      },
+      "mcpSymbolContents": {
+        "signature": "mcpSymbolContents(art, maxItems)",
+        "returns": "{items,truncated,total}.",
+        "notes": "art is symbol.symbolArt; supply positive integer maxItems. Walks groups to depth 8; cap limits reported items, not total counting within that depth."
+      },
+      "mcpSymbolDefinitions": {
+        "signature": "mcpSymbolDefinitions(options)",
+        "returns": "JSON string {ok,definitions,definitionCount}.",
+        "notes": "Optional includeContents, maxItems (default 50), name filter. definitionCount is document total even when filtered."
+      },
+      "mcpSymbolInstances": {
+        "signature": "mcpSymbolInstances(options)",
+        "returns": "JSON string {ok,instances,instanceCount,truncated,note}.",
+        "notes": "Optional name filter and maxInstances (default 200). Scale is [percentX,percentY] from bounds or null; rotationKnown false."
+      }
+    }
+  },
+  "geo_boolean": {
+    "coordinates": "Contours use active-artboard-relative points, X right/Y down. Extraction also returns document/artboard context for guarded commit.",
+    "notes": "Internal infrastructure. Prefer public tools for normal agent work; direct calls require the surrounding lifecycle described here. Bridge for Python geometry computation. Prefer illustrator_path_boolean. Reconstruction/deletion mutate artwork; a single host eval is not an atomic document transaction.",
+    "example": {
+      "prerequisites": "An open document; the empty ID array reads context without creating or deleting artwork.",
+      "code": "return JSON.parse(extractPathGeometry([]));"
+    },
+    "exports": {
+      "extractPathGeometry": {
+        "signature": "extractPathGeometry(mcpIds)",
+        "returns": "JSON string with paths,warnings,context,operandHandles or error details.",
+        "notes": "Array of MCP IDs or selectors, each resolving exactly one supported path/compound path. If any operand is a selector, all operands are captured as exact handles in operandHandles without writing notes. Includes contour data, appearance diagnostics and per-path precondition signatures. Duplicate/overlapping operands are refused. Inspect error and warnings before computation."
+      },
+      "reconstructRegions": {
+        "signature": "reconstructRegions(params)",
+        "returns": "JSON string with created ids,itemTypes,regionCount and result details, or error.",
+        "notes": "params.regions: [{id?,outer:[[x,y],...],holes:[[[x,y],...],...]}]; contours require finite pairs and sufficient points. Optional layer,name,style,fillRule. Style uses filled,stroked,fillColor,strokeColor,strokeWidth,opacity. Creates PathItems/CompoundPathItems; propagate thrown cleanup failures."
+      },
+      "deleteByMcpIds": {
+        "signature": "deleteByMcpIds(mcpIds)",
+        "returns": "JSON string with deleted,deletedIds,failedIds,notFoundIds,warnings and ambiguity details.",
+        "notes": "Destructive; IDs must resolve unambiguously. Partial deletion is possible."
+      },
+      "commitBooleanRegions": {
+        "signature": "commitBooleanRegions(params)",
+        "returns": "JSON string with ids,itemTypes,regionCount,originals,effects,status,atomic:false or phase/error details. Incomplete required deletion returns error:true, errorCode:BOOLEAN_DELETE_INCOMPLETE and phase:delete; status is partial when artwork changed, failed otherwise. Retained originals are success only when deletion was not requested.",
+        "notes": "Requires originalIds, preconditions from extraction, matching context, and regions with assigned unique IDs. For selector extraction also pass its exact operandHandles; commit resolves those handles in the explicit document, never reruns selectors. Optional deleteOriginals (only true deletes), style,layer,name,fillRule. Revalidates inputs, creates/verifies replacements, then deletes originals; inspect partial effects and survivingIds for known surviving handles."
+      }
+    }
+  },
+  "ops_compound": {
+    "coordinates": "Not applicable; no spatial coordinates.",
+    "notes": "Registers compound dispatch on include. Read illustrator://ops/compound for operation constraints. $prev substitution does not itself execute an operation.",
+    "example": {
+      "prerequisites": "No Illustrator document is needed for this example.",
+      "code": "return resolvePrevTokens({task:'element_delete',targets:{type:'id',ids:['$prev']}}, 'example-id', ['example-id']);"
+    },
+    "exports": {
+      "resolvePrevTokens": {
+        "signature": "resolvePrevTokens(op, prevId, prevAllIds)",
+        "returns": "{ok:true,op} or {ok:false,error}.",
+        "notes": "Replaces previous-operation tokens in a sub-operation; prevId may be null, prevAllIds an array. Missing required previous result fails."
+      }
+    }
+  },
+  "ops_style": {
+    "coordinates": "Not applicable; no spatial coordinates.",
+    "notes": "Registers style handlers at include time; operation semantics are in illustrator://ops/{name}. Color helper is internal.",
+    "example": {
+      "prerequisites": "No Illustrator document is needed for this example.",
+      "code": "return _parseColorParam({fill:false}, 'fill');"
+    },
+    "exports": {
+      "_parseColorParam": {
+        "signature": "_parseColorParam(params, key)",
+        "returns": "{color,disable,error}.",
+        "notes": "key selects fill/stroke. false/null disables; nested RGB object needs at least one channel; flat r/g/b compatibility accepted. Channels clamp 0..255; no color is not itself an error."
+      }
+    }
+  },
+  "polyfills": {
+    "coordinates": "Not applicable; no spatial coordinates.",
+    "notes": "No named manifest exports. On include, fills missing Array methods and JSON support for ES3; the resolver loads this dependency first where required.",
+    "example": {
+      "prerequisites": "No Illustrator document is needed for this example.",
+      "code": "return JSON.parse(JSON.stringify({example:true}));"
+    },
+    "exports": {}
+  },
+  "ops_element": {
+    "coordinates": "See the operation detail resource for coordinate frame and units.",
+    "notes": "No named manifest exports. Registers operation handlers on include; operation parameters/results/examples are in illustrator://ops/{name}. This example checks registration without invoking a mutating handler.",
+    "example": {
+      "prerequisites": "No Illustrator document is needed for this example.",
+      "code": "return {registered: typeof OP_HANDLERS['element_create'] === 'function'};"
+    },
+    "exports": {}
+  },
+  "ops_group": {
+    "coordinates": "See the operation detail resource for coordinate frame and units.",
+    "notes": "No named manifest exports. Registers operation handlers on include; operation parameters/results/examples are in illustrator://ops/{name}. This example checks registration without invoking a mutating handler.",
+    "example": {
+      "prerequisites": "No Illustrator document is needed for this example.",
+      "code": "return {registered: typeof OP_HANDLERS['group_create'] === 'function'};"
+    },
+    "exports": {}
+  },
+  "ops_layer": {
+    "coordinates": "See the operation detail resource for coordinate frame and units.",
+    "notes": "No named manifest exports. Registers operation handlers on include; operation parameters/results/examples are in illustrator://ops/{name}. This example checks registration without invoking a mutating handler.",
+    "example": {
+      "prerequisites": "No Illustrator document is needed for this example.",
+      "code": "return {registered: typeof OP_HANDLERS['layer_list'] === 'function'};"
+    },
+    "exports": {}
+  },
+  "ops_text": {
+    "coordinates": "See the operation detail resource for coordinate frame and units.",
+    "notes": "Creates and styles text using a shared font resolver. See illustrator://ops/text_create and illustrator://ops/text_set_style for font family defaults and empty-text limits.",
+    "example": {
+      "prerequisites": "No Illustrator document is needed for this example.",
+      "code": "return {registered: typeof OP_HANDLERS['text_create'] === 'function'};"
+    },
+    "exports": {
+      "resolveTextFont": {
+        "signature": "resolveTextFont(params)",
+        "returns": "Resolved installed font and report/warnings, or a validation error before mutation."
+      }
+    }
+  },
+  "ops_align": {
+    "coordinates": "See the operation detail resource for coordinate frame and units.",
+    "notes": "No named manifest exports. Registers operation handlers on include; operation parameters/results/examples are in illustrator://ops/{name}. This example checks registration without invoking a mutating handler.",
+    "example": {
+      "prerequisites": "No Illustrator document is needed for this example.",
+      "code": "return {registered: typeof OP_HANDLERS['align_horizontal'] === 'function'};"
+    },
+    "exports": {}
+  },
+  "ops_measure": {
+    "coordinates": "See the operation detail resource for coordinate frame and units.",
+    "notes": "No named manifest exports. Registers operation handlers on include; operation parameters/results/examples are in illustrator://ops/{name}. This example checks registration without invoking a mutating handler.",
+    "example": {
+      "prerequisites": "No Illustrator document is needed for this example.",
+      "code": "return {registered: typeof OP_HANDLERS['measure_bounds'] === 'function'};"
+    },
+    "exports": {}
+  },
+  "auto_tag": {
+    "coordinates": "Not applicable; no spatial coordinates.",
+    "notes": "No callable exports: this is a load-time IIFE used by execute_script post-execution. Including it immediately attempts to stamp untagged artwork notes. __PARAMS__ supplies mode delta/converge, scope activeLayer/document, cap (default 200), preCount (default 0), cushion (default 2). Truthy defaults mean zero does not disable cap/cushion. The IIFE yields a JSON string {tagged,cap_hit,need,skipped,assigned,errors}; an ordinary include wrapper may discard that value. Use the managed post-execution route to collect it.",
+    "example": {
+      "prerequisites": "Internal load-time example only: use an empty disposable active layer/document. Loading the include performs tagging before this body; it is not a passive import.",
+      "code": "return {loaded:true};"
+    },
+    "exports": {}
+  },
+  "raw_fail": {
+    "coordinates": "No coordinates.",
+    "notes": "Throws an ordinary catchable Error. Details/message are bounded; no rollback or source-line mapping.",
+    "example": {
+      "prerequisites": "No document needed.",
+      "code": "try { mcpFail(\"Label failed\", {cause:\"example\"}); } catch (e) { return String(e); }"
+    },
+    "exports": {
+      "mcpFail": {
+        "signature": "mcpFail(message, details)",
+        "returns": "Never returns normally; throws MCP_FAIL through the ordinary error path."
+      }
+    }
+  }
+}
