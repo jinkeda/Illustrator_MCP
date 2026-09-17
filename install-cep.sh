@@ -24,41 +24,35 @@ if [ ! -d "$SOURCE_DIR" ]; then
     exit 1
 fi
 
-# Check if dist folder exists (requires npm run build)
-if [ ! -d "$SOURCE_DIR/dist" ]; then
-    echo "ERROR: dist folder not found. You must build the extension first!"
-    echo ""
-    echo "Run these commands:"
-    echo "  cd cep-extension"
-    echo "  npm install"
-    echo "  npm run build"
-    echo "  cd .."
-    echo ""
-    echo "Then run this script again."
-    exit 1
-fi
+# Validate the built payload before changing an existing installation.
+command -v node >/dev/null 2>&1 || { echo "ERROR: Node.js is required to validate the panel."; exit 1; }
+node "$SOURCE_DIR/validate-panel.mjs" "$SOURCE_DIR"
 
 # Create CEP extensions directory if it doesn't exist
 mkdir -p "$HOME/Library/Application Support/Adobe/CEP/extensions"
 
-# Remove existing installation if present
-if [ -e "$TARGET_DIR" ]; then
-    echo "Removing existing installation..."
-    rm -rf "$TARGET_DIR"
+# Preserve an existing installation instead of deleting its files.
+if [ -e "$TARGET_DIR.previous" ] || [ -L "$TARGET_DIR.previous" ]; then
+    echo "ERROR: Move the previous installation backup aside first: $TARGET_DIR.previous"
+    exit 1
+fi
+if [ -e "$TARGET_DIR" ] || [ -L "$TARGET_DIR" ]; then
+    echo "Preserving existing installation at $TARGET_DIR.previous"
+    mv "$TARGET_DIR" "$TARGET_DIR.previous"
 fi
 
 # Create symbolic link
 echo "Creating symbolic link..."
 echo "  From: $SOURCE_DIR"
 echo "  To:   $TARGET_DIR"
-ln -s "$SOURCE_DIR" "$TARGET_DIR"
-
-if [ $? -ne 0 ]; then
+if ! ln -s "$SOURCE_DIR" "$TARGET_DIR"; then
     echo ""
     echo "ERROR: Failed to create symbolic link."
     echo "Trying to copy files instead..."
     cp -R "$SOURCE_DIR" "$TARGET_DIR"
 fi
+
+node "$SOURCE_DIR/validate-panel.mjs" "$TARGET_DIR"
 
 # Enable debug mode for both CSXS.11 and CSXS.12
 echo ""

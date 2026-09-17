@@ -31,4 +31,25 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-# pytest-cov is required, not optional: pyproject's 
+geometry = [
+    "pyclipper>=1.3.0",
+]
+
+[project.scripts]
+illustrator-mcp = "illustrator_mcp.server:main"
+
+[tool.setuptools.packages.find]
+include = ["illustrator_mcp", "illustrator_mcp.*"]
+[tool.setuptools.package-data]
+"illustrator_mcp" = [
+    "resources/scripts/*.jsx",
+    "resources/scripts/manifest.json",
+    "resources/templates/*.jsx",
+    "resources/docs/*.md",
+    "resources/docs/*.json",
+    "schemas/*.json",
+]
+
+[tool.setuptools.dynamic]
+version = {attr = "illustrator_mcp.__version__.__version__"}
+

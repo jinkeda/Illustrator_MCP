@@ -7,7 +7,9 @@ visual previews, PNG/JPG export, and SVG path import.
 ## Requirements
 
 - Python 3.10 or newer.
-- Adobe Illustrator on Windows or macOS. The panel manifest declares Illustrator 25.0+.
+- Adobe Illustrator on Windows or macOS. The panel manifest permits Illustrator 25.0+;
+  this is an installation range, not a verified compatibility guarantee. Compatibility
+  across that range and both platforms has not yet been validated.
 - Node.js and npm compatible with Vite 6 to build the panel.
 - An MCP client supporting stdio.
 
@@ -26,7 +28,9 @@ Activate the environment with `.venv\Scripts\activate` on Windows or
 python -m pip install -e ".[geometry]"
 cd cep-extension
 npm ci
+npm run typecheck
 npm run build
+node validate-panel.mjs
 cd ..
 ```
 
@@ -64,6 +68,17 @@ the interpreter path with the absolute path to your installed virtual environmen
 On macOS use `/absolute/path/to/Illustrator_MCP/.venv/bin/python`.
 Restart the client's integration and connect the panel. The Python server owns
 the WebSocket bridge; only one client should start it at a time.
+The bundled panel uses the fixed endpoint `ws://127.0.0.1:8081`. Keep `WS_HOST`
+and `WS_PORT` at these values. To change the port, also edit `MCP_ENDPOINT` in
+`cep-extension/src/connection/ConnectionController.ts`, rebuild, and reload the panel.
+Changing only the server configuration will prevent the panel from connecting.
+
+## Distribution and versions
+
+This source release pairs server 3.0.0 with CEP panel 1.0.2. Their version numbers
+are independent. The source archive includes panel sources and installers; build
+the panel before installing it. A Python wheel contains the server and its runtime
+resources only; obtain the matching CEP panel separately from this source release.
 
 ## Usage
 

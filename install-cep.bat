@@ -37,33 +37,21 @@ if not exist "%SOURCE_DIR%" (
     exit /b 1
 )
 
-REM Check if dist folder exists (requires npm run build)
-if not exist "%SOURCE_DIR%\dist" (
-    echo ERROR: dist folder not found. You must build the extension first!
-    echo.
-    echo Run these commands:
-    echo   cd cep-extension
-    echo   npm install
-    echo   npm run build
-    echo   cd ..
-    echo.
-    echo Then run this script again.
-    pause
-    exit /b 1
-)
+REM Validate the payload before changing an existing installation.
+node "%SOURCE_DIR%\validate-panel.mjs" "%SOURCE_DIR%"
+if errorlevel 1 goto :failed
 
 REM Create CEP extensions directory if it doesn't exist
 if not exist "%APPDATA%\Adobe\CEP\extensions" (
     echo Creating CEP extensions directory...
     mkdir "%APPDATA%\Adobe\CEP\extensions"
+    if errorlevel 1 goto :failed
 )
 
-REM Remove existing installation if present
-if exist "%TARGET_DIR%" (
-    echo Removing existing installation...
-    rmdir /s /q "%TARGET_DIR%" 2>nul
-    rd "%TARGET_DIR%" 2>nul
-)
+REM Preserve an existing installation, including a dangling directory link.
+REM Refuse to overwrite the backup from an earlier installation.
+powershell -NoProfile -Command "$target = $env:TARGET_DIR; $backup = $target + '.previous'; if (Get-Item -LiteralPath $backup -Force -ErrorAction SilentlyContinue) { Write-Error 'Previous installation backup exists; move it aside first.'; exit 1 }; if (Get-Item -LiteralPath $target -Force -ErrorAction SilentlyContinue) { Move-Item -LiteralPath $target -Destination $backup -ErrorAction Stop }"
+if errorlevel 1 goto :failed
 
 REM Create symbolic link
 echo Creating symbolic link...
@@ -76,13 +64,19 @@ if %errorLevel% neq 0 (
     echo ERROR: Failed to create symbolic link.
     echo Trying to copy files instead...
     xcopy /E /I /Y "%SOURCE_DIR%" "%TARGET_DIR%"
+    if errorlevel 1 goto :failed
 )
+
+node "%SOURCE_DIR%\validate-panel.mjs" "%TARGET_DIR%"
+if errorlevel 1 goto :failed
 
 REM Enable debug mode in registry for both CSXS.11 and CSXS.12
 echo.
 echo Enabling CEP debug mode...
 reg add "HKEY_CURRENT_USER\Software\Adobe\CSXS.11" /v PlayerDebugMode /t REG_SZ /d 1 /f
+if errorlevel 1 goto :failed
 reg add "HKEY_CURRENT_USER\Software\Adobe\CSXS.12" /v PlayerDebugMode /t REG_SZ /d 1 /f
+if errorlevel 1 goto :failed
 
 echo.
 echo =============================================
@@ -100,3 +94,10 @@ echo   http://localhost:8088
 echo.
 
 pause
+
+exit /b 0
+
+:failed
+echo ERROR: Installation failed. Completion has not been verified.
+echo If an existing installation was moved, it is preserved at "%TARGET_DIR%.previous".
+exit /b 1
