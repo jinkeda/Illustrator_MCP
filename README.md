@@ -29,6 +29,7 @@ python -m pip install -e ".[geometry]"
 cd cep-extension
 npm ci
 npm run typecheck
+npm test
 npm run build
 node validate-panel.mjs
 cd ..
@@ -68,10 +69,46 @@ the interpreter path with the absolute path to your installed virtual environmen
 On macOS use `/absolute/path/to/Illustrator_MCP/.venv/bin/python`.
 Restart the client's integration and connect the panel. The Python server owns
 the WebSocket bridge; only one client should start it at a time.
-The bundled panel uses the fixed endpoint `ws://127.0.0.1:8081`. Keep `WS_HOST`
-and `WS_PORT` at these values. To change the port, also edit `MCP_ENDPOINT` in
-`cep-extension/src/connection/ConnectionController.ts`, rebuild, and reload the panel.
-Changing only the server configuration will prevent the panel from connecting.
+The panel defaults to `ws://127.0.0.1:8081`; no panel configuration is required.
+
+### Changing the WebSocket endpoint without rebuilding
+
+For example, if port 8081 is occupied:
+
+1. Set `WS_PORT` to `8082` in the MCP client's server environment and restart that
+   integration. `WS_HOST` / `WS_PORT` (or the Python process's `.env`) configure
+   only the Python server; Illustrator does not inherit the client's environment.
+2. Copy `cep-extension/connection.example.json` to `cep-extension/connection.json`
+   and set the matching endpoint:
+
+   ```json
+   {
+     "endpoint": "ws://127.0.0.1:8082"
+   }
+   ```
+
+3. Once Illustrator requests have finished, reload the panel (restart Illustrator
+   if closing and reopening only hides/shows it). No source edit, rebuild, or
+   reinstall is needed after installing a panel with this feature.
+
+The file lives in the **installed extension root**, beside `CSXS`, `jsx`, and
+`dist`, not inside `dist`. With the installers' normal symbolic link, this is the
+checkout's `cep-extension/connection.json`. If the installer fell back to copying,
+edit the installed copy under
+`%APPDATA%\Adobe\CEP\extensions\com.illustrator.mcp.panel` (Windows) or
+`~/Library/Application Support/Adobe/CEP/extensions/com.illustrator.mcp.panel`
+(macOS). The panel logs the resolved configuration path at startup.
+
+Configuration is read once per panel load. Reconnects continue using that endpoint;
+the footer and connection-attempt log show the actual address. Delete
+`connection.json` and reload to restore the default. The file is ignored by Git
+and remains outside Vite's build output. A missing file uses the default; malformed
+JSON, invalid URLs, and read errors stop connection attempts with a configuration
+error instead of silently connecting to a different server. Use a JSON object
+containing only `endpoint`, an absolute `ws://` or `wss://` URL without credentials
+or a fragment. The bundled Python server uses `ws://` (no TLS); use a reachable
+host address, not a bind wildcard such as `0.0.0.0`. Browser development previews
+without CEP continue using the default and do not read local configuration.
 
 ## Distribution and versions
 

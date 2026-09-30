@@ -1,9 +1,9 @@
-export const MCP_ENDPOINT = 'ws://127.0.0.1:8081';
+import type { EndpointConfig } from './EndpointConfig';
 
 export interface ConnectionSnapshot {
     status: 'disconnected' | 'connecting' | 'connected' | 'disconnecting' | 'retrying' | 'error';
     wanted: boolean;
-    failure: 'conflict' | 'creation' | null;
+    failure: 'conflict' | 'creation' | 'configuration' | null;
     detail?: string;
     attempt: number;
 }
@@ -16,9 +16,11 @@ export function selectConnectionControl(state: ConnectionSnapshot) {
     else if (state.status === 'disconnecting') statusText = 'Disconnecting…';
     else if (state.failure === 'conflict') statusText = 'Another panel connection occupies the server. Release it before retrying.';
     else if (state.failure === 'creation') statusText = `Could not create connection: ${state.detail}`;
+    else if (state.failure === 'configuration') statusText = `Invalid endpoint configuration: ${state.detail}`;
     else if (state.status === 'retrying') statusText = 'Connection lost. Retrying in 3 seconds.';
     const statusLabel = state.failure === 'conflict' ? 'Server occupied'
         : state.failure === 'creation' ? 'Connection failed'
+        : state.failure === 'configuration' ? 'Configuration error'
         : state.status === 'retrying' ? 'Retrying…'
         : state.status === 'disconnected' ? 'Offline' : statusText;
     return {action, label: state.wanted ? 'Disconnect' : state.failure ? 'Retry' : 'Connect',
@@ -30,6 +32,7 @@ export function selectConnectionControl(state: ConnectionSnapshot) {
 type Socket = Pick<WebSocket,
     'readyState' | 'onopen' | 'onmessage' | 'onerror' | 'onclose' | 'send' | 'close'>;
 interface Options {
+    endpointConfig: EndpointConfig;
     createSocket: (endpoint: string) => Socket;
     clock: {
         setTimeout: (callback: () => void, delay: number) => number;
@@ -87,10 +90,16 @@ export class ConnectionController {
     connect = () => {
         this.clearRetry();
         if (this.disposed || this.socket) return;
+        const { endpoint, error } = this.options.endpointConfig;
+        if (endpoint === null) {
+            this.publish({wanted:false, status:'error', failure:'configuration', detail:error});
+            this.options.log(selectConnectionControl(this.state).statusText, 'error');
+            return;
+        }
         this.publish({wanted:true, status:'connecting', failure:null, detail:undefined, attempt:this.state.attempt+1});
-        this.options.log(`Connecting to ${MCP_ENDPOINT}…`, 'info');
+        this.options.log(`Connecting to ${endpoint}…`, 'info');
         let socket: Socket;
-        try { socket = this.options.createSocket(MCP_ENDPOINT); }
+        try { socket = this.options.createSocket(endpoint); }
         catch (error) {
             this.publish({wanted:false, status:'error', failure:'creation', detail:String(error)});
             this.options.log(`Could not create connection: ${error}`, 'error');

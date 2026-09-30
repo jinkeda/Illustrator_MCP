@@ -16,6 +16,7 @@
   },
   "scripts": {
     "dev": "vite",
+    "test": "node --test tests/connection.test.cjs",
     "typecheck": "tsc --project tsconfig.json",
     "build": "vite build"
   }
