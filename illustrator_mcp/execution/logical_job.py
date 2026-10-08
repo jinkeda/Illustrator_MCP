@@ -21,7 +21,7 @@ def intent_digest(tool, params):
         value["expected_document_token"] = getattr(params, "expected_document_token", None)
     # Presentation-only options cannot cause a second mutation. Repeats retain
     # the first call's evidence, including content blocks.
-    for key in ("return_preview", "preview_mode", "final_step", "clip_box", "return_image"):
+    for key in ("return_preview", "preview_mode", "final_step", "clip_box", "return_image", "detail"):
         value.pop(key, None)
     value.pop("description", None)  # Diagnostic label, not execution intent.
     if value.get("file_path"):

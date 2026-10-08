@@ -408,7 +408,11 @@ def wrap_registered_tool(fn, name):
             value = await fn(*args, **kwargs)
             if isinstance(value, CallToolResult) and value.structuredContent and "schemaVersion" in value.structuredContent:
                 canonical = CanonicalResult.model_validate(value.structuredContent)
+                params = kwargs.get("params") or (args[0] if args else None)
                 if canonical.diagnostics.get("deduplicated"):
+                    if getattr(params, "detail", None) == "summary":
+                        from illustrator_mcp.results import summarize_result
+                        value = summarize_result(value)
                     await progress.outcome(value)
                     return value  # Keep the original job facts and evidence.
                 reduced = reduce_journal(journal.snapshot(), canonical)
@@ -423,7 +427,6 @@ def wrap_registered_tool(fn, name):
                 result = build_call_result(reduced, list(value.content[2:]))
                 from illustrator_mcp.execution.logical_job import retain_presented_result
                 retain_presented_result(result, source_result=value)
-                params = kwargs.get("params") or (args[0] if args else None)
                 if getattr(params, "detail", None) == "summary":
                     from illustrator_mcp.results import summarize_result
                     result = summarize_result(result)

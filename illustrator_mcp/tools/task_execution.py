@@ -737,6 +737,10 @@ class ExecuteTaskInput(ToolInputBase):
     """Input for executing a structured task (Task Protocol v2.1)."""
     model_config = ConfigDict(extra="forbid")
 
+    detail: Literal["summary", "full"] = Field(
+        "full", description="Presentation only: summary factors common explicit defaults for successful, non-skipped operations into diagnostics.presentation.operationDefaults and hides their timing. Small batches may grow. Full evidence is available via illustrator_job_status while retained; jobs may expire or be evicted. Host-budget omissions cannot be recovered."
+    )
+
     @model_validator(mode="before")
     @classmethod
     def bound_request(cls, value):
@@ -1233,6 +1237,31 @@ async def illustrator_execute_task(params: ExecuteTaskInput) -> CallToolResult:
       - Provide exactly one of params.batch or params.payload.
 
     EXAMPLES:
+      Explicit scientific runs through the compatibility route (choose installed faces; inspect runVerification.fonts):
+        {
+          "params": {
+            "payload": {
+              "task": "text_create",
+              "params": {
+                "x": 20,
+                "y": 40,
+                "runs": [
+                  {
+                    "text": "B",
+                    "fontName": "AcuminConcept-Black",
+                    "fontSize": 12
+                  },
+                  {
+                    "text": "ex",
+                    "fontName": "AcuminConcept-BlackItalic",
+                    "fontSize": 8.4,
+                    "baselineShift": -3
+                  }
+                ]
+              }
+            }
+          }
+        }
       One structured operation (the preferred form):
         {
           "params": {
@@ -1605,6 +1634,11 @@ if (report.batchReport) {{
             id: _op.id || null,
             error: _op.error || null
         }};
+        // Bounded execution metadata must survive even when op.data is omitted.
+        if (typeof _op.targets_unidentified === "number") {{
+            _entry.targets_unidentified = _op.targets_unidentified;
+        }}
+        if (typeof _op.duration_ms === "number") _entry.duration_ms = _op.duration_ms;
         if (_op.unresolvedIds && _op.unresolvedIds.length) {{
             _entry.unresolvedIds = _op.unresolvedIds;
         }}

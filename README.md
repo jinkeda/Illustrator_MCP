@@ -30,17 +30,29 @@ cd cep-extension
 npm ci
 npm run typecheck
 npm run build
-node validate-panel.mjs
+python validate_panel.py
 cd ..
 ```
 
 The optional `geometry` extra enables boolean path operations. Use
 `python -m pip install -e .` if you do not need it.
 
-On Windows, run `install-cep.bat` from an Administrator terminal.
+With the Python environment activated, run `install-cep.bat` on Windows.
 On macOS, run `bash install-cep.sh`.
-The installers link the panel into Adobe's CEP extensions directory and enable
-CEP debug mode. Keep the checkout at its installed location.
+The installers copy a filtered panel snapshot into Adobe's CEP extensions directory
+and enable unsigned-extension loading for CEP 10, 11, and 12. Local `.debug`
+remote-debugger configuration is excluded from installation and publication. The build
+target is Chromium 74, matching the intended Illustrator 25.0 / CEP 10 baseline;
+this does not establish real-host compatibility. Reinstall after rebuilding the panel.
+Backups are stored outside Adobe discovery under `Illustrator MCP/cep-backups`
+in `%APPDATA%` on Windows or `~/Library/Application Support` on macOS. A failed
+activation restores the previous installation. Close Illustrator during upgrades.
+An installed `connection.json` is preserved byte-for-byte during upgrades and
+rollback, including invalid settings. Unreadable settings abort the upgrade.
+Fresh installs exclude live configuration from the development checkout. When
+upgrading a legacy or manual directory symlink, its linked `connection.json` is
+the installed preference and is carried forward into the new copy. Publication
+always excludes live configuration.
 
 Restart Illustrator and open **Window > Extensions > MCP Control**.
 
@@ -68,17 +80,35 @@ the interpreter path with the absolute path to your installed virtual environmen
 On macOS use `/absolute/path/to/Illustrator_MCP/.venv/bin/python`.
 Restart the client's integration and connect the panel. The Python server owns
 the WebSocket bridge; only one client should start it at a time.
-The bundled panel uses the fixed endpoint `ws://127.0.0.1:8081`. Keep `WS_HOST`
-and `WS_PORT` at these values. To change the port, also edit `MCP_ENDPOINT` in
-`cep-extension/src/connection/ConnectionController.ts`, rebuild, and reload the panel.
-Changing only the server configuration will prevent the panel from connecting.
+The default endpoint is `ws://127.0.0.1:8081`. To select another port, set Python's
+`WS_PORT` and put `{"endpoint":"ws://127.0.0.1:8082"}` in `connection.json` at the
+installed extension root (beside `CSXS` and `dist`), using the same port on both
+sides. Use `cep-extension/connection.example.json` as a template. No rebuild is
+needed after editing the installed file. Restart the MCP integration and reload
+the panel only after running work and unacknowledged completions are resolved.
+The panel reads its file once per load; Python environment settings do not change
+it. Managed installs use copies. For a manual symlink installation the config
+lives in the linked directory; the installer does not create symlinks.
+
+Both sides accept IPv4 loopback only. `localhost` is normalized to `127.0.0.1`
+for both Python binding and the panel connection. Panel URLs require `ws://`, an
+explicit port from 1024 to 65535, and an empty/root path. Remote hosts, IPv6,
+`wss://`, credentials, queries, and fragments are rejected. A missing file uses
+the default; invalid/unreadable explicit settings create no socket. An unavailable
+configured endpoint is retried without falling back to another port. The panel
+footer and connection logs show the chosen endpoint and configuration source.
 
 ## Distribution and versions
 
-This source release pairs server 3.0.0 with CEP panel 1.0.2. Their version numbers
-are independent. The source archive includes panel sources and installers; build
-the panel before installing it. A Python wheel contains the server and its runtime
-resources only; obtain the matching CEP panel separately from this source release.
+This release pairs server 3.0.0 with CEP panel 1.0.2; their versions are independent.
+The repository source ZIP/tarball (including `Illustrator_MCP.zip`) contains the
+server, panel sources, and installers. The installation steps above require that
+complete repository archive or a clone.
+
+The Python wheel **and Python sdist** (`illustrator_mcp-*.tar.gz`) contain only
+the server and its runtime resources. They do not include `cep-extension` or the
+installers. When installing either Python distribution, obtain the matching
+panel separately from the complete repository archive.
 
 ## Usage
 

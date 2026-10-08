@@ -252,7 +252,8 @@
         "isItemCenterOnArtboard",
         "isLayerHidden",
         "countItemsOnArtboard",
-        "publicationPreflightScan"
+        "publicationPreflightScan",
+        "preflightPathDegeneracy"
       ],
       "description": "Bounds validation with clipping mask, scope, and layer-visibility support"
     },

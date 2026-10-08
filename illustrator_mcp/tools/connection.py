@@ -120,6 +120,9 @@ def _server_layer() -> dict:
         "host": info.get("host", config.ws_host),
         "startup_error": info.get("startup_error"),
         "port": info.get("port", config.ws_port),
+        "endpoint": info.get("endpoint", config.ws_url),
+        "requested_endpoint": info.get("requested_endpoint", config.ws_url),
+        "bound_endpoint": info.get("bound_endpoint"),
         "state": state,
         "detail": (
             None if healthy

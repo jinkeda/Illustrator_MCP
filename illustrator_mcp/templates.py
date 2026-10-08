@@ -907,10 +907,12 @@ def _build_export_standard(ab_index_js, options_class, scale_opts, clip_opt,
         }}
 
         var prevAbIdx = doc.artboards.getActiveArtboardIndex();
+        var needsSwitch = abIdx !== prevAbIdx;
+        var savedBefore = doc.saved;
         var exportError = null;
         var data = null;
         try {{
-            doc.artboards.setActiveArtboardIndex(abIdx);
+            if (needsSwitch) doc.artboards.setActiveArtboardIndex(abIdx);
 
             var opts = new {options_class}();{scale_opts}
             {clip_opt}
@@ -942,12 +944,15 @@ def _build_export_standard(ab_index_js, options_class, scale_opts, clip_opt,
             exportError = ee;
         }} finally {{
             // Restore the caller's artboard whether or not the export worked.
-            try {{ doc.artboards.setActiveArtboardIndex(prevAbIdx); }} catch (re) {{
-                throw new Error("Export artboard restoration failed: " + String(re) + (exportError ? "; export error: " + String(exportError) : ""));
+            if (needsSwitch) {{
+                try {{ doc.artboards.setActiveArtboardIndex(prevAbIdx); }} catch (re) {{
+                    throw new Error("Export artboard restoration failed: " + String(re) + (exportError ? "; export error: " + String(exportError) : ""));
+                }}
             }}
         }}
 
         if (exportError) throw exportError;
+        data.document_saved_state_changed = doc.saved !== savedBefore;
     """
     return wrap_script(body, "export_standard")
 

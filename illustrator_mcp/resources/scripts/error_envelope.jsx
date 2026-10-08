@@ -28,6 +28,10 @@
  * @param {string} stage   where it happened: validate, apply, verify, ...
  * @param {Object} [itemRef] the item concerned, when there is one
  * @param {Object} [details] anything a caller needs to act on
+ * details.writesAttempted === false is an explicit no-mutation guarantee for
+ * the entire handler invocation. Set it only before attempting ANY document
+ * write/allocation/native mutation. It is not inferred from stage="validate",
+ * and must never describe a throwing native write, even if no effect is known.
  * @returns {Object} {ok: false, error: {code, message, stage, itemRef, details}}
  */
 function makeError(code, message, stage, itemRef, details) {

@@ -127,19 +127,11 @@ registerOpHandler("style_set_fill", function (params, targets, ctx) {
 
 registerOpHandler("style_set_stroke", function (params, targets, ctx) {
     if (targets.length === 0) {
-        return { ok: true, data: { modified: 0 }, warnings: ["No targets to style"] };
+        return { ok: true, data: { modified: 0, modifiedIds: [], unnamedModified: 0, failed: 0 },
+            warnings: ["No targets to style"] };
     }
 
     var parsed = _parseColorParam(params, "stroke");
-
-    // Disable sentinel: remove stroke
-    if (parsed.disable) {
-        var removed = 0;
-        for (var d = 0; d < targets.length; d++) {
-            try { targets[d].stroked = false; removed++; } catch (e) { }
-        }
-        return { ok: true, data: { modified: removed } };
-    }
 
     // Validation error
     if (parsed.error) {
@@ -155,22 +147,48 @@ registerOpHandler("style_set_stroke", function (params, targets, ctx) {
     }
 
     var modified = 0;
+    var modifiedIds = [];
+    var unnamedModified = 0;
+    var failed = 0;
     var warnings = [];
 
     for (var i = 0; i < targets.length; i++) {
+        var identity = mcpTargetIdentity(targets[i]);
+        var touched = false;
         try {
-            if (parsed.color) {
-                targets[i].strokeColor = parsed.color;
+            if (parsed.disable) {
+                targets[i].stroked = false;
+                touched = true;
+            } else {
+                if (parsed.color) {
+                    targets[i].strokeColor = parsed.color;
+                    touched = true;
+                }
+                targets[i].stroked = true;
+                touched = true;
+                targets[i].strokeWidth = strokeWidth;
             }
-            targets[i].stroked = true;
-            targets[i].strokeWidth = strokeWidth;
             modified++;
         } catch (e) {
+            failed++;
             warnings.push("Failed to set stroke on item " + i + ": " + e.message);
+        }
+        // Count completed targets separately from confirmed writes: color or
+        // enablement can land before width throws, while a blocked first write
+        // supplies no evidence of modification at all.
+        if (touched) {
+            if (identity) {
+                if (modifiedIds.indexOf(identity) < 0) modifiedIds.push(identity);
+            } else {
+                unnamedModified++;
+            }
         }
     }
 
-    return { ok: true, data: { modified: modified }, warnings: warnings };
+    return { ok: true, data: {
+        modified: modified, modifiedIds: modifiedIds,
+        unnamedModified: unnamedModified, failed: failed
+    }, warnings: warnings };
 });
 
 // ==================== Style Set Opacity ====================

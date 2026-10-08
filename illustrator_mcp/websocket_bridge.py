@@ -407,10 +407,13 @@ class WebSocketBridge:
             }
         
         return {
-            "host": config.ws_host,
+            "host": self.server.bound_host or self.server.host,
+            "endpoint": self.server.endpoint,
+            "requested_endpoint": f"ws://{self.server.host}:{self.server.port}",
+            "bound_endpoint": self.server.endpoint if self.server.bound_port is not None else None,
             "startup_error": str(self.server._start_error) if self.server and self.server._start_error else None,
             "is_connected": connected,
-            "port": self.port,
+            "port": self.server.bound_port if self.server.bound_port is not None else self.port,
             "state": self.state.value if hasattr(self.state, 'value') else str(self.state),
             "is_running": self.is_running(),
             "client_info": client_info
@@ -530,7 +533,7 @@ class WebSocketBridge:
             ExecutionResponse with result or error
         """
         if not self.is_connected():
-            return create_connection_error(self.port)
+            return create_connection_error(self.port, endpoint=self.server.endpoint)
 
         from illustrator_mcp.execution import get_coordinator
         from illustrator_mcp.execution.coordinator import HostUnresolvedError
@@ -564,7 +567,7 @@ class WebSocketBridge:
                         "execution": "unknown", "jobId": coordinator.active_job_id, "dispatched": False}
             coordinator.assert_host_available()
             if not self.is_connected():
-                return create_connection_error(self.port)
+                return create_connection_error(self.port, endpoint=self.server.endpoint)
         timeout = max(0.001, timeout - (time.monotonic() - admission_started))
         # Also guard direct bridge callers that do not reserve a logical job.
         if self.registry.pending_count or self._panel_busy:

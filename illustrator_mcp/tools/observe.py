@@ -34,6 +34,7 @@ from illustrator_mcp.tools.preview import (
     artboard_count,
     composite_background,
     contact_sheet,
+    contact_sheet_capture_max_dim,
     resolve_artboards,
 )
 
@@ -105,6 +106,10 @@ async def illustrator_observe(params: ObserveInput) -> CallToolResult:
       - Inspecting current artwork before or after managed edits
       - Obtaining raw or annotated previews and an annotation-to-handle map
       - Capturing a high-resolution crop without a dummy mutation
+      - Visual verification instead of exporting a deliverable: capture uses
+        imageCapture rather than exportFile. The isolated Illustrator 30.7.0
+        CEP capture control preserved the saved flag; inspect the returned
+        preservation verification rather than assuming every capture is safe.
 
     OPTIONS:
       mode: raw, annotated, or both
@@ -233,7 +238,8 @@ async def _observe_impl(params: ObserveInput, started: float) -> CallToolResult:
             # omission is reported rather than left for the caller to
             # discover.
             captures = await _capture_artboards(
-                board_indices, max_dim=params.max_dim,
+                board_indices, max_dim=contact_sheet_capture_max_dim(
+                    params.max_dim, len(board_indices)),
                 timeout=params.timeout, fmt="png", strict=True,
             )
             raw_bytes, sheet_layout = contact_sheet(

@@ -1,5 +1,6 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { ConnectionController, ConnectionSnapshot, selectConnectionControl } from '../connection/ConnectionController';
+import { loadEndpointConfig } from '../connection/EndpointConfig';
 
 // ExtendScript types
 interface CSInterface {
@@ -91,6 +92,7 @@ export async function collectPayload(host: CSInterface, request: any, descriptor
 }
 
 export function useMCP() {
+    const [endpointConfig] = useState(() => loadEndpointConfig(window));
     const [connection, setConnection] = useState<ConnectionSnapshot>({
         status:'disconnected', wanted:false, failure:null, attempt:0,
     });
@@ -274,6 +276,7 @@ export function useMCP() {
 
     useEffect(() => {
         const transport = new ConnectionController({
+            endpointConfig,
             createSocket: endpoint => new WebSocket(endpoint),
             clock: {
                 setTimeout: (fn, ms) => window.setTimeout(fn, ms),
@@ -292,16 +295,18 @@ export function useMCP() {
         });
         controller.current = transport;
         const unsubscribe = transport.subscribe(setConnection);
+        addLog(`Endpoint configuration: ${endpointConfig.source}`, 'info');
         transport.connect();
         return () => {
             unsubscribe();
             transport.dispose();
             if (controller.current === transport) controller.current = null;
         };
-    }, [addLog, onMessage, heartbeat, submitCompletion]);
+    }, [addLog, onMessage, heartbeat, submitCompletion, endpointConfig]);
 
     return {
         status: connection.status,
+        endpointConfig,
         connectionControl: selectConnectionControl(connection),
         logs,
         connect,

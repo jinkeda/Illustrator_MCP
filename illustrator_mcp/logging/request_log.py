@@ -140,9 +140,13 @@ class RequestLog:
         self.request_count += 1
         entry_id = f"{self.session_id}_{self.request_count:04d}"
         
-        # Determine if we should save the script
-        is_error = result and not result.get("ok", True)
-        should_save_script = save_script or is_error
+        # Inspect only the transport envelope; raw script data under result
+        # may legitimately contain fields such as {"ok": false} or "error".
+        is_error = bool(result and (
+            result.get("error") or result.get("ok") is False
+        ))
+        is_unknown = bool(result and result.get("execution") == "unknown")
+        should_save_script = save_script or is_error or is_unknown
         
         # Compute script hash for deduplication/lookup
         script_hash = hashlib.md5(script.encode()).hexdigest()[:12]
@@ -154,12 +158,17 @@ class RequestLog:
             "script_hash": script_hash,
             "script_len": len(script),
             "includes": includes or [],
-            "ok": result.get("ok") if result else None,
+            # Unknown host execution is neither failure nor success, even
+            # when the transport reports an error or a conflicting ok flag.
+            "ok": None if is_unknown else (False if is_error else (result.get("ok") if result else None)),
             "duration_ms": duration_ms,
         }
+        if result and "execution" in result:
+            entry["execution"] = result["execution"]
         
-        # Add error info if failed
-        if is_error:
+        # Preserve a supplied transport error without inventing an empty
+        # failure record for an unknown outcome that has no error detail.
+        if is_error and (not is_unknown or result.get("error")):
             entry["error"] = {
                 "code": result.get("error", {}).get("code") if isinstance(result.get("error"), dict) else None,
                 "message": str(result.get("error", ""))[:500]  # Truncate long errors

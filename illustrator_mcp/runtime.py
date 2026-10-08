@@ -1,7 +1,7 @@
 """
-Centralized runtime state management.
+Bridge/proxy lifecycle and access to the process-wide execution coordinator.
 
-This module replaces scattered global singletons with a unified RuntimeContext.
+Library caches, request logging, and evidence cadence retain module-local state.
 """
 
 import threading

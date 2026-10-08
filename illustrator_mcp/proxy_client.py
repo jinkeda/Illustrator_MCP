@@ -7,7 +7,7 @@ All specific tools use this as their underlying implementation.
 
 Architecture (simplified):
 - MCP server includes an integrated WebSocket server
-- CEP panel connects directly to MCP server's WebSocket (port 8081)
+- CEP panel connects directly to the configured MCP WebSocket endpoint (default port 8081)
 - No separate Node.js proxy server needed!
 """
 
@@ -263,7 +263,44 @@ async def execute_script_with_context(
     params: Optional[dict] = None,
     trace_id: Optional[str] = None,
     timeout: Optional[float] = None,
-    includes: Optional[List[str]] = None
+    includes: Optional[List[str]] = None,
+) -> ExecutionResponse:
+    """Inject libraries and execute under the single host coordinator.
+
+    DEBUG logs contain a request-local timing trace, including early refusals
+    and exceptions. Its end-to-end scope is this call, not the enclosing MCP
+    tool. Diagnostic failures cannot replace a host outcome or cancellation.
+    """
+    from illustrator_mcp.execution.timing import ExecutionTiming
+
+    timing = ExecutionTiming(trace_id or generate_trace_id())
+    try:
+        return await _execute_script_with_context(
+            script, command_type, tool_name, params, timing.fields["trace_id"],
+            timeout, includes, timing=timing,
+        )
+    except BaseException as exc:
+        timing.fields["exception_type"] = type(exc).__name__
+        raise
+    finally:
+        try:
+            trace = timing.finish()
+            if logger.isEnabledFor(logging.DEBUG):
+                logger.debug("execution_timing %s", json.dumps(trace))
+        except Exception:
+            pass  # Best-effort diagnostics must never alter execution.
+
+
+async def _execute_script_with_context(
+    script: str,
+    command_type: str,
+    tool_name: Optional[str] = None,
+    params: Optional[dict] = None,
+    trace_id: Optional[str] = None,
+    timeout: Optional[float] = None,
+    includes: Optional[List[str]] = None,
+    *,
+    timing,
 ) -> ExecutionResponse:
     """
     Execute a JavaScript script with command context for hybrid protocol.
@@ -292,6 +329,7 @@ async def execute_script_with_context(
 
     # Generate trace_id if not provided
     tid = trace_id or generate_trace_id()
+    timing.fields["input_script_bytes"] = len(script.encode("utf-8"))
     
     # Build CommandMetadata
     command = CommandMetadata(
@@ -305,9 +343,11 @@ async def execute_script_with_context(
     from illustrator_mcp.execution.trusted_probe import readiness
     if _in_reserved_job.get():
         from illustrator_mcp.execution import get_coordinator
+        timing.phase("readiness")
         refusal = await readiness(get_coordinator())
         if refusal is not None:
             return refusal
+        timing.phase("preparation")
     from illustrator_mcp.execution import document_intent
     intent = document_intent.active.get()
     if intent is not None:
@@ -321,6 +361,8 @@ async def execute_script_with_context(
         includes = list(dict.fromkeys([*(includes or []), "host_runtime", "doc_session"]))
 
     # --- Library injection (centralized) ---
+    timing.phase("library_preparation")
+    uninjected_bytes = len(script.encode("utf-8"))
     injection_meta = None
     if includes:
         # Sentinel guard: detect already-injected scripts
@@ -374,7 +416,10 @@ async def execute_script_with_context(
                 }
     
     # Note: Connection check is done in _execute_via_bridge, avoiding duplication
-    start_time = time.time()
+    timing.fields["prepared_script_bytes"] = len(script.encode("utf-8"))
+    timing.fields["injected_bytes"] = timing.fields["prepared_script_bytes"] - uninjected_bytes
+    timing.phase("admission_queue")
+    start_time = time.perf_counter()
     log_command(logger, tid, command_type, "starting")
 
     # T12: every host call is serialised through the process-wide coordinator.
@@ -390,17 +435,34 @@ async def execute_script_with_context(
     already_reserved = _in_reserved_job.get()
 
     async def _run() -> ExecutionResponse:
+        timing.fields["job_id"] = coordinator.active_job_id
+        timing.fields["reservation_reused"] = already_reserved
+        timing.phase("readiness")
         refusal = await readiness(coordinator)
         if refusal is not None:
             return refusal
         from illustrator_mcp.execution.progress import milestone
         await milestone(f"host phase: {command_type}; duration unknown")
+        timing.phase("bridge_wait")
         response = await _execute_via_bridge(
             script=script,
             timeout=timeout or config.timeout,
             command=command,
             trace_id=tid,
         )
+        timing.phase("response_processing")
+        # Use the request's retained identity, never a later connection's
+        # generation after a reconnect. Missing wire identities stay null.
+        timing.fields["request_token"] = response.get("requestToken")
+        if logger.isEnabledFor(logging.DEBUG) and timing.fields["request_token"] is not None:
+            # get() prunes retained jobs; pay that cost only when these
+            # diagnostics can be emitted, while the reservation is held.
+            record = coordinator.get(coordinator.active_job_id)
+            timing.fields["connection_generation"] = (
+                record.active_request_generation
+                if record is not None and record.active_request_token == timing.fields["request_token"]
+                else None
+            )
         from illustrator_mcp.execution.host_phases import interpret_phase_refusal
         response = interpret_phase_refusal(response)
         response = document_intent.accept_lifecycle(response)
@@ -434,7 +496,8 @@ async def execute_script_with_context(
             finally:
                 _in_reserved_job.reset(token)
 
-    duration_ms = (time.time() - start_time) * 1000
+    duration_ms = (time.perf_counter() - start_time) * 1000
+    timing.phase("diagnostic_logging")
 
 
     # Log success/error with timing
@@ -456,6 +519,7 @@ async def execute_script_with_context(
         logger.debug(f"Request logging failed: {e}")
     
     # Add trace_id and elapsed_ms to response for tracing
+    timing.phase("response_bookkeeping")
     response["trace_id"] = tid
     response["elapsed_ms"] = duration_ms
     

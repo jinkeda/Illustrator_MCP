@@ -193,7 +193,7 @@ ERROR_SUGGESTIONS: Dict[str, Dict[str, Any]] = {
             "Ensure Adobe Illustrator is running",
             "Check that the CEP panel (IllustratorMCP) is loaded",
             "Open Window > Extensions > IllustratorMCP in Illustrator",
-            "Verify the WebSocket connection on port 8081",
+            "Compare the panel endpoint with illustrator_connection_status and the Python startup log",
         ],
     },
     ErrorCode.C_TIMEOUT.value: {

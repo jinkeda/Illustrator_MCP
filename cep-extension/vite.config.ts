@@ -16,7 +16,9 @@ export default defineConfig({
     },
   },
   build: {
-    target: 'esnext',
+    // Illustrator 25.0 uses CEP 10 / Chromium 74; host testing is still required.
+    target: 'chrome74',
+    manifest: true,
     outDir: 'dist',
     assetsDir: 'assets',
     rollupOptions: {

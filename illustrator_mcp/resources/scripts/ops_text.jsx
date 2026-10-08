@@ -91,7 +91,8 @@ function resolveTextFont(params) {
         }
     }
     if (!font) return fail("Font not found or no unambiguous regular-style face: '" + requested + "'. Specify fontStyle/fontName. Available faces: " + JSON.stringify(faces.slice(0, 20)));
-    return {font: font, warnings: warnings, report: {requested: requested, resolved: font.name, defaultStyleRule: rule, substituted: false}};
+    // Resolution identifies an installed face; it does not verify host application.
+    return {font: font, warnings: warnings, report: {requested: requested, resolved: font.name, defaultStyleRule: rule, substituted: null, readbackComplete: false}};
 }
 
 // Runs use whole strings, not numeric host offsets. Resolve fonts before writes.
@@ -125,7 +126,8 @@ function _mcpTextRuns(params) {
         var font = resolveTextFont(run);
         if (font.error) throw new Error("Run " + i + " font resolution failed: " + JSON.stringify(font.error));
         out.warnings = out.warnings.concat(font.warnings);
-        out.runs.push({start: out.text.length, end: out.text.length + run.text.length, style: run, font: font.font});
+        out.runs.push({start: out.text.length, end: out.text.length + run.text.length, style: run,
+            font: font.font, fontReport: font.report});
         out.text += run.text;
     }
     if (params.contents !== undefined && params.contents !== out.text) throw new Error("contents must equal concatenated runs");
@@ -158,7 +160,8 @@ function _mcpApplyTextRuns(plan) {
         if (style.fill !== undefined) attrs.fillColor = _parseColorParam(style, "fill").color;
     }
     // Read only after all writes: shaping can substitute earlier characters.
-    var report = {status: "passed", checkedCharacters: plan.length, differences: []};
+    var report = {status: "passed", checkedCharacters: plan.length, differences: [], fonts: []};
+    var fontReports = {};
     for (var ci = 0; ci < plan.length; ci++) {
         var entry = plan[ci], requested = entry.run.style;
         function check(attribute, expected, actual, numeric) {
@@ -167,9 +170,32 @@ function _mcpApplyTextRuns(plan) {
                     attribute: attribute, requested: expected, actual: actual === undefined ? null : actual});
             }
         }
+        var fontReport = null;
+        if (entry.run.font) {
+            var fontKey = "run_" + entry.runIndex;
+            if (!fontReports[fontKey]) {
+                fontReports[fontKey] = {runIndex: entry.runIndex,
+                    requested: entry.run.fontReport.requested,
+                    resolved: entry.run.fontReport.resolved,
+                    defaultStyleRule: entry.run.fontReport.defaultStyleRule,
+                    actual: [], substituted: false, readbackComplete: true};
+                report.fonts.push(fontReports[fontKey]);
+            }
+            fontReport = fontReports[fontKey];
+        }
+        var fontReadComplete = false;
         try {
             var observed = entry.character.characterAttributes;
-            if (entry.run.font) check("fontName", entry.run.font.name, observed.textFont.name, false);
+            if (entry.run.font) {
+                var actualFont = observed.textFont.name;
+                if (typeof actualFont !== "string" || !actualFont.length) throw new Error("Font readback unavailable");
+                var foundFont = false;
+                for (var fi = 0; fi < fontReport.actual.length; fi++) if (fontReport.actual[fi] === actualFont) foundFont = true;
+                if (!foundFont) fontReport.actual.push(actualFont);
+                if (actualFont !== entry.run.font.name) fontReport.substituted = true;
+                check("fontName", entry.run.font.name, actualFont, false);
+                fontReadComplete = true;
+            }
             if (requested.fontSize !== undefined) check("fontSize", requested.fontSize, observed.size, true);
             if (requested.baselineShift !== undefined) check("baselineShift", requested.baselineShift, observed.baselineShift, true);
             if (requested.fill !== undefined) {
@@ -179,6 +205,10 @@ function _mcpApplyTextRuns(plan) {
                 check("fill.b", requested.fill.b, color.blue, true);
             }
         } catch (readError) {
+            if (fontReport && !fontReadComplete) {
+                fontReport.readbackComplete = false;
+                if (!fontReport.substituted) fontReport.substituted = null;
+            }
             report.differences.push({characterIndex: ci, runIndex: entry.runIndex,
                 attribute: "readback", error: String(readError)});
         }

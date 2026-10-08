@@ -79,21 +79,22 @@ _CHECKS: dict = {
         "the script changed what was intended and nothing else",
 }
 
-#: Operations that change nothing a picture would reveal. Everything else is
-#: treated as a layout change, so an operation added to the contract without
-#: being classified here errs toward asking for evidence rather than skipping
-#: it silently.
+#: Operations exempt from immediate evidence under the current policy.
+#: Text edits, layer visibility, stroke changes (including removal), and
+#: style cloning are excluded: they can reflow text, hide artwork, or change
+#: visible bounds. Fill/opacity-only operations retain their existing
+#: exemptions; this is not a requirement for every appearance change.
+#: Everything else defaults to a layout change, including new operations.
 #:
 #: Every name here must exist in the contract SSOT. A misspelling would not
 #: raise: it would simply never match, and the operation it was meant to
 #: exempt would quietly demand evidence forever. A test pins the set against
 #: the contract for exactly that reason.
 _CHEAP_OPS: frozenset = frozenset({
-    "style_set_fill", "style_set_stroke", "style_set_gradient",
-    "style_remove_fill", "style_remove_stroke", "style_clone",
+    "style_set_fill", "style_set_gradient",
+    "style_remove_fill",
     "style_snapshot", "style_set_opacity",
-    "text_set_content", "text_set_style",
-    "layer_activate", "layer_list", "layer_lock", "layer_visible",
+    "layer_activate", "layer_list", "layer_lock",
     "layer_create",
     "measure_bounds", "hash_structure", "snapshot_structure",
     "assert_alignment", "assert_bounds", "assert_count", "assert_exists",

@@ -269,10 +269,12 @@ def canonical_result_schema_resource() -> str:
     import json
 
     from illustrator_mcp.results import RESULT_SCHEMA_VERSION, CanonicalResult
+    from illustrator_mcp.schemas.contracts import BATCH_REPORT_SCHEMA
 
     schema = CanonicalResult.model_json_schema(by_alias=True, mode="serialization")
     schema["$id"] = "illustrator://schema/result"
     schema["x-schema-version"] = RESULT_SCHEMA_VERSION
+    schema["x-batch-report"] = BATCH_REPORT_SCHEMA
     return json.dumps(schema, indent=2)
 
 

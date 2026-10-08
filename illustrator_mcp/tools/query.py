@@ -370,8 +370,8 @@ class PreflightCheckInput(ToolInputBase):
                      "Omitted legacy options are reported in legacy_preflight; explicitly requested "
                      "omitted checks make verification unavailable. Run without publication for those checks."),
     )
-    scan_max_items: int = Field(10000, gt=0, strict=True)
-    scan_budget_ms: int = Field(2000, gt=0, strict=True)
+    scan_max_items: int = Field(10000, gt=0, strict=True, description="Publication item limit; in legacy mode, maximum zero-extent candidate classification attempts (ordinary artwork is not capped).")
+    scan_budget_ms: int = Field(2000, gt=0, strict=True, description="Publication scan time budget; in legacy mode, cumulative time inside zero-extent classification only. Cooperative, not a host timeout.")
 
     @model_validator(mode="after")
     def publication_scope(self):
@@ -383,7 +383,7 @@ class PreflightCheckInput(ToolInputBase):
 
     check_zero_size: bool = Field(
         default=True,
-        description="Check for zero-size items"
+        description="Check for non-rendering zero-area path geometry; unsupported appearance or exhausted candidate budgets report unknown and make legacy preflight ok=false."
     )
 
     check_empty_text: bool = Field(
@@ -518,32 +518,77 @@ async def illustrator_preflight_check(params: PreflightCheckInput) -> CallToolRe
 
     // 2. Zero-size check (scope-aware)
     if ({str(params.check_zero_size).lower()}) {{
-        var zeroSize = [];
+        var zeroSize = [], zeroDetails = [], zeroUnknown = [], zeroUnknownCount = 0;
+        var geometryRemainingMs = {params.scan_budget_ms};
+        var zeroCandidates = 0, zeroAttempted = 0, zeroClassified = 0, zeroOmitted = 0, zeroInterrupted = 0;
+        var zeroScanned = 0, zeroIncomplete = false;
         for (var i = 0; i < doc.pageItems.length; i++) {{
+            zeroScanned++;
             var item = doc.pageItems[i];
             if (item.hidden || isLayerHidden(item)) continue;
             if (item.guides) continue;  // guide lines are inherently zero-size
             try {{
+                // Groups are containers; compound paths own their child verdicts.
+                if (item.typename === "GroupItem") continue;
+                if (item.parent && item.parent.typename === "CompoundPathItem") continue;
                 var b = item.geometricBounds;
-                // Apply scope filter
+                if (!b || b.length !== 4) throw new Error("Missing geometric bounds");
+                for (var bi=0;bi<4;bi++) if (typeof b[bi] !== "number" || !isFinite(b[bi])) throw new Error("Invalid geometric bounds");
+                // A positive extent on both axes cannot be a zero-size candidate.
+                if (Math.abs(b[2]-b[0]) > 0 && Math.abs(b[1]-b[3]) > 0) continue;
                 if (scope === "artboard" && !isItemCenterOnArtboard(b, ab)) continue;
-
-                if (item.width === 0 || item.height === 0) {{
-                    zeroSize.push(item.name || ("item_" + i));
+                var ancestor=item.parent, excluded=false, depth=0;
+                while (ancestor && ancestor.typename !== "Document" && depth < 64) {{
+                    if (ancestor.hidden || ancestor.guides) {{ excluded=true; break; }}
+                    ancestor=ancestor.parent; depth++;
+                }}
+                if (excluded) continue;
+                zeroCandidates++;
+                var finding;
+                if (ancestor && ancestor.typename !== "Document") {{
+                    finding={{status:"unknown",reason:"ancestor_depth_limit",bounds_source:"geometricBounds"}};
+                }} else if (zeroAttempted >= {params.scan_max_items} || geometryRemainingMs <= 0) {{
+                    zeroIncomplete=true; zeroOmitted++;
+                    finding={{status:"unknown",reason:"candidate_budget_exhausted",bounds_source:"geometricBounds"}};
+                }} else {{
+                    var geometryStarted = new Date().getTime();
+                    // One compound plus at most 256 children of 1024 points.
+                    var geometryBudget = {{remaining:1+256*1025, deadline:geometryStarted+geometryRemainingMs}};
+                    finding=preflightPathDegeneracy(item, geometryBudget);
+                    zeroAttempted++;
+                    geometryRemainingMs=Math.max(0,geometryRemainingMs-(new Date().getTime()-geometryStarted));
+                    if (finding.reason === "geometry_budget_exhausted") {{
+                        zeroIncomplete=true; zeroInterrupted++;
+                    }} else zeroClassified++;
+                }}
+                finding.name = item.name || ("item_" + i);
+                if (finding.status === "degenerate") {{
+                    zeroSize.push(finding.name);
+                    if (zeroDetails.length < 10) zeroDetails.push(finding);
+                }} else if (finding.status === "unknown") {{
+                    zeroUnknownCount++;
+                    if (zeroUnknown.length < 10) zeroUnknown.push(finding);
                 }}
             }} catch (e) {{
-                // Some items may not have width/height
+                zeroUnknownCount++;
+                if (zeroUnknown.length < 10) zeroUnknown.push({{name:"item_"+i,status:"unknown",reason:"geometry_property_unavailable",bounds_source:"geometricBounds"}});
             }}
         }}
-        result.checks.zero_size = {{ count: zeroSize.length, items: zeroSize.slice(0, 10) }};
+        result.checks.zero_size = {{count:zeroSize.length, items:zeroSize.slice(0,10), findings:zeroDetails,
+            status:zeroSize.length ? "fail" : (zeroIncomplete || zeroUnknownCount ? "unknown" : "pass"),
+            bounds_source:"geometricBounds", unknown_count:zeroUnknownCount, unknown:zeroUnknown,
+            scan_complete:!zeroIncomplete, items_scanned:zeroScanned, items_total:doc.pageItems.length,
+            candidates_seen:zeroCandidates, candidates_attempted:zeroAttempted,
+            candidates_classified:zeroClassified, candidates_omitted:zeroOmitted, candidates_interrupted:zeroInterrupted}};
         if (zeroSize.length > 0) {{
-            result.issues.push({{
-                type: "zero_size",
-                count: zeroSize.length,
-                message: zeroSize.length + " items have zero width or height",
-                samples: zeroSize.slice(0, 10)
-            }});
+            result.issues.push({{type:"zero_size", count:zeroSize.length,
+                message:zeroSize.length+" non-rendering zero-area "+(zeroSize.length === 1 ? "path" : "paths"), samples:zeroSize.slice(0,10)}});
             result.summary.issues_found += zeroSize.length;
+        }}
+        if (zeroIncomplete || zeroUnknownCount) {{
+            result.issues.push({{type:"zero_size_unknown",count:zeroUnknownCount,
+                message:"Geometry check inconclusive: "+zeroUnknownCount+" unknown "+(zeroUnknownCount === 1 ? "item" : "items")+" (including unavailable geometry); scanned "+zeroScanned+" of "+doc.pageItems.length+" items; classified "+zeroClassified+" of "+zeroCandidates+" zero-extent candidates; "+zeroOmitted+" candidates omitted before classification and "+zeroInterrupted+" interrupted during classification by budget", samples:zeroUnknown}});
+            result.summary.issues_found += zeroUnknownCount;
         }}
     }}
 

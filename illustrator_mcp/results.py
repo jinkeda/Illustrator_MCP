@@ -26,6 +26,7 @@ results untrustworthy:
 from __future__ import annotations
 
 from enum import Enum
+from math import isfinite
 from typing import Any, Dict, List, Optional, Literal
 
 from mcp.types import CallToolResult, ContentBlock, ImageContent, TextContent
@@ -288,6 +289,21 @@ class CanonicalResult(BaseModel):
             extras.append("detail truncated")
         return head + (f" ({', '.join(extras)})" if extras else "")
 
+    def task_detail_text(self) -> str:
+        """Canonical outcome plus available host timing for legacy formatted clients."""
+        summary = self.summary_line()
+        report = self.data.get("report") if isinstance(self.data, dict) else None
+        timing = report.get("timing") if isinstance(report, dict) else None
+        if not isinstance(timing, dict):
+            return summary
+        parts = []
+        for label in ("collect", "compute", "apply", "total"):
+            value = timing.get(label + "_ms")
+            if (isinstance(value, (int, float)) and not isinstance(value, bool)
+                    and value >= 0 and isfinite(value)):
+                parts.append(f"{label}={value:.0f}ms")
+        return summary + ("\n  Timing: " + ", ".join(parts) if parts else "")
+
 
 def build_call_result(
     result: CanonicalResult,
@@ -306,11 +322,18 @@ def build_call_result(
         result.effects.coverageReason = "raw_script_modifications_untracked" if result.effects.coverage == "partial" else "raw_script"
     else:
         result.effects.coverageReason = "producer_exhaustive" if result.effects.complete else "limited_producer_evidence"
+    if (result.tool == "illustrator_execute_task" and isinstance(result.data, dict)
+            and "formatted" in result.data):
+        # The legacy formatter sees handler-level ok/stats before declined
+        # target work changes canonical execution. Derive both human summaries
+        # from this final result; add host timing to the detailed formatted view.
+        result.data = {**result.data, "formatted": result.task_detail_text()}
+    structured = result.to_structured()
     blocks: List[ContentBlock] = [
         TextContent(type="text", text=result.summary_line()),
         TextContent(
             type="text",
-            text=_json.dumps(result.to_structured(), separators=(",", ":"), default=str),
+            text=_json.dumps(structured, separators=(",", ":"), default=str),
         ),
     ]
     if extra_content:
@@ -318,7 +341,7 @@ def build_call_result(
 
     return CallToolResult(
         content=blocks,
-        structuredContent=result.to_structured(),
+        structuredContent=structured,
         isError=result.execution.is_error(),
     )
 
@@ -805,12 +828,62 @@ def finalize_tool_result(value: Any, tool: str) -> CallToolResult:
             truncated=True,
             notes=notes if isinstance(notes, list) else [notes],
             retrieval_hint=(
-                "Re-run with a narrower selection or fewer operations to "
-                "retrieve the omitted detail."
+                "Inspect retained evidence without replaying the mutation; host-budget omissions were never retained and cannot be recovered."
+                if tool == "illustrator_execute_task" else
+                "Re-run with a narrower selection or fewer operations to retrieve the omitted detail."
             ),
         )
 
     return build_call_result(result, extra_content=extra)
+
+
+def _compact_task_operations(canonical):
+    """Keep successful operation outputs intact; omit only declared defaults.
+
+    Failed/skipped operations keep all details. Do not recursively rewrite
+    arbitrary op.data: nested results may be caller payload or recovery evidence.
+    """
+    defaults = {"error": None, "id": None, "targets_requested": 0,
+                "targets_resolved": 0, "targets_unidentified": 0,
+                "warnings": [], "unresolvedIds": [], "unapplied": [], "skipped": False}
+    eligible = []
+    timings = 0
+    upstream = canonical.truncation.truncated
+    batches = [canonical.diagnostics.get("batchReport")]
+    if isinstance(canonical.data, dict):
+        batches.append(canonical.data.get("batchReport"))
+        report = canonical.data.get("report")
+        if isinstance(report, dict):
+            batches.append(report.get("batchReport"))
+    seen_batches = set()
+    for batch in batches:
+        if not isinstance(batch, dict) or not isinstance(batch.get("ops"), list):
+            continue
+        if id(batch) in seen_batches:
+            continue
+        seen_batches.add(id(batch))
+        for op in batch["ops"]:
+            if not isinstance(op, dict):
+                continue
+            upstream = upstream or bool(op.get("dataOmitted"))
+            if op.get("ok") is not True or op.get("skipped"):
+                continue
+            eligible.append(op)
+    # Defaults apply to every eligible operation. Never conflate an originally
+    # absent count (unknown) with an explicitly reported zero.
+    omitted = {key: default for key, default in defaults.items() if eligible and all(
+        key in op and type(op[key]) is type(default) and op[key] == default for op in eligible)}
+    for op in eligible:
+        for key in omitted:
+            del op[key]
+        if "duration_ms" in op:
+            del op["duration_ms"]
+            timings += 1
+    canonical.diagnostics["presentation"] = {
+        "detail": "summary", "operationDefaults": omitted,
+        "operationTimingsHidden": timings,
+        "upstreamDetailOmitted": bool(upstream),
+    }
 
 
 def summarize_result(result):
@@ -820,7 +893,9 @@ def summarize_result(result):
     No additional result store is created, and jobs without retained results
     never receive a fabricated retrieval promise.
     """
-    canonical = CanonicalResult.model_validate(result.structuredContent)
+    canonical = CanonicalResult.model_validate(result.structuredContent).model_copy(deep=True)
+    if canonical.tool == "illustrator_execute_task":
+        _compact_task_operations(canonical)
     if isinstance(canonical.data, dict):
         canonical.data.pop("runtime", None)
         canonical.data.pop("changeHints", None)
@@ -831,4 +906,7 @@ def summarize_result(result):
     if job is not None and job.retained_call is not None:
         canonical.diagnostics["fullResult"] = {
             "tool": "illustrator_job_status", "params": {"jobId": job.job_id, "detail": "full"}}
+    if canonical.tool == "illustrator_execute_task":
+        canonical.diagnostics["presentation"]["fullResultAvailability"] = (
+            "available_while_retained" if job is not None and job.retained_call is not None else "unavailable")
     return build_call_result(canonical, list(result.content[2:]))

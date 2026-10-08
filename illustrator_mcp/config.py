@@ -3,7 +3,7 @@ Configuration management for Illustrator MCP.
 """
 import logging as _logging
 
-from pydantic import Field
+from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -24,8 +24,15 @@ class Config(BaseSettings):
     )
     
     # WebSocket settings
-    ws_host: str = Field(default="localhost", description="WebSocket host")
+    ws_host: str = Field(default="127.0.0.1", description="IPv4 loopback WebSocket host")
     ws_port: int = Field(default=8081, ge=1024, le=65535, description="WebSocket port for bridge")
+
+    @field_validator('ws_host')
+    @classmethod
+    def normalize_ws_host(cls, value: str) -> str:
+        if value.strip().lower() not in {'localhost', '127.0.0.1'}:
+            raise ValueError('WS_HOST must be 127.0.0.1 or localhost (IPv4 loopback only)')
+        return '127.0.0.1'
     
     # Timeout settings
     timeout: float = Field(default=30.0, ge=1.0, le=300.0, description="Operation timeout in seconds")

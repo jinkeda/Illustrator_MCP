@@ -43,13 +43,14 @@ ILLUSTRATOR_RECOVERY_STEPS: Tuple[str, ...] = (
 )
 
 
-def create_connection_error(port: int, context: str = "") -> ExecutionResponse:
+def create_connection_error(port: int, context: str = "", *, endpoint: Optional[str] = None) -> ExecutionResponse:
     """
     Create a standardized connection error response with actionable suggestions.
     
     Args:
         port: The WebSocket port number.
         context: Optional context string (e.g., command type).
+        endpoint: Resolved bridge URL when known; otherwise report only the port.
         
     Returns:
         ExecutionResponse with error message and quick fixes.
@@ -62,27 +63,28 @@ def create_connection_error(port: int, context: str = "") -> ExecutionResponse:
             + "".join(f"{i}. {step}\n"
                       for i, step in enumerate(PANEL_RECOVERY_STEPS, start=1))
             + "\n"
-            f"(WebSocket server running on port {port})\n"
+            f"(Bridge endpoint: {endpoint or ('configured port ' + str(port))})\n"
             "Call illustrator_connection_status for a full report.")
     }
 
 
-def create_duplicate_connection_error(port: int) -> ExecutionResponse:
+def create_duplicate_connection_error(port: int, *, endpoint: Optional[str] = None) -> ExecutionResponse:
     """
     Create a standardized error for duplicate connection attempts.
     
     Args:
         port: The WebSocket port number.
+        endpoint: Resolved bridge URL when known; otherwise report only the port.
         
     Returns:
         ExecutionResponse with error message and quick fixes.
     """
     return {
         "error": format_code(ErrorCode.C_BRIDGE_ERROR,
-            f"Another MCP client is already connected on port {port}.\n\n"
+            f"Another panel connection occupies the bridge at {endpoint or ('configured port ' + str(port))}.\n\n"
             "Quick Fixes:\n"
-            "1. Close other Claude Code instances using Illustrator MCP\n"
-            "2. Restart Illustrator if the connection seems stuck\n"
+            "1. Release the existing panel connection, then retry\n"
+            "2. Use illustrator_connection_status to inspect the bridge\n"
             "3. Check server logs for connection details")
     }
 
@@ -121,6 +123,7 @@ def check_connection_or_error(
             "Listener startup failed at " + endpoint + ": " + str(info["startup_error"]) +
             ". Another process may own the endpoint. Call illustrator_connection_status for details.")}
     if not bridge.is_connected():
-        return False, create_connection_error(port, context)
+        endpoint = info.get('endpoint') if isinstance(info, dict) else None
+        return False, create_connection_error(port, context, endpoint=endpoint)
     
     return True, None

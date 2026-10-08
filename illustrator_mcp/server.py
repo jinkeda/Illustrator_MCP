@@ -8,12 +8,12 @@ using natural language.
 
 Architecture (SIMPLIFIED - Single Process!):
 - MCP server runs as main process (stdio transport for Claude Code)
-- Integrated WebSocket server (port 8081) for CEP panel connection
+- Integrated loopback WebSocket server (configurable port, default 8081) for CEP
 - NO separate Node.js proxy server needed!
 
 How it works:
 1. Claude Code connects to this server via stdio
-2. CEP panel in Illustrator connects via WebSocket (port 8081)
+2. CEP panel in Illustrator connects to its configured WebSocket endpoint
 3. MCP tools send scripts through the WebSocket bridge to Illustrator
 
 Lifecycle:

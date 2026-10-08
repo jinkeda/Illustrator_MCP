@@ -1,4 +1,6 @@
 # Local configuration and secrets
+/cep-extension/.debug
+connection.json
 .env
 .env.*
 !.env.example
@@ -24,6 +26,7 @@ outputs/
 # Internal development material
 /docs/
 /tests/
+/cep-extension/tests/
 /tests_jsx/
 /living test/
 /scripts/

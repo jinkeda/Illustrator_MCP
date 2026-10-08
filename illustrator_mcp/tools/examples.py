@@ -80,6 +80,14 @@ TOOL_EXAMPLES: Dict[str, List[Tuple[str, dict]]] = {
     ],
 
     "illustrator_execute_task": [
+        ("Explicit scientific runs through the compatibility route (choose installed faces; inspect runVerification.fonts)", {"params": {
+            "payload": {"task": "text_create", "params": {
+                "x": 20, "y": 40, "runs": [
+                    {"text": "B", "fontName": "AcuminConcept-Black", "fontSize": 12},
+                    {"text": "ex", "fontName": "AcuminConcept-BlackItalic", "fontSize": 8.4, "baselineShift": -3},
+                ],
+            }},
+        }}),
         ("One structured operation (the preferred form)", {"params": {
             "batch": {"operations": [
                 {"task": "element_create", "params": {

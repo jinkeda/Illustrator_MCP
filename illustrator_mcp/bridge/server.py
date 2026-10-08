@@ -24,6 +24,9 @@ class WebSocketServer:
     def __init__(self, port: int, on_message: Callable[[str], Awaitable[None]],
                  on_disconnect: Optional[Callable[[], Awaitable[None]]] = None):
         self.port = port
+        self.host = config.ws_host
+        self.bound_host: Optional[str] = None
+        self.bound_port: Optional[int] = None
         self.on_message = on_message
         self.on_disconnect = on_disconnect
         self.client: Optional[WebSocketServerProtocol] = None
@@ -51,7 +54,7 @@ class WebSocketServer:
             max_size = config.max_message_size_mb * 1024 * 1024
             self.server = await websockets.serve(
                 self._handle_client,
-                config.ws_host,
+                self.host,
                 self.port,
                 ping_interval=30,
                 ping_timeout=10,
@@ -61,13 +64,15 @@ class WebSocketServer:
                 max_queue=32,
                 close_timeout=2,
             )
+            address = self.server.sockets[0].getsockname()
+            self.bound_host, self.bound_port = address[0], address[1]
             logger.info(
                 "WebSocket max message size: %d MB", config.max_message_size_mb
             )
             
             logger.info(f"="*50)
-            logger.info(f"WebSocket bridge STARTED on port {self.port}")
-            logger.info(f"CEP panel should connect to: ws://{config.ws_host}:{self.port}")
+            logger.info(f"WebSocket bridge STARTED at {self.endpoint}")
+            logger.info(f"CEP panel should connect to: {self.endpoint}")
             logger.info(f"="*50)
             
             if started_event:
@@ -83,7 +88,7 @@ class WebSocketServer:
             # Publish failure immediately; stop() still joins this thread so
             # bounded diagnostic evidence is emitted before process exit.
             from illustrator_mcp.startup_diagnostics import log_bind_failure
-            log_bind_failure(e, config.ws_host, self.port)
+            log_bind_failure(e, self.host, self.port)
             raise
         except Exception as e:
             logger.error(f"WebSocket server error: {e}")
@@ -93,21 +98,26 @@ class WebSocketServer:
             raise
         finally:
             # Cancellation and startup errors take the same socket cleanup path.
-            if self.server is not None:
-                self.server.close()
-                await self.server.wait_closed()
+            try:
+                if self.server is not None:
+                    self.server.close()
+                    await self.server.wait_closed()
+            finally:
+                # A completed listener lifetime must not advertise an old bind.
+                self.bound_host = None
+                self.bound_port = None
 
     async def _handle_client(self, websocket: WebSocketServerProtocol):
         """Handle a connected client."""
         # Reject if there is already an active connection
         if self.client is not None and self.is_connected():
             logger.warning(
-                "Connection rejected: Another client is already connected."
+                "Connection rejected: Another panel is already connected."
             )
             await websocket.close(
                 4001,
-                "Another MCP client is already connected to Illustrator. "
-                "Please close the existing connection first."
+                "Another panel is already connected to this bridge. "
+                "Release it before retrying."
             )
             return
 
@@ -147,6 +157,11 @@ class WebSocketServer:
             self.client = None
             raise ConnectionError("Client connection is closed")
         await ws.send(message)
+
+    @property
+    def endpoint(self) -> str:
+        """Actual address while listening, otherwise the requested address."""
+        return f"ws://{self.bound_host or self.host}:{self.bound_port if self.bound_port is not None else self.port}"
 
     def stop(self):
         """Signal shutdown."""

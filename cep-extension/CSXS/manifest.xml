@@ -14,7 +14,7 @@
             <Locale Code="All" />
         </LocaleList>
         <RequiredRuntimeList>
-            <RequiredRuntime Name="CSXS" Version="9.0" />
+            <RequiredRuntime Name="CSXS" Version="10.0" />
         </RequiredRuntimeList>
     </ExecutionEnvironment>
     

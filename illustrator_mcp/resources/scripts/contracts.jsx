@@ -3,7 +3,7 @@
  * Part of Illustrator MCP SOC Framework
  * 
  * AUTO-GENERATED - DO NOT EDIT MANUALLY
- * Generated: 2026-09-13T09:51:57Z
+ * Generated: 2026-09-29T13:02:42Z
  * Source: illustrator_mcp/schemas/contracts.py
  * 
  * To regenerate: python -m illustrator_mcp.tools.compile_contracts

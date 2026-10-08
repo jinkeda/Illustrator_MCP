@@ -330,7 +330,7 @@ def _build_export_script(
         crop = [crop[0]-abRect[0], abRect[1]-crop[1], crop[2]-abRect[0], abRect[1]-crop[3]];
     if (crop && (crop[2]-crop[0] < 1 || crop[3]-crop[1] < 1)) throw new Error("V011: crop minimum is 1 x 1 pt");
     var maxDim = Math.max(abW, abH);
-    var scale = Math.min({max_dim} / maxDim * 100, 100);
+    var scale = {max_dim} / maxDim * 100;
     if (crop) {{
         crop = [Math.max(0,crop[0]),Math.max(0,crop[1]),Math.min(abW,crop[2]),Math.min(abH,crop[3])];
         if (crop[2] <= crop[0] || crop[3] <= crop[1]) throw new Error("{ErrorCode.V_CAPTURE_EMPTY_REGION.value}: Crop does not intersect the artboard; nextStep: choose an intersecting crop");
@@ -474,6 +474,16 @@ def resolve_artboards(selection, count: Optional[int]) -> "list[int] | None":
             seen.add(i)
             ordered.append(i)
     return ordered or None
+
+
+def contact_sheet_capture_max_dim(max_dim: int, count: int) -> int:
+    """Budget each capture for its grid column, retaining the capture minimum.
+
+    Labels still take space in the final sheet; composition may downsample
+    further. The host's 72 dpi floor can also exceed this output target.
+    """
+    columns = math.ceil(math.sqrt(max(1, count)))
+    return max(64, math.ceil(max_dim / columns))
 
 
 async def _capture_artboards(

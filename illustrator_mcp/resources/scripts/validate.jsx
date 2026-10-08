@@ -326,3 +326,79 @@ function publicationPreflightScan(doc, options) {
     result.summary.issues_found = result.issues.length;
     return result;
 }
+/**
+ * Classify path degeneracy separately from containment bounds options.
+ * @param {PageItem} item Path, compound path or another bounded page item.
+ * @param {Object} budget Shared remaining work and absolute deadline in ms.
+ * @returns {Object} valid/degenerate/unknown, reason and evidence sources.
+ */
+function preflightPathDegeneracy(item, budget) {
+    function verdict(status, reason) {
+        return {status:status, reason:reason, bounds_source:"geometricBounds",
+            appearance_source:"visibleBounds_and_stroke"};
+    }
+    function finiteArray(value, size) {
+        if (!value || value.length !== size) return false;
+        for (var k=0;k<size;k++) if (typeof value[k] !== "number" || !isFinite(value[k])) return false;
+        return true;
+    }
+    function spend() {
+        if (budget.remaining <= 0 || new Date().getTime() > budget.deadline) return false;
+        budget.remaining--; return true;
+    }
+    try {
+        var b=item.geometricBounds;
+        if (!finiteArray(b,4)) return verdict("unknown", "geometric_bounds_unavailable");
+        var w=Math.abs(b[2]-b[0]), h=Math.abs(b[1]-b[3]);
+        // Ordinary artwork needs no point/child inspection or geometry budget.
+        if (w > 0 && h > 0) return verdict("valid", "nonzero_geometric_extent");
+        if (!spend()) return verdict("unknown", "geometry_budget_exhausted");
+        if (item.typename === "CompoundPathItem") {
+            var children = item.pathItems;
+            if (!children.length) return verdict("unknown", "empty_compound");
+            if (children.length > 256) return verdict("unknown", "compound_child_limit");
+            var ambiguous = false, interrupted = false;
+            for (var ci=0;ci<children.length;ci++) {
+                if (children[ci].hidden || children[ci].guides) { ambiguous=true; continue; }
+                var child = preflightPathDegeneracy(children[ci], budget);
+                if (child.status === "valid") return verdict("valid", "compound_has_geometry_or_mark");
+                if (child.status !== "degenerate") ambiguous=true;
+                if (child.reason === "geometry_budget_exhausted") interrupted=true;
+            }
+            return verdict(ambiguous ? "unknown" : "degenerate",
+                interrupted ? "geometry_budget_exhausted" : (ambiguous ? "compound_child_inconclusive" : "collapsed_non_rendering_compound"));
+        }
+        if (item.typename !== "PathItem") return verdict("unknown", "unsupported_zero_extent_item");
+        var points=item.pathPoints;
+        if (!points.length || points.length > 1024) return verdict("unknown", "path_point_limit_or_empty");
+        var origin=points[0].anchor, hasGeometry=false, zeroArea=true;
+        if (!finiteArray(origin,2)) return verdict("unknown", "path_geometry_unavailable");
+        for (var pi=0;pi<points.length;pi++) {
+            if (!spend()) return verdict("unknown", "geometry_budget_exhausted");
+            var coords=[points[pi].anchor,points[pi].leftDirection,points[pi].rightDirection];
+            for (var di=0;di<3;di++) {
+                if (!finiteArray(coords[di],2)) return verdict("unknown", "path_geometry_unavailable");
+                if (coords[di][0] !== origin[0] || coords[di][1] !== origin[1]) hasGeometry=true;
+                if ((w === 0 && coords[di][0] !== origin[0]) || (h === 0 && coords[di][1] !== origin[1])) zeroArea=false;
+            }
+        }
+        var vb=item.visibleBounds;
+        if (!finiteArray(vb,4)) return verdict("unknown", "visible_bounds_unavailable");
+        var visibleArea=Math.abs(vb[2]-vb[0]) > 0 && Math.abs(vb[1]-vb[3]) > 0;
+        var stroke=item.stroked === true && typeof item.strokeWidth === "number" && item.strokeWidth > 0;
+        if (hasGeometry) {
+            if ((w > 0 || h > 0) && stroke && visibleArea) return verdict("valid", "stroked_axis");
+            if ((w > 0 || h > 0) && zeroArea && item.stroked === false && !visibleArea)
+                return verdict("degenerate", "unstroked_zero_area_path");
+            return verdict("unknown", "geometry_or_appearance_inconclusive");
+        }
+        if (w > 0 || h > 0) return verdict("unknown", "bounds_geometry_disagree");
+        var cap=String(item.strokeCap);
+        if (stroke && visibleArea && (cap === "StrokeCap.ROUNDENDCAP" || cap === "StrokeCap.PROJECTINGENDCAP"))
+            return verdict("valid", "stroked_point_mark");
+        if (visibleArea) return verdict("unknown", "unclassified_visible_appearance");
+        if (item.stroked === false || (stroke && cap === "StrokeCap.BUTTENDCAP"))
+            return verdict("degenerate", "collapsed_non_rendering_path");
+        return verdict("unknown", "stroke_appearance_inconclusive");
+    } catch (e) { return verdict("unknown", "geometry_property_unavailable"); }
+}

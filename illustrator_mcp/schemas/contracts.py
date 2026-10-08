@@ -34,21 +34,40 @@ TASK_PROTOCOL_MAJOR_VERSIONS = ["2", "3"]
 # executeOpBatch() return shape — Python code depends on these fields.
 
 BATCH_REPORT_SCHEMA = {
-    "ok": "bool — true if all ops passed",
+    "ok": "bool — true if all handlers returned ok; canonical execution also accounts for unapplied target work",
     "stats": {
         "total": "int — total ops attempted",
-        "passed": "int — ops that succeeded",
-        "failed": "int — ops that failed",
+        "passed": "int — ops whose handlers returned ok, including handlers that declined target writes",
+        "failed": "int — ops whose handlers returned failure; not a count of failed target writes",
     },
     "createdIds": "list[str] — IDs of created elements",
-    "ops": "list[dict] — per-op results with {ok, task, id, error?}",
+    "ops": "list[dict] — per-op results with {ok, task, id, data, effects, targets_unidentified?, error?}; targets_unidentified, when execution was reached, counts resolved targets without identities before execution, regardless of whether they changed",
+    "effects": {
+        "created": "list[str] — known created identities",
+        "modified": "list[str] — identities with confirmed writes, including writes before a later failure",
+        "deleted": "list[str] — known deleted identities",
+        "unidentified": "int — lower bound of confirmed affected objects without identities per operation, summed across the batch; excludes untouched targets and failed creation slots. Zero does not establish no changes when complete is false",
+        "complete": "bool — true only for an exhaustive effects inventory; false when effects or their identities are not fully known",
+        "unapplied": "optional list — requested work that did not complete; used with confirmed effects to classify canonical execution as failed or partial",
+    },
 }
 """
 Documents the return shape of executeOpBatch() in ops_core.jsx.
 
 Python SOC batch compute depends on:
-  - result.stats.passed → report.stats.itemsModified
+  - per-op data.modified → report.stats.itemsModified (completed target writes)
+  - result.stats.failed → report.stats.itemsSkipped (failed handlers)
   - result (full) → report.batchReport
+The canonical data.formatted summary follows execution and confirmed effects,
+with available host timing appended. Raw handler statistics remain available
+in data.report.stats.
+
+Failed handlers may explicitly declare error.details.writesAttempted=false only
+when no document mutation (including allocation) was attempted in that invocation.
+The effects reducer treats this strict boolean declaration as complete empty
+effects. Error stage alone is not evidence; omit the declaration after any native
+write attempt, including one that threw with unknown effects. Fan-out reduces
+each invocation independently; unresolved selectors still limit completeness.
 """
 
 
@@ -223,9 +242,9 @@ OP_SCHEMAS: List[OpSchema] = [
     OpSchema(name="element_modify", route="typed_batch", requires_targets=True,
         documentation=_d('One or more resolved selector targets; an empty match fails in the executor.',
             _ARTBOARD_FRAME + " Position echo is {x,y,width,height} in the same artboard frame, rounded to 0.01 pt; dimensions are axis-aligned bounds. Rotation is degrees; scale is a multiplier (1=100%).",
-            'data {modified,total,failed,position}; position echoes the first target after modification.',
+            'data {modified,total,failed,partial,position,modifiedIds,unnamedModified,failures}; modified counts fully completed targets; failed counts targets that did not complete, including partial targets. partial counts failed targets with confirmed earlier writes and is a subset of failed, not an additional count. failed minus partial is not proof of untouched artwork. modifiedIds includes known writes before later failures. Failures identify target index/ID, property and effectsUnknown. Invalid layer values return V011 with error.details.writesAttempted=false. Position echoes the first fully completed target.',
             {'opacity': 60}, defaults={},
-            constraints=['Only supplied properties change; failure may leave earlier targets modified. Both typed batch and compatibility payload accept scaleX/scaleY, but the handler ignores them. Use uniform scale, a multiplier (1 preserves size, 2 doubles it).'], select=True, prerequisites='An open document with the intended editable artwork selected.'), description="Modify element properties", params={
+            constraints=['Only supplied properties change; failure may leave earlier properties or targets modified. Native exceptions leave effects incomplete; do not assume retry is harmless. Destination layer must have a unique, editable, visible top-level name; missing, duplicate and sublayer-only names fail before writes. Position is applied before size, rotation and scale; later transforms may change final top-left. Both typed batch and compatibility payload accept scaleX/scaleY, but the handler ignores them. Use uniform scale, a multiplier (1 preserves size, 2 doubles it).'], select=True, prerequisites='An open document with the intended editable artwork selected.'), description="Modify element properties", params={
         "x":        _p(N),
         "y":        _p(N),
         "width":    _p(N),
@@ -423,7 +442,13 @@ OP_SCHEMAS: List[OpSchema] = [
     OpSchema(name="style_set_stroke", route="typed_batch", requires_targets=True,
         documentation=_d('One or more resolved selector targets; an empty match fails in the executor.',
             _NO_COORDINATES,
-            'data {modified}; inspect warnings/effects for declined items.',
+            'data {modified,modifiedIds,unnamedModified,failed}. '
+            'modified counts fully completed targets; modifiedIds lists identities with at least one confirmed write, '
+            'including a write before a later property failure. unnamedModified counts such written targets without identities. '
+            'failed counts targets whose requested stroke update did not fully complete, including partial writes. '
+            'modified is not modifiedIds.length: a late width failure can return modified=0 with modifiedIds=["RECT1"] '
+            'and failed=1. Field-driven parameters return these records inside data.perTarget. '
+            'Inspect canonical execution/effects and warnings for the final outcome.',
             {'stroke': {'r': 0, 'g': 0, 'b': 0, 'width': 2}}, defaults={'width': 1},
             constraints=['Nested stroke.width overrides flat width. With no color, existing stroke color is retained and stroke enabled. false/null disables stroke.'], select=True, prerequisites='An open document with the intended editable artwork selected.'), description="Set stroke properties", params={
         "stroke": _p(O, desc='Stroke {r,g,b,width?} e.g. {"r":0,"g":0,"b":0,"width":2}, or false to disable'),
@@ -544,7 +569,7 @@ OP_SCHEMAS: List[OpSchema] = [
             {'contents': 'Hello', 'x': 20, 'y': 40, 'fontSize': 18}, defaults={'x': 0, 'y': 0, 'fontSize': 12, 'id': 'generated'},
             constraints=['contents or runs is required; when both are supplied their text must match. Styled empty text is rejected before creation. fontName is an exact installed PostScript name; fontFamily resolves installed family metadata with optional fontStyle. Default style precedence: Regular, Roman, Book, Normal; ambiguous or absent defaults fail. fontName/fontFamily conflict; fontStyle requires fontFamily. Legacy PostScript fontFamily aliases warn and only work without fontStyle.'], select=False, prerequisites='An open Illustrator document.'), description="Create a text frame", params={
         "contents": _p(S, desc="Required without runs; must equal concatenated runs when both supplied"),
-        "runs": _p(A, desc="Nonempty array of {text,fontName|fontFamily,fontStyle?,fontSize?,baselineShift?,fill?}; fontSize and baselineShift in points; no surrogate-pair splits. Fonts resolve before writes. Host character coverage is checked at runtime."),
+        "runs": _p(A, desc="Nonempty array of {text,fontName|fontFamily,fontStyle?,fontSize?,baselineShift?,fill?}; fontSize and baselineShift in points; no surrogate-pair splits. Fonts resolve before writes. runVerification.fonts reports requested/resolved/actual faces and incomplete readback; this does not certify glyph coverage. Host character coverage is checked at runtime."),
         "id":       _p(S),
         "x":        _p(N),
         "y":        _p(N),
@@ -566,7 +591,7 @@ OP_SCHEMAS: List[OpSchema] = [
             {'contents': 'Updated text'}, defaults={},
             constraints=[], select=True, prerequisites='An open document with intended TextFrames selected.'), description="Replace text; native formatting inheritance is not a mixed-style preservation guarantee. Runs apply supplied attributes explicitly", params={
         "contents": _p(S, desc="Required without runs; must equal concatenated runs when both supplied"),
-        "runs": _p(A, desc="Nonempty array of {text,fontName|fontFamily,fontStyle?,fontSize?,baselineShift?,fill?}; fontSize and baselineShift in points; no surrogate-pair splits. Fonts resolve before writes. Host character coverage is checked at runtime."),
+        "runs": _p(A, desc="Nonempty array of {text,fontName|fontFamily,fontStyle?,fontSize?,baselineShift?,fill?}; fontSize and baselineShift in points; no surrogate-pair splits. Fonts resolve before writes. runVerification.fonts reports requested/resolved/actual faces and incomplete readback; this does not certify glyph coverage. Host character coverage is checked at runtime."),
     }),
     OpSchema(name="text_set_style", route="typed_batch", requires_targets=True,
         documentation=_d('One or more resolved selector targets; an empty match fails in the executor. Non-TextFrames are skipped with warnings.',
@@ -578,7 +603,7 @@ OP_SCHEMAS: List[OpSchema] = [
         "fontName":   _p(S, desc="PostScript font name; unresolvable names fail"),
         "fontFamily": _p(S, desc="Installed font family; cannot combine with fontName"),
         "fontStyle": _p(S, desc="Style label within fontFamily; trimmed case-insensitive exact match"),
-        "runs": _p(A, desc="Run text must exactly match every target before any styling. Attributes omitted from a run retain existing style; host character boundaries are verified before mutation."),
+        "runs": _p(A, desc="Run text must exactly match every target before any styling. Attributes omitted from a run retain existing style; host character boundaries are verified before mutation. runVerification.fonts reports requested/resolved/actual faces and incomplete readback, not glyph coverage."),
         "tracking":   _p(N, desc="Letter spacing, in 1/1000 em"),
         "fill":     _p(O, desc='Text fill color {r,g,b}'),
         "r":        _p(N, desc="Red 0-255 (compat — prefer fill.r)"),

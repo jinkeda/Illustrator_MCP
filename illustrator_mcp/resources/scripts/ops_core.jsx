@@ -754,16 +754,26 @@ function mcpCleanupFailures(result) {
 
 /**
  * Build a bounded, honest effect record from handler output and the identities
- * captured before mutation. `complete` is false whenever affected artwork had
- * no stable identity or the handler reports a per-target failure.
+ * captured before mutation. `unidentified` counts only confirmed affected
+ * objects without identities, never untouched targets in scope. It is a lower
+ * bound when evidence is incomplete. The snapshot's unidentified target count
+ * is separate and limits completeness; it is not evidence of a change.
  */
 function recordOperationEffects(task, before, handlerResult, targetCount) {
     var effects = {
         created: [], modified: [], deleted: [],
-        unidentified: before.unidentified || 0,
+        unidentified: 0,
         complete: false
     };
     var data = handlerResult.data || {};
+    // Explicit handler guarantee: no mutation was attempted. Error stage alone
+    // cannot establish this; validation can also happen after earlier writes.
+    if (handlerResult.ok === false && handlerResult.error &&
+            handlerResult.error.details &&
+            handlerResult.error.details.writesAttempted === false) {
+        effects.complete = true;
+        return effects;
+    }
     var ids = data.ids || data.createdIds || [];
     if (!(ids instanceof Array)) ids = [];
 
@@ -824,13 +834,13 @@ function recordOperationEffects(task, before, handlerResult, targetCount) {
     // Any stranded object makes the account partial, named or not.
     var reportedIncomplete = unnamed > 0 || declinedCount > 0 ||
         strandedRecords.length > 0;
-    // `unidentified` means artwork that exists and has no id. A null slot is
+    // `unidentified` means confirmed effects without identities. A null slot is
     // the opposite: a request that never became artwork at all. Counting
     // slots here made an all-failed batch look like it had produced
     // something, so the boundary classified it partial instead of failed —
-    // forwarding `unapplied` alone would not have fixed that. Only stranded
-    // artwork belongs in this number.
-    effects.unidentified = (effects.unidentified || 0) + strandedCount;
+    // forwarding `unapplied` alone would not have fixed that. Seed the count
+    // with stranded artwork; branches below add confirmed unnamed changes.
+    effects.unidentified = strandedCount;
 
     // Execution and completeness are separate questions, and only the second
     // was being answered. An all-failed batch returned ok true with an empty
@@ -868,7 +878,10 @@ function recordOperationEffects(task, before, handlerResult, targetCount) {
                 }
             }
         }
-        if (data.unnamedModification === true) reportedIncomplete = true;
+        if (data.unnamedModification === true) {
+            effects.unidentified++;
+            reportedIncomplete = true;
+        }
         effects.complete = handlerResult.ok && !reportedIncomplete &&
             effects.created.length === 1 && effects.deleted.length === 1;
     } else if (task.indexOf("element_create") === 0 || task === "text_create" ||
@@ -905,13 +918,13 @@ function recordOperationEffects(task, before, handlerResult, targetCount) {
             }
         }
         effects.modified = movedIds;
-        // A move nothing can name makes the account inexhaustive: something
-        // changed that no entry above lists. It is not added to
-        // `unidentified`, because `before.unidentified` already counted
-        // that same target — identity is captured with the same mechanism
-        // at both points, so an unnamed mover was an unnamed target, and
-        // adding it here counted one object twice.
+        // Only completed unnamed moves count as effects. The target snapshot
+        // may also contain anonymous members that refused to move.
         if (typeof data.unnamedMoves === "number" && data.unnamedMoves > 0) {
+            effects.unidentified += data.unnamedMoves;
+            reportedIncomplete = true;
+        } else if (before.unidentified > 0 && typeof data.unnamedMoves !== "number") {
+            // An older handler supplied no move inventory for anonymous targets.
             reportedIncomplete = true;
         }
         if (handlerResult.id && effects.created.indexOf(handlerResult.id) < 0) {
@@ -921,8 +934,16 @@ function recordOperationEffects(task, before, handlerResult, targetCount) {
             effects.created.length > 0;
     } else if (task === "element_delete") {
         effects.deleted = before.ids.slice();
+        if (typeof data.deleted === "number") {
+            effects.unidentified += Math.max(0, Math.min(before.unidentified,
+                data.deleted - before.ids.length));
+        }
         effects.complete = handlerResult.ok && before.unidentified === 0 &&
             typeof data.deleted === "number" && data.deleted === targetCount;
+    } else if (task === "layer_visible") {
+        // Layers have no page-item identity in this inventory. Hiding one
+        // changes the canvas, so an empty list cannot claim exhaustive coverage.
+        effects.complete = false;
     } else if (getOpClass(task) === "doc") {
         // Only claim what the handler says it actually changed.
         //
@@ -930,8 +951,8 @@ function recordOperationEffects(task, before, handlerResult, targetCount) {
         // the handler had skipped — styling a mixed selection of text frames
         // and a rectangle claimed the rectangle was modified too. When a
         // handler reports `modifiedIds`, narrow the record to the identified
-        // targets it names; a handler that succeeded without reporting them
-        // keeps the old whole-selection behaviour.
+        // targets it names. A count-only result can name the whole selection
+        // only when all targets completed; a subset count identifies no item.
         //
         // A FAILED handler does not. The request is not evidence that
         // anything happened: `style_set_gradient` rejecting a gradient it
@@ -949,8 +970,22 @@ function recordOperationEffects(task, before, handlerResult, targetCount) {
         // targets says so by attaching `modifiedIds` to the error result,
         // the way `clip_create` reports its retained group. An unrecoverable
         // false identity is worse than a recorded unknown.
-        effects.modified = handlerResult.ok ? before.ids.slice() : [];
+        effects.modified = handlerResult.ok && declinedCount === 0 &&
+            (typeof data.modified !== "number" || data.modified === targetCount)
+            ? before.ids.slice() : [];
+        var confirmedModifiedCount = typeof data.modified === "number" ? data.modified : 0;
         if (data.modifiedIds instanceof Array) {
+            // Older text handlers put display labels in this list when no ID
+            // exists. They cannot enter effects.modified, but still establish
+            // writes, including writes before a later property failure.
+            var writtenLabels = [];
+            for (var li = 0; li < data.modifiedIds.length; li++) {
+                var label = data.modifiedIds[li];
+                if (typeof label === "string" && label.length && writtenLabels.indexOf(label) < 0) {
+                    writtenLabels.push(label);
+                }
+            }
+            confirmedModifiedCount = Math.max(confirmedModifiedCount, writtenLabels.length);
             var actuallyModified = [];
             for (var mi = 0; mi < before.ids.length; mi++) {
                 for (var mj = 0; mj < data.modifiedIds.length; mj++) {
@@ -962,7 +997,18 @@ function recordOperationEffects(task, before, handlerResult, targetCount) {
             }
             effects.modified = actuallyModified;
         }
+        if (typeof data.unnamedModified === "number") {
+            effects.unidentified += data.unnamedModified;
+        } else if (confirmedModifiedCount > 0) {
+            // Subtract the maximum possible named writes to get the minimum
+            // guaranteed anonymous writes. This is a worst-case bound, not an
+            // execution-order assumption: if an anonymous target changed while
+            // a named one did not, this may undercount. Coverage stays partial.
+            effects.unidentified += Math.max(0, Math.min(before.unidentified,
+                confirmedModifiedCount - before.ids.length));
+        }
         effects.complete = handlerResult.ok && before.unidentified === 0 &&
+            effects.unidentified === 0 && !reportedIncomplete &&
             (typeof data.failed !== "number" || data.failed === 0) &&
             (typeof data.modified !== "number" || data.modified === targetCount);
     } else {
@@ -1310,7 +1356,9 @@ function executeSubOps(ops, ctx, mode) {
             // P3: Resolve field descriptors in params before handler sees them
             var resolvedParams = op.params || {};
             var handlerResult;
+            var handlerEffects = null;
             var targetSnapshot = targetIdentitySnapshot(targets);
+            opResult.targets_unidentified = targetSnapshot.unidentified;
             var hasFieldDescs = typeof resolveFields === "function" &&
                 typeof containsFields === "function" && containsFields(resolvedParams);
 
@@ -1322,11 +1370,29 @@ function executeSubOps(ops, ctx, mode) {
                 var fanRecovery = [];
                 var fanId = null;
                 var fanError = null;
+                var fanEffects = {
+                    created: [], modified: [], deleted: [], unidentified: 0, complete: true
+                };
                 for (var t = 0; t < targets.length; t++) {
                     var perTargetParams = resolveFields(resolvedParams, targets[t], t, targets.length, ctx);
+                    var singleSnapshot = targetIdentitySnapshot([targets[t]]);
                     var singleResult = handler(perTargetParams, [targets[t]], ctx);
                     // Normalize unconditionally — guaranteed shape: {ok, data, warnings, error, id}
                     singleResult = normalizeHandlerResult(op.task, singleResult);
+                    // Preserve per-target write evidence through field fan-out.
+                    // Reducing only {perTarget, count} would infer all requested
+                    // identities again, including targets whose writes failed.
+                    var singleEffects = recordOperationEffects(op.task, singleSnapshot, singleResult, 1);
+                    fanEffects.created = fanEffects.created.concat(singleEffects.created);
+                    fanEffects.modified = fanEffects.modified.concat(singleEffects.modified);
+                    fanEffects.deleted = fanEffects.deleted.concat(singleEffects.deleted);
+                    fanEffects.unidentified += singleEffects.unidentified;
+                    if (!singleEffects.complete) fanEffects.complete = false;
+                    var singleUnapplied = (singleEffects.unapplied || [])
+                        .concat((singleResult.data && singleResult.data.skippedIds) || []);
+                    if (singleUnapplied.length) {
+                        fanEffects.unapplied = (fanEffects.unapplied || []).concat(singleUnapplied);
+                    }
                     if (singleResult.ok === false) {
                         fanOk = false;
                         if (!fanError) fanError = singleResult.error;
@@ -1344,6 +1410,7 @@ function executeSubOps(ops, ctx, mode) {
                     error: fanError,
                     recovery: fanRecovery.length ? fanRecovery : null
                 };
+                handlerEffects = fanEffects;
             } else {
                 if (typeof resolveFields === "function") {
                     resolvedParams = resolveFields(resolvedParams, targets[0] || null, 0, targets.length || 1, ctx);
@@ -1361,7 +1428,7 @@ function executeSubOps(ops, ctx, mode) {
             opResult.warnings = handlerResult.warnings;
             opResult.id = handlerResult.id || opResult.id;
             opResult.recovery = handlerResult.recovery;
-            opResult.effects = recordOperationEffects(
+            opResult.effects = handlerEffects || recordOperationEffects(
                 op.task, targetSnapshot, handlerResult, targets.length
             );
             if (typeof mcpOwnNextEvent === "function") {

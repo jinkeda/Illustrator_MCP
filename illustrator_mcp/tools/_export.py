@@ -10,7 +10,7 @@ import logging
 import os
 from typing import Union
 
-from mcp.types import ImageContent
+from mcp.types import ImageContent, TextContent
 from mcp.types import CallToolResult
 from illustrator_mcp.tools.bounds import BoundsOptions, check_bounds
 from illustrator_mcp.shared import mcp
@@ -93,7 +93,7 @@ async def illustrator_export_document(params: ExportDocumentInput) -> CallToolRe
     WHEN TO USE:
       - Generating raster output (PNG, JPG) with optional scale factor
       - Native SVG is disabled: live export changed the source file association
-      - Getting visual feedback by setting return_image=True (PNG/JPG only)
+      - Inspecting a requested deliverable with return_image=True (PNG/JPG only)
       - NOT for looking at your work in progress. Exporting writes a file to
         disk and overwrites whatever was there. To see the artwork, call
         illustrator_observe: it returns the image inline together with a
@@ -115,6 +115,11 @@ async def illustrator_export_document(params: ExportDocumentInput) -> CallToolRe
         {"params": {"file_path": "C:/out/fig.png", "overwrite": "version"}}
 
     NOTES:
+      - Illustrator 30.7.0 CEP tests observed exportFile changing a clean
+        document's saved flag to false, even without artboard switches.
+        Successful standard exports disclose data.document_saved_state_changed.
+        The tool never clears this flag or saves the source to hide the change.
+        For visual inspection without exportFile, use illustrator_observe.
       - artboard_only=True clips export to artboard; a pre-check warns if nothing is on it
       - Native PDF is temporarily disabled because saveAs changes source state
       - Native SVG is temporarily disabled after a measured source-association failure
@@ -123,6 +128,9 @@ async def illustrator_export_document(params: ExportDocumentInput) -> CallToolRe
         Illustrator is never asked to confirm a replacement. Its Replace Files
         prompt is modal and would hang the host until a person clicked it
       - overwrite='replace' retains a unique sibling backup until completion
+      - Unsupported-link errors use exclusive, file-synchronized recovery
+        copies where allowed. Incomplete copies remain for manual inspection;
+        Windows directory persistence and crash recovery are not certified.
       - Unknown completion retains the backup; use illustrator_job_status with
         finalize_export=true on the returned jobId after completion is established
       - Backup ownership is in-memory; after server restart use manual recovery
@@ -408,7 +416,7 @@ async def illustrator_export_document(params: ExportDocumentInput) -> CallToolRe
             mime_type = "image/png" if params.format == ExportFormat.PNG else "image/jpeg"
             # Return both envelope JSON and image content
             return [
-                {"type": "text", "text": envelope},
+                TextContent(type="text", text=envelope),
                 ImageContent(
                     type="image",
                     data=base64.b64encode(img_bytes).decode('utf-8'),

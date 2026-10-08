@@ -1876,31 +1876,63 @@ registerOpHandler("element_modify", function (params, targets, ctx) {
         return makeError(ErrorCodes.V_NO_SELECTION, "No targets to modify", "apply");
     }
 
+    // Validate the complete destination before any property assignment.
+    // Keep the existing top-level-only lookup contract; never choose the first
+    // of duplicate names or silently accept a sublayer.
+    var targetLayer = null;
+    if (params.layer !== undefined) {
+        var matches = 0;
+        for (var li = 0; li < ctx.doc.layers.length; li++) {
+            if (ctx.doc.layers[li].name === params.layer) {
+                targetLayer = ctx.doc.layers[li];
+                matches++;
+            }
+        }
+        if (matches !== 1 || targetLayer.locked || targetLayer.visible === false) {
+            var invalidLayer = makeError(ErrorCodes.V_INVALID_PARAM_VALUE,
+                "Destination must be one editable, visible top-level layer: " + params.layer +
+                ". Use a unique top-level name; sublayers are unsupported.", "validate",
+                null, {writesAttempted: false});
+            return invalidLayer;
+        }
+    }
+
+    var modifiedIds = [];
+    var unnamedModified = 0;
+    var failures = [];
     var modified = 0;
     var warnings = [];
     var firstModifiedItem = null;
+    var partial = 0;
 
     for (var i = 0; i < targets.length; i++) {
         var item = targets[i];
+        var itemId = mcpTargetIdentity(item);
+        var touched = false;
+        var property = null;
 
         try {
             // Position (artboard-relative)
-            if (params.x !== undefined) item.left = _artboardLeft(ctx.doc) + params.x;
-            if (params.y !== undefined) item.top = _artboardTop(ctx.doc) - params.y;
+            if (params.x !== undefined) { property = "x"; item.left = _artboardLeft(ctx.doc) + params.x; touched = true; }
+            if (params.y !== undefined) { property = "y"; item.top = _artboardTop(ctx.doc) - params.y; touched = true; }
 
             // Size
-            if (params.width !== undefined) item.width = params.width;
-            if (params.height !== undefined) item.height = params.height;
+            if (params.width !== undefined) { property = "width"; item.width = params.width; touched = true; }
+            if (params.height !== undefined) { property = "height"; item.height = params.height; touched = true; }
 
             // Rotation
             if (params.rotation !== undefined) {
+                property = "rotation";
                 item.rotate(params.rotation);
+                touched = true;
             }
 
             // Scale
             if (params.scale !== undefined) {
                 var s = params.scale * 100;
+                property = "scale";
                 item.resize(s, s);
+                touched = true;
             }
 
             // Fill
@@ -1909,10 +1941,16 @@ registerOpHandler("element_modify", function (params, targets, ctx) {
                 fillColor.red = params.fill.r || 0;
                 fillColor.green = params.fill.g || 0;
                 fillColor.blue = params.fill.b || 0;
+                property = "fillColor";
                 item.fillColor = fillColor;
+                touched = true;
+                property = "filled";
                 item.filled = true;
+                touched = true;
             } else if (params.fill === null || params.fill === false) {
+                property = "filled";
                 item.filled = false;
+                touched = true;
             }
 
             // Stroke
@@ -1921,13 +1959,21 @@ registerOpHandler("element_modify", function (params, targets, ctx) {
                 strokeColor.red = params.stroke.r || 0;
                 strokeColor.green = params.stroke.g || 0;
                 strokeColor.blue = params.stroke.b || 0;
+                property = "strokeColor";
                 item.strokeColor = strokeColor;
+                touched = true;
+                property = "stroked";
                 item.stroked = true;
+                touched = true;
                 if (params.stroke.width) {
+                    property = "strokeWidth";
                     item.strokeWidth = params.stroke.width;
+                    touched = true;
                 }
             } else if (params.stroke === null || params.stroke === false) {
+                property = "stroked";
                 item.stroked = false;
+                touched = true;
             }
 
             // Opacity
@@ -1935,34 +1981,36 @@ registerOpHandler("element_modify", function (params, targets, ctx) {
                 var opVal = params.opacity;
                 if (opVal < 0) opVal = 0;
                 if (opVal > 100) opVal = 100;
+                property = "opacity";
                 item.opacity = opVal;
+                touched = true;
             }
 
             // Name
             if (params.name !== undefined) {
+                property = "name";
                 item.name = params.name;
+                touched = true;
             }
 
             // Layer move
             if (params.layer !== undefined) {
-                var targetLayer = null;
-                for (var li = 0; li < ctx.doc.layers.length; li++) {
-                    if (ctx.doc.layers[li].name === params.layer) {
-                        targetLayer = ctx.doc.layers[li];
-                        break;
-                    }
-                }
-                if (targetLayer) {
-                    item.move(targetLayer, ElementPlacement.PLACEATEND);
-                } else {
-                    warnings.push("Layer not found for move: " + params.layer);
-                }
+                property = "layer";
+                item.move(targetLayer, ElementPlacement.PLACEATEND);
+                touched = true;
             }
 
             modified++;
             if (!firstModifiedItem) firstModifiedItem = item;
         } catch (e) {
             warnings.push("Failed to modify item " + i + ": " + e.message);
+            if (touched) partial++;
+            failures.push({index: i, id: itemId, property: property,
+                message: String(e.message || e), effectsUnknown: true});
+        }
+        if (touched) {
+            if (itemId) modifiedIds.push(itemId);
+            else unnamedModified++;
         }
     }
 
@@ -1970,22 +2018,27 @@ registerOpHandler("element_modify", function (params, targets, ctx) {
     // Note: width/height are axis-aligned bounding box dimensions, not original geometry
     var posEcho = null;
     if (firstModifiedItem) {
-        var abT = _artboardTop(ctx.doc), abL = _artboardLeft(ctx.doc);
-        posEcho = {
-            x: Math.round((firstModifiedItem.left - abL) * 100) / 100,
-            y: Math.round((abT - firstModifiedItem.top) * 100) / 100,
-            width: Math.round(firstModifiedItem.width * 100) / 100,
-            height: Math.round(firstModifiedItem.height * 100) / 100
-        };
+        try {
+            var abT = _artboardTop(ctx.doc), abL = _artboardLeft(ctx.doc);
+            posEcho = {
+                x: Math.round((firstModifiedItem.left - abL) * 100) / 100,
+                y: Math.round((abT - firstModifiedItem.top) * 100) / 100,
+                width: Math.round(firstModifiedItem.width * 100) / 100,
+                height: Math.round(firstModifiedItem.height * 100) / 100
+            };
+        } catch (echoError) {
+            warnings.push("Position readback unavailable: " + echoError.message);
+        }
     }
     var modifyOk = modified === targets.length;
     return {
         ok: modifyOk,
-        data: { modified: modified, total: targets.length, failed: targets.length - modified, position: posEcho },
+        data: { modified: modified, total: targets.length, failed: targets.length - modified, partial: partial, position: posEcho,
+            modifiedIds: modifiedIds, unnamedModified: unnamedModified, failures: failures },
         warnings: warnings,
         error: modifyOk ? null : makeError(
             ErrorCodes.R_APPLY_FAILED,
-            "Modified " + modified + " of " + targets.length + " targets",
+            "Completed " + modified + " of " + targets.length + " targets; earlier writes may remain",
             "apply"
         ).error
     };

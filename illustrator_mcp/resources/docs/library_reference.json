@@ -363,6 +363,11 @@
         "signature": "publicationPreflightScan(doc, options)",
         "returns": "Bounded publication checks, measurements, issues, scope, summary and coverage.",
         "notes": "options: publication thresholds, artboard_index, scan_max_items, scan_budget_ms. Missing font/raster evidence is unknown. Cooperative budgets are not host timeouts."
+      },
+      "preflightPathDegeneracy": {
+        "signature": "preflightPathDegeneracy(item, budget)",
+        "returns": "Object with valid, degenerate or unknown status, reason and bounds/appearance evidence sources.",
+        "notes": "Legacy geometry helper. Positive geometric extents on both axes return valid before budget or child inspection. For zero-extent candidates, caller supplies remaining work and an absolute deadline (milliseconds), and handles scope/visibility/container exclusions. Uses geometricBounds, path points, visibleBounds and stroke/caps; independent of containment options. Compound children and candidate points are bounded. Unknown makes legacy preflight fail rather than certifying clean geometry."
       }
     }
   },
@@ -470,7 +475,7 @@
       "makeError": {
         "signature": "makeError(code, message, stage, itemRef, details)",
         "returns": "{ok:false,error:{code,message,stage,itemRef,details}}.",
-        "notes": "code is an ErrorCodes value; optional localization itemRef and details."
+        "notes": "code is an ErrorCodes value; optional localization itemRef and details. A failed handler may set details.writesAttempted to the strict boolean false only when no document mutation or allocation was attempted in that invocation; the effects reducer then reports complete empty effects. A validation stage alone does not establish this guarantee. Never set the flag after a throwing native write."
       }
     }
   },

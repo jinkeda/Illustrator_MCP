@@ -1,7 +1,6 @@
 import React, { useEffect, useRef, useMemo, useState } from 'react';
 import { Zap, Activity } from 'lucide-react';
 import { useMCP } from '../hooks/useMCP';
-import { MCP_ENDPOINT } from '../connection/ConnectionController';
 
 // Professional palette
 const COLORS = {
@@ -43,7 +42,7 @@ function groupLogs(logs: Array<{ id: string; timestamp: string; message: string;
 }
 
 export function MCPControlPanel() {
-  const { status, connectionControl, logs, connect, disconnect } = useMCP();
+  const { status, endpointConfig, connectionControl, logs, connect, disconnect } = useMCP();
   const scrollRef = useRef<HTMLDivElement>(null);
   const prevStatus = useRef(status);
   const [flash, setFlash] = useState(false);
@@ -244,7 +243,10 @@ export function MCPControlPanel() {
         color: COLORS.textMuted,
         fontFamily: '"SF Mono", Menlo, monospace',
       }}>
-        <span>{MCP_ENDPOINT}</span>
+        <span title={endpointConfig.error || endpointConfig.source}
+          style={{overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap'}}>
+          {endpointConfig.endpoint || 'Invalid endpoint configuration'}
+        </span>
         <span>v{__APP_VERSION__}</span>
       </footer>
 
